@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     bybit_fgrid_create_path: str = "/v5/fgridbot/create"
     bybit_fgrid_close_path: str = "/v5/fgridbot/close"
     bybit_fgrid_detail_path: str = "/v5/fgridbot/detail"
+    bybit_fgrid_grid_mode_neutral: int | str = 1
+    bybit_fgrid_grid_type_geometric: int | str = 2
 
     def require_private_credentials(self) -> None:
         if not self.bybit_api_key or not self.bybit_api_secret:

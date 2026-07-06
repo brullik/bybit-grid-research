@@ -117,7 +117,7 @@ class BybitClient:
         ret_code = data.get("retCode")
         if response.status_code in {429, 500, 502, 503, 504} or ret_code in RETRYABLE_RETCODES:
             raise BybitAPIError(
-                endpoint, response.status_code, ret_code, data.get("retMsg"), "retryable"
+                endpoint, response.status_code, ret_code, data.get("retMsg"), "retryable", data
             )
         if response.status_code >= 400 or ret_code not in (0, "0", None):
             raise BybitAPIError(
@@ -126,6 +126,7 @@ class BybitClient:
                 ret_code,
                 data.get("retMsg"),
                 "non-retryable" if ret_code in NON_RETRYABLE_RETCODES else None,
+                data,
             )
         return data
 
