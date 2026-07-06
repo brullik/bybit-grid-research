@@ -14,13 +14,14 @@ from bybit_grid.config import Settings
 log = logging.getLogger(__name__)
 RETRYABLE_RETCODES = {10006, "10006"}
 NON_RETRYABLE_RETCODES = {10001, "10001", 10003, "10003", 10004, "10004", 10005, "10005"}
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
         return True
     return isinstance(exc, BybitAPIError) and (
-        exc.status_code in {429, 500, 502, 503, 504} or exc.ret_code in RETRYABLE_RETCODES
+        exc.status_code in RETRYABLE_HTTP_STATUS_CODES or exc.ret_code in RETRYABLE_RETCODES
     )
 
 
@@ -106,28 +107,41 @@ class BybitClient:
             data = response.json()
         except ValueError:
             data = {"retCode": None, "retMsg": response.text[:200]}
+
+        ret_code = data.get("retCode")
+        status_code = data.get("status_code")
+        message = data.get("retMsg") or data.get("debug_msg")
+        has_ret_code = "retCode" in data
+        has_bot_status = "status_code" in data
+
+        if has_ret_code:
+            api_success = ret_code in (0, "0")
+            api_code = ret_code
+        elif has_bot_status:
+            api_success = status_code in (200, "200")
+            api_code = status_code
+        else:
+            api_success = 200 <= response.status_code < 300
+            api_code = None
+            if api_success:
+                data.setdefault("parser_warning", "response missing retCode and status_code; HTTP 2xx treated as success")
+
         log.info(
-            "%s endpoint=%s status=%s retCode=%s retMsg=%s",
+            "%s endpoint=%s http_status=%s retCode=%s status_code=%s message=%s parser_warning=%s",
             log_name,
             endpoint,
             response.status_code,
-            data.get("retCode"),
-            data.get("retMsg"),
+            ret_code,
+            status_code,
+            message,
+            data.get("parser_warning"),
         )
-        ret_code = data.get("retCode")
-        if response.status_code in {429, 500, 502, 503, 504} or ret_code in RETRYABLE_RETCODES:
-            raise BybitAPIError(
-                endpoint, response.status_code, ret_code, data.get("retMsg"), "retryable", data
-            )
-        if response.status_code >= 400 or ret_code not in (0, "0", None):
-            raise BybitAPIError(
-                endpoint,
-                response.status_code,
-                ret_code,
-                data.get("retMsg"),
-                "non-retryable" if ret_code in NON_RETRYABLE_RETCODES else None,
-                data,
-            )
+
+        if response.status_code in RETRYABLE_HTTP_STATUS_CODES or ret_code in RETRYABLE_RETCODES:
+            raise BybitAPIError(endpoint, response.status_code, api_code, message, "retryable", data)
+        if response.status_code >= 400 or not api_success:
+            debug_msg = "non-retryable" if ret_code in NON_RETRYABLE_RETCODES else data.get("debug_msg")
+            raise BybitAPIError(endpoint, response.status_code, api_code, message, debug_msg, data)
         return data
 
     def validate_grid_bot(
