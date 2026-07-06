@@ -6,6 +6,7 @@ class BybitAPIError(RuntimeError):
         ret_code: int | str | None,
         ret_msg: str | None,
         debug_msg: str | None = None,
+        response_data: dict | None = None,
     ):
         super().__init__(
             f"Bybit API error endpoint={endpoint} status_code={status_code} retCode={ret_code} retMsg={ret_msg} debug={debug_msg}"
@@ -15,3 +16,4 @@ class BybitAPIError(RuntimeError):
         self.ret_code = ret_code
         self.ret_msg = ret_msg
         self.debug_msg = debug_msg
+        self.response_data = response_data or {}

@@ -1,69 +1,325 @@
 # Sprint 01 API Report
 
-Updated UTC: 2026-07-06T19:12:32.743417+00:00
+Updated UTC: 2026-07-06T19:47:32.864808+00:00
 
 ## Runs
 
-### validate_sample_grid --dry-run — dry-run
+### validate_sample_grid — dry-run
 
-- started_at: 2026-07-06T19:12:25.194035+00:00
-- ended_at: 2026-07-06T19:12:25.194735+00:00
+- started_at: 2026-07-06T19:46:52.711544+00:00
+- ended_at: 2026-07-06T19:46:52.712787+00:00
 - counts: `{}`
-- output_paths: `["data/metadata/grid_validate_redacted.json"]`
+- output_paths: `["data/metadata/grid_validate_payload_redacted.json", "data/metadata/grid_validate_response_redacted.json"]`
 - error_summary: none
+
+#### check_code
+
+None
 
 #### command
 
-validate_sample_grid --dry-run
+validate_sample_grid
 
 #### ended_at
 
-2026-07-06T19:12:25.194735+00:00
+2026-07-06T19:46:52.712787+00:00
 
-#### grid validate status
+#### error_summary
 
-dry-run; no network request
+
 
 #### output_paths
 
-['data/metadata/grid_validate_redacted.json']
+['data/metadata/grid_validate_payload_redacted.json', 'data/metadata/grid_validate_response_redacted.json']
+
+#### payload_mode
+
+static
+
+#### retCode
+
+None
+
+#### retMsg
+
+None
 
 #### started_at
 
-2026-07-06T19:12:25.194035+00:00
+2026-07-06T19:46:52.711544+00:00
 
 #### status
 
 dry-run
 
-### smoke_public_api — network-blocked
+#### symbol
 
-- started_at: 2026-07-06T19:12:28.981613+00:00
-- ended_at: 2026-07-06T19:12:32.743172+00:00
+BTCUSDT
+
+#### validate_endpoint
+
+/v5/fgridbot/validate
+
+### validate_sample_grid — error
+
+- started_at: 2026-07-06T19:46:53.460525+00:00
+- ended_at: 2026-07-06T19:46:57.085415+00:00
 - counts: `{}`
-- output_paths: `[]`
+- output_paths: `["data/metadata/grid_validate_payload_redacted.json", "data/metadata/grid_validate_response_redacted.json"]`
 - error_summary: 403 Forbidden
+
+#### check_code
+
+None
 
 #### command
 
-smoke_public_api
+validate_sample_grid
 
 #### ended_at
 
-2026-07-06T19:12:32.743172+00:00
+2026-07-06T19:46:57.085415+00:00
 
 #### error_summary
 
 403 Forbidden
 
-#### network diagnostic
+#### output_paths
 
-{'base_url': 'https://api.bybit.com', 'body_first_500': '', 'exception_type': 'ProxyError', 'proxy_or_bybit': 'proxy', 'recommended_pm_action': 'verify that target network can reach Bybit API before private calls', 'status': None}
+['data/metadata/grid_validate_payload_redacted.json', 'data/metadata/grid_validate_response_redacted.json']
+
+#### payload_mode
+
+dynamic
+
+#### retCode
+
+None
+
+#### retMsg
+
+None
 
 #### started_at
 
-2026-07-06T19:12:28.981613+00:00
+2026-07-06T19:46:53.460525+00:00
 
 #### status
 
-network-blocked
+error
+
+#### symbol
+
+BTCUSDT
+
+#### validate_endpoint
+
+/v5/fgridbot/validate
+
+### smoke_private_account — error
+
+- started_at: 2026-07-06T19:46:57.840703+00:00
+- ended_at: 2026-07-06T19:46:57.841053+00:00
+- counts: `{}`
+- output_paths: `["data/metadata/account_info_redacted.json"]`
+- error_summary: BYBIT_API_KEY and BYBIT_API_SECRET are required for private Bybit calls
+
+#### account_info_status
+
+error
+
+#### command
+
+smoke_private_account
+
+#### ended_at
+
+2026-07-06T19:46:57.841053+00:00
+
+#### error_summary
+
+BYBIT_API_KEY and BYBIT_API_SECRET are required for private Bybit calls
+
+#### marginMode
+
+None
+
+#### output_paths
+
+['data/metadata/account_info_redacted.json']
+
+#### started_at
+
+2026-07-06T19:46:57.840703+00:00
+
+#### status
+
+error
+
+#### unifiedMarginStatus
+
+None
+
+#### wallet_read_status
+
+not-run
+
+### validate_sample_grid — dry-run
+
+- started_at: 2026-07-06T19:47:27.777372+00:00
+- ended_at: 2026-07-06T19:47:27.778789+00:00
+- counts: `{}`
+- output_paths: `["data/metadata/grid_validate_payload_redacted.json", "data/metadata/grid_validate_response_redacted.json"]`
+- error_summary: none
+
+#### check_code
+
+None
+
+#### command
+
+validate_sample_grid
+
+#### ended_at
+
+2026-07-06T19:47:27.778789+00:00
+
+#### error_summary
+
+
+
+#### output_paths
+
+['data/metadata/grid_validate_payload_redacted.json', 'data/metadata/grid_validate_response_redacted.json']
+
+#### payload_mode
+
+static
+
+#### retCode
+
+None
+
+#### retMsg
+
+None
+
+#### started_at
+
+2026-07-06T19:47:27.777372+00:00
+
+#### status
+
+dry-run
+
+#### symbol
+
+BTCUSDT
+
+#### validate_endpoint
+
+/v5/fgridbot/validate
+
+### validate_sample_grid — error
+
+- started_at: 2026-07-06T19:47:28.556618+00:00
+- ended_at: 2026-07-06T19:47:32.127066+00:00
+- counts: `{}`
+- output_paths: `["data/metadata/grid_validate_payload_redacted.json", "data/metadata/grid_validate_response_redacted.json"]`
+- error_summary: 403 Forbidden
+
+#### check_code
+
+None
+
+#### command
+
+validate_sample_grid
+
+#### ended_at
+
+2026-07-06T19:47:32.127066+00:00
+
+#### error_summary
+
+403 Forbidden
+
+#### output_paths
+
+['data/metadata/grid_validate_payload_redacted.json', 'data/metadata/grid_validate_response_redacted.json']
+
+#### payload_mode
+
+dynamic
+
+#### retCode
+
+None
+
+#### retMsg
+
+None
+
+#### started_at
+
+2026-07-06T19:47:28.556618+00:00
+
+#### status
+
+error
+
+#### symbol
+
+BTCUSDT
+
+#### validate_endpoint
+
+/v5/fgridbot/validate
+
+### smoke_private_account — error
+
+- started_at: 2026-07-06T19:47:32.864390+00:00
+- ended_at: 2026-07-06T19:47:32.864756+00:00
+- counts: `{}`
+- output_paths: `["data/metadata/account_info_redacted.json"]`
+- error_summary: BYBIT_API_KEY and BYBIT_API_SECRET are required for private Bybit calls
+
+#### account_info_status
+
+error
+
+#### command
+
+smoke_private_account
+
+#### ended_at
+
+2026-07-06T19:47:32.864756+00:00
+
+#### error_summary
+
+BYBIT_API_KEY and BYBIT_API_SECRET are required for private Bybit calls
+
+#### marginMode
+
+None
+
+#### output_paths
+
+['data/metadata/account_info_redacted.json']
+
+#### started_at
+
+2026-07-06T19:47:32.864390+00:00
+
+#### status
+
+error
+
+#### unifiedMarginStatus
+
+None
+
+#### wallet_read_status
+
+not-run
