@@ -61,18 +61,22 @@ def download_mark_kline_range(
         else pl.DataFrame()
     )
     if not df.is_empty():
-        for part in df.partition_by(
-            [
-                pl.col("open_time_utc").dt.year().alias("year"),
-                pl.col("open_time_utc").dt.month().alias("month"),
-            ],
-            as_dict=False,
+        partitioned = df.with_columns(
+            pl.col("open_time_utc").dt.year().alias("_partition_year"),
+            pl.col("open_time_utc").dt.month().alias("_partition_month"),
+        )
+        for part in partitioned.partition_by(
+            ["_partition_year", "_partition_month"], as_dict=False, maintain_order=True
         ):
+            clean_part = part.drop(["_partition_year", "_partition_month"])
             write_parquet_merge(
                 kline_partition_path(
-                    client.settings.data_dir, "mark_klines", symbol, int(part["open_time_ms"][0])
+                    client.settings.data_dir,
+                    "mark_klines",
+                    symbol,
+                    int(clean_part["open_time_ms"][0]),
                 ),
-                part,
+                clean_part,
                 ["symbol", "open_time_ms"],
             )
     return df
