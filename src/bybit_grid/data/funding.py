@@ -49,17 +49,20 @@ def download_funding_history(
         else pl.DataFrame()
     )
     if not df.is_empty():
-        for part in df.partition_by(
-            pl.col("funding_rate_timestamp_ms").map_elements(
-                lambda x: x // (365 * 24 * 3600 * 1000), return_dtype=pl.Int64
-            ),
-            as_dict=False,
-        ):
+        partitioned = df.with_columns(
+            pl.from_epoch("funding_rate_timestamp_ms", time_unit="ms")
+            .dt.year()
+            .alias("_partition_year")
+        )
+        for part in partitioned.partition_by(["_partition_year"], as_dict=False, maintain_order=True):
+            clean_part = part.drop("_partition_year")
             write_parquet_merge(
                 funding_partition_path(
-                    client.settings.data_dir, symbol, int(part["funding_rate_timestamp_ms"][0])
+                    client.settings.data_dir,
+                    symbol,
+                    int(clean_part["funding_rate_timestamp_ms"][0]),
                 ),
-                part,
+                clean_part,
                 ["symbol", "funding_rate_timestamp_ms"],
             )
     return df

@@ -28,6 +28,26 @@ def normalize_kline_rows(rows, symbol: str, category: str, source: str) -> pl.Da
     return pl.DataFrame(out).sort("open_time_ms") if out else pl.DataFrame()
 
 
+def _write_monthly_kline_partitions(
+    df: pl.DataFrame, client: BybitClient, dataset: str, symbol: str
+) -> None:
+    partitioned = df.with_columns(
+        pl.col("open_time_utc").dt.year().alias("_partition_year"),
+        pl.col("open_time_utc").dt.month().alias("_partition_month"),
+    )
+    for part in partitioned.partition_by(
+        ["_partition_year", "_partition_month"], as_dict=False, maintain_order=True
+    ):
+        clean_part = part.drop(["_partition_year", "_partition_month"])
+        write_parquet_merge(
+            kline_partition_path(
+                client.settings.data_dir, dataset, symbol, int(clean_part["open_time_ms"][0])
+            ),
+            clean_part,
+            ["symbol", "open_time_ms"],
+        )
+
+
 def download_kline_range(
     client: BybitClient,
     symbol: str,
@@ -63,18 +83,5 @@ def download_kline_range(
         else pl.DataFrame()
     )
     if not df.is_empty():
-        for part in df.partition_by(
-            [
-                pl.col("open_time_utc").dt.year().alias("year"),
-                pl.col("open_time_utc").dt.month().alias("month"),
-            ],
-            as_dict=False,
-        ):
-            write_parquet_merge(
-                kline_partition_path(
-                    client.settings.data_dir, dataset, symbol, int(part["open_time_ms"][0])
-                ),
-                part,
-                ["symbol", "open_time_ms"],
-            )
+        _write_monthly_kline_partitions(df, client, dataset, symbol)
     return df

@@ -94,8 +94,13 @@ def build_quality_report(
     }
 
 
-def save_gap_report(data_dir, df: pl.DataFrame) -> pl.DataFrame:
-    report = detect_1m_gaps(df)
+def save_gap_report(
+    data_dir,
+    df: pl.DataFrame,
+    expected_start_ms: int | None = None,
+    expected_end_ms: int | None = None,
+) -> pl.DataFrame:
+    report = detect_1m_gaps(df, expected_start_ms, expected_end_ms)
     path = data_dir / "quality" / f"gap_report_{ts_label()}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     report.write_parquet(path)
