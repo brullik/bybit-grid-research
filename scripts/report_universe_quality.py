@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import glob
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import polars as pl
 
@@ -9,10 +13,10 @@ from bybit_grid.data.quality import detect_1m_gaps, detect_bad_ohlc, detect_dupl
 
 
 def read_glob(pattern: str) -> pl.DataFrame:
-    files = list(Path().glob(pattern))
+    files = glob.glob(pattern)
     if not files:
         return pl.DataFrame()
-    return pl.concat([pl.read_parquet(path) for path in files], how="diagonal_relaxed")
+    return pl.scan_parquet(files).collect()
 
 
 def summarize(name: str, df: pl.DataFrame) -> list[dict[str, object]]:
@@ -43,27 +47,29 @@ def summarize(name: str, df: pl.DataFrame) -> list[dict[str, object]]:
     return rows
 
 
+def markdown_table(df: pl.DataFrame) -> str:
+    if df.is_empty():
+        return "No downloaded data found."
+    cols = df.columns
+    lines = ["| " + " | ".join(cols) + " |", "|" + "|".join(["---"] * len(cols)) + "|"]
+    for row in df.to_dicts():
+        vals = [str(row.get(c, "")).replace("|", "\\|") for c in cols]
+        lines.append("| " + " | ".join(vals) + " |")
+    return "\n".join(lines)
+
+
 def main() -> None:
     data_dir = load_settings().data_dir
     rows = []
-    rows += summarize(
-        "klines", read_glob(str(data_dir / "raw/klines/symbol=*/year=*/month=*/part.parquet"))
-    )
-    rows += summarize(
-        "mark_klines",
-        read_glob(str(data_dir / "raw/mark_klines/symbol=*/year=*/month=*/part.parquet")),
-    )
-    rows += summarize(
-        "funding", read_glob(str(data_dir / "raw/funding/symbol=*/year=*/part.parquet"))
-    )
+    rows += summarize("klines", read_glob(str(data_dir / "raw/klines/symbol=*/year=*/month=*/part.parquet")))
+    rows += summarize("mark_klines", read_glob(str(data_dir / "raw/mark_klines/symbol=*/year=*/month=*/part.parquet")))
+    rows += summarize("funding", read_glob(str(data_dir / "raw/funding/symbol=*/year=*/part.parquet")))
     df = pl.DataFrame(rows) if rows else pl.DataFrame({"symbol": [], "dataset": [], "rows": []})
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     df.write_parquet("data/processed/universe_quality_summary.parquet")
     Path("reports").mkdir(exist_ok=True)
     Path("reports/sprint_02_universe_quality_report.md").write_text(
-        "# Sprint 02 Universe Quality Report\n\n"
-        + (repr(df) if not df.is_empty() else "No downloaded data found.")
-        + "\n"
+        "# Sprint 02 Universe Quality Report\n\n" + markdown_table(df) + "\n", encoding="utf-8"
     )
 
 

@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import polars as pl
 
@@ -10,6 +13,7 @@ from bybit_grid.bybit.client import BybitClient
 from bybit_grid.bybit.fgrid_constraints import (
     append_constraints,
     build_candidate_payloads,
+    candidate_key,
     existing_keys,
     parse_validate_response,
     write_redacted_response,
@@ -38,7 +42,7 @@ def report(df: pl.DataFrame) -> None:
                 "**PM BLOCKER:** no tested symbol/config satisfied the 5 USDT native grid "
                 "minimum-investment rule.\n"
             )
-    Path("reports/sprint_02_fgrid_constraints_report.md").write_text(text)
+    Path("reports/sprint_02_fgrid_constraints_report.md").write_text(text, encoding="utf-8")
 
 
 def main() -> None:
@@ -48,6 +52,8 @@ def main() -> None:
     parser.add_argument("--max-configs-per-symbol", type=int, default=20)
     parser.add_argument("--sleep-sec", type=float, default=0.5)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--user-threshold", type=float, default=5.0)
+    parser.add_argument("--expansion-multiplier", type=float, default=5.0)
     args = parser.parse_args()
 
     output = Path("data/processed/fgrid_validate_constraints.parquet")
@@ -59,36 +65,39 @@ def main() -> None:
 
     with BybitClient(settings) as client:
         for symbol_row in universe.to_dicts():
-            candidates = build_candidate_payloads(
-                symbol_row["symbol"],
-                symbol_row["lastPrice"],
-                symbol_row["tickSize"],
-                args.max_configs_per_symbol,
-            )
-            for payload, meta in candidates:
-                key = (
-                    meta["symbol"],
-                    meta["range_width_pct"],
-                    meta["cell_number_requested"],
-                    meta["leverage_requested"],
-                    meta["init_margin_requested"],
+            symbol_rows = []
+            for stage in ("fast", "full"):
+                candidates = build_candidate_payloads(
+                    symbol_row["symbol"],
+                    symbol_row["lastPrice"],
+                    symbol_row["tickSize"],
+                    args.max_configs_per_symbol if stage == "full" else min(args.max_configs_per_symbol, 27),
+                    stage=stage,
                 )
-                if key in done:
-                    continue
-                try:
-                    response = client.validate_grid_bot(payload)
-                    status_code = None
-                except Exception as exc:
-                    response = getattr(exc, "payload", {}) or {
-                        "retCode": getattr(exc, "ret_code", None),
-                        "retMsg": str(exc),
-                        "debug_msg": getattr(exc, "debug_msg", None),
-                    }
-                    status_code = getattr(exc, "status_code", None)
-                raw_path = raw_dir / f"{meta['symbol']}_{len(rows):06d}.json"
-                write_redacted_response(raw_path, response)
-                rows.append(parse_validate_response(meta, response, status_code, str(raw_path)))
-                time.sleep(args.sleep_sec)
+                if stage == "full":
+                    mins = [r.get("investment_min") for r in symbol_rows if r.get("investment_min") is not None]
+                    if not mins or min(mins) > args.user_threshold * args.expansion_multiplier:
+                        break
+                for payload, meta in candidates:
+                    key = candidate_key(meta)
+                    if key in done:
+                        continue
+                    try:
+                        response = client.validate_grid_bot(payload)
+                        status_code = None
+                    except Exception as exc:
+                        response = getattr(exc, "payload", {}) or {
+                            "retCode": getattr(exc, "ret_code", None),
+                            "retMsg": str(exc),
+                            "debug_msg": getattr(exc, "debug_msg", None),
+                        }
+                        status_code = getattr(exc, "status_code", None)
+                    raw_path = raw_dir / f"{meta['symbol']}_{len(rows):06d}.json"
+                    write_redacted_response(raw_path, response)
+                    parsed = parse_validate_response(meta, response, status_code, str(raw_path))
+                    rows.append(parsed)
+                    symbol_rows.append(parsed)
+                    time.sleep(args.sleep_sec)
 
     df = append_constraints(output, rows)
     feasible = df.filter(pl.col("feasible_user_5usdt_rule")) if not df.is_empty() else df

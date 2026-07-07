@@ -38,7 +38,7 @@ def build_download_manifest(universe: pl.DataFrame, feasible: pl.DataFrame | Non
 def write_download_plan(path: Path, manifest: pl.DataFrame, days: int, max_gb: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     total = float(manifest["estimated_gb"].sum()) if not manifest.is_empty() else 0.0
-    lines = ["# Sprint 02 Download Plan", "", f"Days requested: {days}", f"Max GB cap: {max_gb}", f"Estimated GB: {total:.3f}", f"Symbols: {manifest.height}", "", "| symbol | status | est rows | est GB |", "|---|---|---:|---:|"]
+    lines = ["# Sprint 02 Download Plan", "", f"Days requested: {days}", f"Max GB cap: {max_gb}", f"Estimated GB: {total:.3f}", f"Symbols: {manifest.height}", f"Downloadable rows: {manifest.filter(pl.col('trading_feasibility_status') == 'validated_5usdt_feasible').height if not manifest.is_empty() else 0}", f"Skipped blocked by min investment: {manifest.filter(pl.col('trading_feasibility_status') != 'validated_5usdt_feasible').height if not manifest.is_empty() else 0}", f"Download blocked by policy: {bool(not manifest.is_empty() and manifest.filter(pl.col('trading_feasibility_status') == 'validated_5usdt_feasible').is_empty())}", "", "| symbol | status | est rows | est GB |", "|---|---|---:|---:|"]
     for r in manifest.to_dicts():
         lines.append(f"| {r['symbol']} | {r['trading_feasibility_status']} | {r['estimated_total_rows']} | {r['estimated_gb']:.4f} |")
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
