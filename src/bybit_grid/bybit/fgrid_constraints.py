@@ -16,6 +16,12 @@ CELL_NUMBER = [2, 5, 10, 20, 30]
 LEVERAGE = [1, 2, 3, 5, 10]
 INIT_MARGIN_PROBE = [Decimal("5"), Decimal("10"), Decimal("25"), Decimal("50"), Decimal("100")]
 STOP_LOSS_MULT_BELOW_MIN = [Decimal("0.98"), Decimal("0.95"), Decimal("0.90")]
+STAGE_A_RANGE_WIDTH_PCT = [Decimal("0.05"), Decimal("0.10"), Decimal("0.20")]
+STAGE_A_CELL_NUMBER = [5, 10, 20]
+STAGE_A_LEVERAGE = [1, 3, 10]
+STAGE_A_INIT_MARGIN_PROBE = [Decimal("100")]
+STAGE_A_STOP_LOSS_MULT_BELOW_MIN = [Decimal("0.95")]
+CANDIDATE_KEY_COLUMNS = ["symbol", "range_width_pct", "cell_number_requested", "leverage_requested", "init_margin_requested", "stop_loss_mult", "min_price", "max_price"]
 
 
 def _dec(v: Any) -> Decimal | None:
@@ -64,14 +70,24 @@ def parse_validate_response(meta: dict[str, Any], response: dict[str, Any], stat
     return row
 
 
-def build_candidate_payloads(symbol: str, last_price: Any, tick_size: Any, max_configs: int | None = None) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+def candidate_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(row.get(c) for c in CANDIDATE_KEY_COLUMNS)
+
+
+def build_candidate_payloads(symbol: str, last_price: Any, tick_size: Any, max_configs: int | None = None, stage: str = "fast") -> list[tuple[dict[str, Any], dict[str, Any]]]:
     out = []
-    for width, cells, lev, margin, sl_mult in product(RANGE_WIDTH_PCT, CELL_NUMBER, LEVERAGE, INIT_MARGIN_PROBE, STOP_LOSS_MULT_BELOW_MIN):
+    if stage == "fast":
+        dimensions = (STAGE_A_RANGE_WIDTH_PCT, STAGE_A_CELL_NUMBER, STAGE_A_LEVERAGE, STAGE_A_INIT_MARGIN_PROBE, STAGE_A_STOP_LOSS_MULT_BELOW_MIN)
+    elif stage == "full":
+        dimensions = (RANGE_WIDTH_PCT, CELL_NUMBER, LEVERAGE, INIT_MARGIN_PROBE, STOP_LOSS_MULT_BELOW_MIN)
+    else:
+        raise ValueError(f"unknown candidate stage: {stage}")
+    for width, cells, lev, margin, sl_mult in product(*dimensions):
         lower = Decimal("1") - (width / 2)
         upper = Decimal("1") + (width / 2)
         sl = lower * sl_mult
         payload = build_fgrid_validate_payload(symbol, Decimal(str(last_price)), Decimal(str(tick_size)), leverage=lev, cell_number=cells, init_margin=margin, lower_mult=lower, upper_mult=upper, stop_loss_mult=sl)
-        meta = {"symbol": symbol, "lastPrice": float(last_price), "tickSize": str(tick_size), "range_width_pct": float(width), "min_price": float(payload["min_price"]), "max_price": float(payload["max_price"]), "stop_loss_price": float(payload["stop_loss_price"]), "cell_number_requested": cells, "leverage_requested": lev, "init_margin_requested": float(margin)}
+        meta = {"symbol": symbol, "lastPrice": float(last_price), "tickSize": str(tick_size), "range_width_pct": float(width), "min_price": float(payload["min_price"]), "max_price": float(payload["max_price"]), "stop_loss_price": float(payload["stop_loss_price"]), "cell_number_requested": cells, "leverage_requested": lev, "init_margin_requested": float(margin), "stop_loss_mult": float(sl_mult)}
         out.append((payload, meta))
         if max_configs and len(out) >= max_configs:
             break
@@ -81,20 +97,25 @@ def build_candidate_payloads(symbol: str, last_price: Any, tick_size: Any, max_c
 def existing_keys(path: Path) -> set[tuple[Any, ...]]:
     if not path.exists():
         return set()
-    cols = ["symbol", "range_width_pct", "cell_number_requested", "leverage_requested", "init_margin_requested"]
-    return {tuple(r[c] for c in cols) for r in pl.read_parquet(path).select(cols).to_dicts()}
+    df = pl.read_parquet(path)
+    cols = [c for c in CANDIDATE_KEY_COLUMNS if c in df.columns]
+    return {tuple(r.get(c) for c in CANDIDATE_KEY_COLUMNS) for r in df.select(cols).to_dicts()}
 
 
 def append_constraints(path: Path, rows: list[dict[str, Any]]) -> pl.DataFrame:
     path.parent.mkdir(parents=True, exist_ok=True)
     df = pl.DataFrame(rows) if rows else pl.DataFrame()
     if path.exists() and not df.is_empty():
-        df = pl.concat([pl.read_parquet(path), df], how="diagonal_relaxed").unique(["symbol", "range_width_pct", "cell_number_requested", "leverage_requested", "init_margin_requested"], keep="last")
+        df = pl.concat([pl.read_parquet(path), df], how="diagonal_relaxed")
     if not df.is_empty():
+        for col in CANDIDATE_KEY_COLUMNS:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None).alias(col))
+        df = df.unique(CANDIDATE_KEY_COLUMNS, keep="last")
         df.write_parquet(path)
     return df
 
 
 def write_redacted_response(path: Path, response: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(redact(response), indent=2, sort_keys=True))
+    path.write_text(json.dumps(redact(response), indent=2, sort_keys=True), encoding="utf-8")

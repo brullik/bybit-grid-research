@@ -111,4 +111,4 @@ def write_universe_report(path: Path, counts: dict[str, int], selected: pl.DataF
     lines += ["", "## Top 20 selected symbols by turnover", "", "| rank | symbol | turnover24h | lastPrice |", "|---:|---|---:|---:|"]
     for r in selected.head(20).to_dicts():
         lines.append(f"| {r['liquidity_rank']} | {r['symbol']} | {r['turnover24h']:.2f} | {r.get('lastPrice')} |")
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")

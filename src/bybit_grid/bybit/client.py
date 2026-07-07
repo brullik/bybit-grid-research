@@ -26,9 +26,9 @@ def _is_retryable(exc: BaseException) -> bool:
 
 
 class BybitClient:
-    def __init__(self, settings: Settings, timeout: float = 20.0):
+    def __init__(self, settings: Settings, timeout: float = 20.0, rate_limiter: SimpleRateLimiter | None = None):
         self.settings = settings
-        self.rate_limiter = SimpleRateLimiter()
+        self.rate_limiter = rate_limiter or SimpleRateLimiter()
         self.http = httpx.Client(base_url=settings.bybit_api_base_url, timeout=timeout)
 
     def close(self):
