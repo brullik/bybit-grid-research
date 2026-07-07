@@ -48,6 +48,7 @@ def report(df: pl.DataFrame) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--universe", default="data/processed/universe_selected.parquet")
+    parser.add_argument("--mode", choices=["default", "min-investment-sweep"], default="default")
     parser.add_argument("--max-symbols", type=int, default=30)
     parser.add_argument("--max-configs-per-symbol", type=int, default=20)
     parser.add_argument("--sleep-sec", type=float, default=0.5)
@@ -58,7 +59,7 @@ def main() -> None:
 
     output = Path("data/processed/fgrid_validate_constraints.parquet")
     raw_dir = Path("data/processed/fgrid_validate_raw_redacted")
-    done = existing_keys(output) if args.resume else set()
+    done = existing_keys(output) if (args.resume or args.mode == "min-investment-sweep") else set()
     rows = []
     settings = load_settings()
     universe = pl.read_parquet(args.universe).head(args.max_symbols)
@@ -66,22 +67,41 @@ def main() -> None:
     with BybitClient(settings) as client:
         for symbol_row in universe.to_dicts():
             symbol_rows = []
-            for stage in ("fast", "full"):
+            stages = ("fast", "full")
+            for stage in stages:
+                if args.mode == "min-investment-sweep":
+                    max_configs = None if stage == "fast" else args.max_configs_per_symbol
+                else:
+                    max_configs = (
+                        args.max_configs_per_symbol
+                        if stage == "full"
+                        else min(args.max_configs_per_symbol, 27)
+                    )
                 candidates = build_candidate_payloads(
                     symbol_row["symbol"],
                     symbol_row["lastPrice"],
                     symbol_row["tickSize"],
-                    args.max_configs_per_symbol if stage == "full" else min(args.max_configs_per_symbol, 27),
+                    max_configs,
                     stage=stage,
                 )
                 if stage == "full":
-                    mins = [r.get("investment_min") for r in symbol_rows if r.get("investment_min") is not None]
-                    if not mins or min(mins) > args.user_threshold * args.expansion_multiplier:
+                    mins = [
+                        r.get("investment_min")
+                        for r in symbol_rows
+                        if r.get("investment_min") is not None
+                    ]
+                    expand_threshold = (
+                        100
+                        if args.mode == "min-investment-sweep"
+                        else args.user_threshold * args.expansion_multiplier
+                    )
+                    if not mins or min(mins) > expand_threshold:
                         break
                 for payload, meta in candidates:
                     key = candidate_key(meta)
                     if key in done:
                         continue
+                    done.add(key)
                     try:
                         response = client.validate_grid_bot(payload)
                         status_code = None
