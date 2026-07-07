@@ -21,12 +21,12 @@ def main() -> None:
     args = parser.parse_args()
     universe = pl.read_parquet(args.universe)
     feasible = pl.read_parquet(args.feasible) if Path(args.feasible).exists() else pl.DataFrame()
-    manifest = build_download_manifest(
-        universe, feasible, args.days, args.max_symbols, args.max_gb
-    )
+    manifest = build_download_manifest(universe, feasible, args.days, args.max_symbols, args.max_gb)
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     manifest.write_parquet("data/processed/download_manifest.parquet")
-    write_download_plan(Path("reports/sprint_02_download_plan.md"), manifest, args.days, args.max_gb)
+    write_download_plan(
+        Path("reports/sprint_02_download_plan.md"), manifest, args.days, args.max_gb
+    )
     estimated_gb = manifest["estimated_gb"].sum() if not manifest.is_empty() else 0
     print(f"rows={manifest.height} est_gb={estimated_gb:.3f}")
 

@@ -20,6 +20,12 @@ from bybit_grid.config import load_settings
 from bybit_grid.data.funding import download_funding_history
 from bybit_grid.data.klines import download_kline_range
 from bybit_grid.data.mark_klines import download_mark_kline_range
+from bybit_grid.data.download_manifest import (
+    BYTES_PER_ROW_ESTIMATE,
+    estimate_rows,
+    last_closed_minute_ms,
+    start_for_days_ms,
+)
 from bybit_grid.data.quality import detect_1m_gaps, detect_bad_ohlc, detect_duplicate_candles
 
 VALIDATED = "validated_5usdt_feasible"
@@ -29,7 +35,9 @@ SOURCES = ("klines", "mark_klines", "funding")
 def _source_glob(data_dir: Path, source: str, symbol: str) -> str:
     if source == "funding":
         return str(data_dir / "raw" / "funding" / f"symbol={symbol}" / "year=*" / "part.parquet")
-    return str(data_dir / "raw" / source / f"symbol={symbol}" / "year=*" / "month=*" / "part.parquet")
+    return str(
+        data_dir / "raw" / source / f"symbol={symbol}" / "year=*" / "month=*" / "part.parquet"
+    )
 
 
 def existing_ok(data_dir: Path, source: str, symbol: str, start_ms: int, end_ms: int) -> bool:
@@ -55,12 +63,20 @@ def existing_ok(data_dir: Path, source: str, symbol: str, start_ms: int, end_ms:
     )
 
 
-def _download_symbol(row: dict[str, Any], limiter: TokenBucketRateLimiter, skip_existing_ok: bool) -> dict[str, Any]:
+def _download_symbol(
+    row: dict[str, Any], limiter: TokenBucketRateLimiter, skip_existing_ok: bool
+) -> dict[str, Any]:
     settings = load_settings()
     symbol = row["symbol"]
     start_ms = int(row["start_ms"])
     end_ms = int(row["end_ms"])
-    stats = {"symbol": symbol, "downloaded": 0, "skipped_existing_ok": 0, "failed": 0, "rows_written": 0}
+    stats = {
+        "symbol": symbol,
+        "downloaded": 0,
+        "skipped_existing_ok": 0,
+        "failed": 0,
+        "rows_written": 0,
+    }
     with BybitClient(settings, rate_limiter=limiter) as client:
         for source, downloader in (
             ("klines", download_kline_range),
@@ -68,7 +84,9 @@ def _download_symbol(row: dict[str, Any], limiter: TokenBucketRateLimiter, skip_
             ("funding", download_funding_history),
         ):
             try:
-                if skip_existing_ok and existing_ok(settings.data_dir, source, symbol, start_ms, end_ms):
+                if skip_existing_ok and existing_ok(
+                    settings.data_dir, source, symbol, start_ms, end_ms
+                ):
                     stats["skipped_existing_ok"] += 1
                     continue
                 df = downloader(client, symbol, start_ms, end_ms)
@@ -89,13 +107,17 @@ def _write_perf_report(metrics: dict[str, Any]) -> None:
     for key, value in metrics.items():
         if key != "symbol_results":
             lines.append(f"- {key}: {value}")
-    Path("reports/sprint_02_download_performance_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path("reports/sprint_02_download_performance_report.md").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", default="data/processed/download_manifest.parquet")
-    parser.add_argument("--sleep-sec", type=float, default=0.0, help="deprecated; use --max-requests-per-second")
+    parser.add_argument(
+        "--sleep-sec", type=float, default=0.0, help="deprecated; use --max-requests-per-second"
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--include-blocked", action="store_true")
     parser.add_argument("--reason", default="")
@@ -110,11 +132,31 @@ def main() -> None:
     manifest = pl.read_parquet(args.manifest)
     total = manifest.height
     if args.days_override and not manifest.is_empty():
-        end_ms = int(time.time() * 1000)
-        start_ms = end_ms - args.days_override * 24 * 60 * 60 * 1000
-        manifest = manifest.with_columns(pl.lit(start_ms).alias("start_ms"), pl.lit(end_ms).alias("end_ms"))
-    blocked = manifest.filter(pl.col("trading_feasibility_status") != VALIDATED) if "trading_feasibility_status" in manifest.columns else pl.DataFrame()
-    downloadable = manifest if args.include_blocked else manifest.filter(pl.col("trading_feasibility_status") == VALIDATED)
+        end_ms = last_closed_minute_ms()
+        start_ms = start_for_days_ms(end_ms, args.days_override)
+        estimates = estimate_rows(start_ms, end_ms, args.days_override)
+        total_rows = estimates["estimated_total_rows"]
+        manifest = manifest.with_columns(
+            pl.lit(start_ms).alias("start_ms"),
+            pl.lit(end_ms).alias("end_ms"),
+            pl.lit(args.days_override).alias("days_requested"),
+            pl.lit(estimates["estimated_kline_rows"]).alias("estimated_kline_rows"),
+            pl.lit(estimates["estimated_mark_kline_rows"]).alias("estimated_mark_kline_rows"),
+            pl.lit(estimates["estimated_funding_rows"]).alias("estimated_funding_rows"),
+            pl.lit(total_rows).alias("estimated_total_rows"),
+            pl.lit(total_rows * BYTES_PER_ROW_ESTIMATE).alias("estimated_bytes"),
+            pl.lit((total_rows * BYTES_PER_ROW_ESTIMATE) / 1_000_000_000).alias("estimated_gb"),
+        )
+    blocked = (
+        manifest.filter(pl.col("trading_feasibility_status") != VALIDATED)
+        if "trading_feasibility_status" in manifest.columns
+        else pl.DataFrame()
+    )
+    downloadable = (
+        manifest
+        if args.include_blocked
+        else manifest.filter(pl.col("trading_feasibility_status") == VALIDATED)
+    )
     if args.symbols_limit:
         downloadable = downloadable.head(args.symbols_limit)
     metrics: dict[str, Any] = {
@@ -124,7 +166,27 @@ def main() -> None:
         "download_blocked_by_policy": False,
         "include_blocked": args.include_blocked,
     }
-    print(downloadable)
+    policy_blocked = downloadable.is_empty() and not args.include_blocked
+    print(
+        f"manifest_rows_total={total} downloadable_rows={downloadable.height} "
+        f"skipped_blocked={blocked.height if not args.include_blocked else 0} "
+        f"policy_blocked={str(policy_blocked).lower()}"
+    )
+    if args.include_blocked and not downloadable.is_empty():
+        symbols = ",".join(downloadable["symbol"].to_list())
+        estimated_rows = (
+            int(downloadable["estimated_total_rows"].sum())
+            if "estimated_total_rows" in downloadable.columns
+            else 0
+        )
+        estimated_gb = (
+            float(downloadable["estimated_gb"].sum())
+            if "estimated_gb" in downloadable.columns
+            else 0.0
+        )
+        print(
+            f"downloadable_symbols={symbols} estimated_rows={estimated_rows} estimated_gb={estimated_gb:.6f}"
+        )
     if downloadable.is_empty() and not args.include_blocked:
         metrics["download_blocked_by_policy"] = True
         metrics["blocker"] = "download blocked by policy: no validated_5usdt_feasible symbols"
@@ -141,24 +203,31 @@ def main() -> None:
     results = []
     lock = Lock()
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(_download_symbol, row, limiter, args.skip_existing_ok) for row in downloadable.to_dicts()]
+        futures = [
+            pool.submit(_download_symbol, row, limiter, args.skip_existing_ok)
+            for row in downloadable.to_dicts()
+        ]
         for fut in as_completed(futures):
             res = fut.result()
             with lock:
                 results.append(res)
             print(res)
     elapsed = time.monotonic() - start
-    metrics.update({
-        "total_seconds": round(elapsed, 3),
-        "api_requests_count": limiter.wait_count,
-        "rows_written": sum(r.get("rows_written", 0) for r in results),
-        "seconds_per_symbol": round(elapsed / max(1, downloadable.height), 3),
-        "requests_per_second_effective": round(limiter.wait_count / elapsed, 3) if elapsed else 0,
-        "skipped_existing_ok": sum(r.get("skipped_existing_ok", 0) for r in results),
-        "downloaded": sum(r.get("downloaded", 0) for r in results),
-        "failures": sum(r.get("failed", 0) for r in results),
-        "symbol_results": results,
-    })
+    metrics.update(
+        {
+            "total_seconds": round(elapsed, 3),
+            "api_requests_count": limiter.wait_count,
+            "rows_written": sum(r.get("rows_written", 0) for r in results),
+            "seconds_per_symbol": round(elapsed / max(1, downloadable.height), 3),
+            "requests_per_second_effective": round(limiter.wait_count / elapsed, 3)
+            if elapsed
+            else 0,
+            "skipped_existing_ok": sum(r.get("skipped_existing_ok", 0) for r in results),
+            "downloaded": sum(r.get("downloaded", 0) for r in results),
+            "failures": sum(r.get("failed", 0) for r in results),
+            "symbol_results": results,
+        }
+    )
     _write_perf_report(metrics)
 
 
