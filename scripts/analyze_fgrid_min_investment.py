@@ -35,9 +35,10 @@ def main() -> None:
         f"symbols_tested={aggregate.get('symbols_tested', 0)}",
         f"configs_tested={aggregate.get('configs_tested', 0)}",
         f"investment_min_non_null_rows={df['investment_min'].drop_nulls().len() if 'investment_min' in df.columns else 0}",
-        f"min_investment_min_global={aggregate.get('min_investment_min_global')}",
+        f"min_investment_min_global_bybit_feasible_only={aggregate.get('min_investment_min_global_bybit_feasible_only')}",
     ]
     for threshold in (5, 10, 25, 50, 100, 250, 500):
+        parts.append(f"symbols_min_investment_feasible_at_{threshold}={aggregate.get(f'symbols_min_investment_feasible_at_{threshold}', 0)}")
         parts.append(f"symbols_feasible_at_{threshold}={aggregate.get(f'symbols_feasible_at_{threshold}', 0)}")
     print(" ".join(parts))
 

@@ -37,15 +37,32 @@ def build_download_manifest(
     max_gb: float,
 ) -> pl.DataFrame:
     pass_symbols: set[str] = set()
-    if (
-        feasible is not None
-        and not feasible.is_empty()
-        and "feasible_user_5usdt_rule" in feasible.columns
-    ):
-        pass_symbols = set(
-            feasible.filter(pl.col("feasible_user_5usdt_rule"))["symbol"].unique().to_list()
-        )
-    status = "validated_5usdt_feasible" if len(pass_symbols) >= 10 else "blocked_by_min_investment"
+    if universe.is_empty():
+        return pl.DataFrame({
+            "symbol": [],
+            "trading_feasibility_status": [],
+            "start_ms": [],
+            "end_ms": [],
+            "days_requested": [],
+            "estimated_kline_rows": [],
+            "estimated_mark_kline_rows": [],
+            "estimated_funding_rows": [],
+            "estimated_total_rows": [],
+            "estimated_bytes": [],
+            "estimated_gb": [],
+        })
+    if feasible is not None and not feasible.is_empty():
+        if "min_investment_feasible_at_5usdt" in feasible.columns:
+            pass_symbols = set(
+                feasible.filter(pl.col("min_investment_feasible_at_5usdt"))["symbol"].unique().to_list()
+            )
+        elif "feasible_user_5usdt_rule" in feasible.columns:
+            pass_symbols = set(
+                feasible.filter(pl.col("feasible_user_5usdt_rule"))["symbol"].unique().to_list()
+            )
+        else:
+            pass_symbols = set(feasible["symbol"].unique().to_list()) if "symbol" in feasible.columns else set()
+    status = "validated_5usdt_feasible" if len(pass_symbols) >= 1 else "blocked_by_min_investment"
     if status == "validated_5usdt_feasible":
         chosen = universe.filter(pl.col("symbol").is_in(list(pass_symbols))).sort(
             "turnover24h", descending=True

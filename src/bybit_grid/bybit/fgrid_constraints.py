@@ -95,7 +95,9 @@ def parse_validate_response(
         ("leverage", "leverage"),
         ("min_price", "min_price"),
         ("max_price", "max_price"),
+        ("entry_price", "entry_price"),
         ("stop_loss_price", "stop_loss_price"),
+        ("take_profit_price", "take_profit_price"),
         ("profit", "profit"),
     ]:
         row[
@@ -124,14 +126,29 @@ def parse_validate_response(
             meta["leverage_requested"], _dec(row["leverage_min"]), _dec(row["leverage_max"])
         )
     )
+    target_init_margin = Decimal("5")
+    investment_min_dec = _dec(row["investment_min"])
+    investment_max_dec = _dec(row["investment_max"])
     if row["investment_min"] is None:
         feasible5 = False
         blocker = "investment_min_missing"
     else:
-        feasible5 = bool(bybit and Decimal(str(row["investment_min"])) <= Decimal("5"))
+        feasible5 = bool(bybit and investment_min_dec is not None and investment_min_dec <= target_init_margin)
         blocker = (
             None if feasible5 else ("min_investment_gt_5usdt" if bybit else "bybit_not_feasible")
         )
+    last_price = _dec(meta.get("lastPrice"))
+    req_min = _dec(meta.get("min_price"))
+    req_max = _dec(meta.get("max_price"))
+    req_sl = _dec(meta.get("stop_loss_price"))
+    long_liq = _field(result, "long_liq_price", "from") or _dec(result.get("long_liq_price"))
+    short_liq = _field(result, "short_liq_price", "from") or _dec(result.get("short_liq_price"))
+
+    def pct(num: Decimal | None, den: Decimal | None) -> float | None:
+        if num is None or den in (None, Decimal("0")):
+            return None
+        return float((num / den) * Decimal("100"))
+
     row.update(
         {
             "validate_ok": bool(validate_ok),
@@ -139,7 +156,21 @@ def parse_validate_response(
                 row["debug_msg"] in ("param error", "schema error") or ret_code in (10001, "10001")
             ),
             "feasible_bybit": bool(bybit),
+            "min_investment_feasible_at_5usdt": feasible5,
             "feasible_user_5usdt_rule": feasible5,
+            "target_init_margin_usdt": float(target_init_margin),
+            "target_init_margin_inside_validate_range": bool(
+                investment_min_dec is not None
+                and investment_max_dec is not None
+                and investment_min_dec <= target_init_margin <= investment_max_dec
+            ),
+            "long_liq_price": float(long_liq) if long_liq is not None else None,
+            "short_liq_price": float(short_liq) if short_liq is not None else None,
+            "requested_range_width_pct": pct((req_max - req_min) if req_max is not None and req_min is not None else None, req_min),
+            "requested_stop_loss_distance_from_min_pct": pct((req_min - req_sl) if req_min is not None and req_sl is not None else None, req_min),
+            "requested_stop_loss_distance_from_last_pct": pct((last_price - req_sl) if last_price is not None and req_sl is not None else None, last_price),
+            "long_liq_distance_from_last_pct": pct((last_price - long_liq) if last_price is not None and long_liq is not None else None, last_price),
+            "short_liq_distance_from_last_pct": pct((short_liq - last_price) if last_price is not None and short_liq is not None else None, last_price),
             "blocker_reason": blocker,
         }
     )
