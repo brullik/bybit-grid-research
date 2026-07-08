@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 import json
 import time
@@ -10,7 +12,9 @@ import sys
 from threading import Lock
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 import polars as pl
 
@@ -29,6 +33,7 @@ from bybit_grid.bybit.fgrid_min_sweep import (
 )
 from bybit_grid.bybit.rate_limit import TokenBucketRateLimiter
 from bybit_grid.config import load_settings
+from scripts.build_universe import build_universe
 
 
 def _is_skipped_raw(path_value: Any) -> bool:
@@ -215,6 +220,9 @@ def main() -> None:
     parser.add_argument("--fast-max", action="store_true")
     parser.add_argument("--user-threshold", type=float, default=5.0)
     parser.add_argument("--purge-skipped-constraints", action="store_true")
+    parser.add_argument("--auto-build-universe", action="store_true")
+    parser.add_argument("--min-turnover", type=float, default=5_000_000)
+    parser.add_argument("--universe-max-symbols", type=int, default=150)
     args = parser.parse_args()
     if args.purge_skipped_constraints:
         purge_skipped_constraints()
@@ -241,7 +249,16 @@ def main() -> None:
 
     output = Path("data/processed/fgrid_validate_constraints.parquet")
     raw_dir = Path("data/processed/fgrid_validate_raw_redacted")
-    universe = pl.read_parquet(args.universe).head(args.max_symbols)
+    universe_path = Path(args.universe)
+    if not universe_path.exists():
+        if not args.auto_build_universe:
+            print(f"missing_universe={args.universe}")
+            print("Run: python scripts/build_universe.py --min-turnover 5000000 --max-symbols 150")
+            print("Or rerun this command with --auto-build-universe.")
+            raise SystemExit(2)
+        counts = build_universe(args.min_turnover, args.universe_max_symbols)
+        print(f"step=build_universe status=ok selected_count={counts.get('selected', counts.get('selected_count', 0))}")
+    universe = pl.read_parquet(universe_path).head(args.max_symbols)
     symbol_rows, planned = _plan(
         universe, args.max_profiles_per_symbol, args.absolute_max_profiles_per_symbol
     )
@@ -303,7 +320,11 @@ def main() -> None:
                     append_constraints(output, pending)
                     pending.clear()
                 best5 = len({r["symbol"] for r in all_rows if r.get("feasible_user_5usdt_rule")})
-                print(progress_line(completed, planned, start, best5, errors, skipped, api_calls))
+                line = progress_line(completed, planned, start, best5, errors, skipped, api_calls)
+                print(line)
+                api_rps_now = api_calls / max(time.monotonic() - start, 1e-9)
+                if api_rps_now > 15:
+                    print("warning: api_rps exceeds endpoint limit; check whether rows are real API responses or skipped/resumed rows")
     except KeyboardInterrupt:
         if pending:
             append_constraints(output, pending)
@@ -323,8 +344,12 @@ def main() -> None:
         else None
     )
     elapsed = max(time.monotonic() - start, 1e-9)
+    symbols_tested = df["symbol"].unique().len() if not df.is_empty() else 0
+    configs_tested = df.height
+    investment_non_null = df["investment_min"].drop_nulls().len() if (not df.is_empty() and "investment_min" in df.columns) else 0
     print(
-        f"rows={df.height} symbols_tested={df['symbol'].unique().len() if not df.is_empty() else 0} best_global_min_investment={best_min}"
+        f"rows={df.height} symbols_tested={symbols_tested} configs_tested={configs_tested} "
+        f"investment_min_non_null_rows={investment_non_null} best_global_min_investment={best_min}"
     )
     print(
         f"api_calls_attempted={api_calls} api_calls_succeeded={api_succeeded} "
