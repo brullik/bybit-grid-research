@@ -126,7 +126,16 @@ def main() -> None:
     parser.add_argument("--skip-existing-ok", action="store_true")
     parser.add_argument("--symbols-limit", type=int)
     parser.add_argument("--days-override", type=int)
+    parser.add_argument("--fast-max", action="store_true")
+    parser.add_argument("--progress-every", type=int, default=10)
     args = parser.parse_args()
+    if args.fast_max:
+        args.workers = 64
+        args.max_requests_per_second = 100
+        args.skip_existing_ok = True
+        args.progress_every = 10
+    if args.sleep_sec and args.max_requests_per_second:
+        print("warning: --sleep-sec is deprecated; using shared rate limiter")
 
     start = time.monotonic()
     manifest = pl.read_parquet(args.manifest)
@@ -211,7 +220,14 @@ def main() -> None:
             res = fut.result()
             with lock:
                 results.append(res)
-            print(res)
+                done = len(results)
+            elapsed_now = max(time.monotonic() - start, 1e-9)
+            rps = limiter.wait_count / elapsed_now
+            eta = int(max(downloadable.height - done, 0) / max(done / elapsed_now, 1e-9))
+            if done % args.progress_every == 0 or done == downloadable.height:
+                print(
+                    f"progress symbols_done={done} symbols_total={downloadable.height} requests={limiter.wait_count} rps={rps:.1f} rows={sum(r.get('rows_written', 0) for r in results)} skipped_existing={sum(r.get('skipped_existing_ok', 0) for r in results)} failed={sum(r.get('failed', 0) for r in results)} eta_sec={eta}"
+                )
     elapsed = time.monotonic() - start
     metrics.update(
         {

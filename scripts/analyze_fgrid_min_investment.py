@@ -13,6 +13,9 @@ from bybit_grid.bybit.fgrid_feasibility import summarize_min_investment, write_r
 def main() -> None:
     inp = Path("data/processed/fgrid_validate_constraints.parquet")
     df = pl.read_parquet(inp) if inp.exists() else pl.DataFrame()
+    if df.is_empty():
+        print("No constraints available. Run validate_universe_fgrid_constraints.py first.")
+        return
     summary, aggregate = summarize_min_investment(df)
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     summary.write_parquet("data/processed/fgrid_min_investment_by_symbol.parquet")

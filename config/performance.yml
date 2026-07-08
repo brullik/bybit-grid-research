@@ -1,0 +1,16 @@
+performance:
+  profile: fast_max
+  public:
+    workers: 64
+    max_requests_per_second: 100
+    max_retries: 3
+    backoff_on_429: true
+    backoff_on_403: true
+  private_fgrid_validate:
+    workers: 10
+    max_requests_per_second: 9.5
+    max_retries: 2
+    backoff_on_10006: true
+    use_response_headers: true
+  local_cpu:
+    workers: auto
