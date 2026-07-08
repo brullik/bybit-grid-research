@@ -11,7 +11,7 @@ EXCLUDED_DIRS = {
     "__pycache__",
     ".pytest_cache",
     ".ruff_cache",
-    "reports/runs",
+    "reports",
 }
 EXCLUDED_NAMES = {".env"}
 EXCLUDED_PREFIXES = ("data/", "reports/runs/", "data/processed/fgrid_validate_raw_redacted/")
@@ -21,6 +21,10 @@ EXCLUDED_PARTS = {"private", "secret", "account"}
 def should_exclude(path: Path) -> bool:
     rel = path.as_posix()
     if path.name in EXCLUDED_NAMES:
+        return True
+    if path.name.startswith(".env.") and path.name != ".env.example":
+        return True
+    if path.name.endswith(".pyc"):
         return True
     if any(rel == d or rel.startswith(d + "/") for d in EXCLUDED_DIRS):
         return True
