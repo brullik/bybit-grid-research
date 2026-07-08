@@ -31,9 +31,15 @@ def main() -> None:
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     summary.write_parquet("data/processed/fgrid_min_investment_by_symbol.parquet")
     write_report(Path("reports/sprint_02_native_grid_feasibility_report.md"), summary, aggregate)
-    print(
-        f"symbols_tested={aggregate.get('symbols_tested', 0)} configs_tested={aggregate.get('configs_tested', 0)}"
-    )
+    parts = [
+        f"symbols_tested={aggregate.get('symbols_tested', 0)}",
+        f"configs_tested={aggregate.get('configs_tested', 0)}",
+        f"investment_min_non_null_rows={df['investment_min'].drop_nulls().len() if 'investment_min' in df.columns else 0}",
+        f"min_investment_min_global={aggregate.get('min_investment_min_global')}",
+    ]
+    for threshold in (5, 10, 25, 50, 100, 250, 500):
+        parts.append(f"symbols_feasible_at_{threshold}={aggregate.get(f'symbols_feasible_at_{threshold}', 0)}")
+    print(" ".join(parts))
 
 
 if __name__ == "__main__":
