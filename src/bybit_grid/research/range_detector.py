@@ -7,6 +7,7 @@ import math
 import polars as pl
 
 from bybit_grid.research.range_features import DEFAULT_LOOKBACKS, ONE_MINUTE_MS, stable_candidate_id
+from bybit_grid.research.range_profiles import RANGE_PROFILES, RangeProfile
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class DetectionConfig:
     min_valid_candle_pct: float = 1.0
     max_zero_volume_window_pct: float = 0.05
     min_range_height_pct: float = 0.0001
+    profile_name: str = "broad_diagnostic"
 
 
 def _col(df: pl.DataFrame, *names: str) -> str:
@@ -53,9 +55,10 @@ def _std(values: list[float]) -> float:
 
 
 def detect_range_candidates(
-    df: pl.DataFrame, symbol: str, config: DetectionConfig | None = None
+    df: pl.DataFrame, symbol: str, config: DetectionConfig | None = None, profile: RangeProfile | None = None
 ) -> pl.DataFrame:
     cfg = config or DetectionConfig()
+    prof = profile or RANGE_PROFILES.get(cfg.profile_name, RANGE_PROFILES["broad_diagnostic"])
     if df.is_empty():
         return pl.DataFrame()
     ts_col = _col(df, "open_time_ms", "start_time_ms", "timestamp_ms")
@@ -108,23 +111,24 @@ def detect_range_candidates(
             )
             bad_count = sum(bad[s : i + 1])
             zero_count = sum(zero[s : i + 1])
-            if missing or bad_count or zero_count > int(lb * cfg.max_zero_volume_window_pct):
+            if missing or bad_count or zero_count > int(lb * prof.max_zero_volume_window_pct):
                 continue
             lo = min(lows[s : i + 1])
             hi = max(h[s : i + 1])
             height = hi - lo
-            if height <= 0 or (height / c[i]) < cfg.min_range_height_pct:
+            height_pct = height / c[i]
+            if height <= 0 or height_pct < max(cfg.min_range_height_pct, prof.range_height_pct_min) or height_pct > prof.range_height_pct_max:
                 continue
             pos = (c[i] - lo) / height
             mid_low = 0.5 - cfg.mid_zone_pct / 2
             mid_high = 0.5 + cfg.mid_zone_pct / 2
-            if not (mid_low <= pos <= mid_high):
+            if prof.require_current_middle_zone and not (mid_low <= pos <= mid_high):
                 continue
             lower_edge = lo + cfg.lower_zone_pct * height
             upper_edge = hi - cfg.upper_zone_pct * height
             lower_mask = [x <= lower_edge for x in lows[s : i + 1]]
             upper_mask = [x >= upper_edge for x in h[s : i + 1]]
-            if not (any(lower_mask) and any(upper_mask)):
+            if prof.require_lower_upper_entries and not (any(lower_mask) and any(upper_mask)):
                 continue
             mid = lo + 0.5 * height
             closes = c[s : i + 1]
@@ -138,9 +142,23 @@ def detect_range_candidates(
             last_upper = max(j for j, ok in enumerate(upper_mask) if ok)
             a14 = atr14[i]
             a60 = atr60[i]
+            lower_touches = sum(lower_mask)
+            upper_touches = sum(upper_mask)
+            slope_pct = abs((closes[-1] - closes[0]) / closes[0]) if closes[0] else 0.0
+            a14 = atr14[i]
+            range_atr = (height / a14) if a14 else None
+            if crosses < prof.min_midline_cross_count:
+                continue
+            if lower_touches < prof.min_touches_lower_zone or upper_touches < prof.min_touches_upper_zone:
+                continue
+            if slope_pct > prof.max_abs_slope_pct_per_window:
+                continue
+            if range_atr is not None and not (prof.range_height_atr_min <= range_atr <= prof.range_height_atr_max):
+                continue
             rows.append(
                 {
-                    "candidate_id": stable_candidate_id(symbol, int(t[i]), lb),
+                    "candidate_id": stable_candidate_id(f"{symbol}:{prof.name}", int(t[i]), lb),
+                    "profile_name": prof.name,
                     "symbol": symbol,
                     "signal_time_ms": int(t[i]),
                     "signal_time_utc": datetime.fromtimestamp(
@@ -151,11 +169,11 @@ def detect_range_candidates(
                     "range_high": hi,
                     "range_mid": mid,
                     "range_height_abs": height,
-                    "range_height_pct": height / c[i],
+                    "range_height_pct": height_pct,
                     "current_close": c[i],
                     "current_position_in_range": pos,
-                    "touches_lower_zone": sum(lower_mask),
-                    "touches_upper_zone": sum(upper_mask),
+                    "touches_lower_zone": lower_touches,
+                    "touches_upper_zone": upper_touches,
                     "entered_lower_zone": True,
                     "entered_upper_zone": True,
                     "midline_crosses": crosses,
@@ -165,7 +183,7 @@ def detect_range_candidates(
                     "atr_60": a60,
                     "atr_rel_14": (a14 / c[i]) if a14 else None,
                     "atr_rel_60": (a60 / c[i]) if a60 else None,
-                    "range_height_atr_14": (height / a14) if a14 else None,
+                    "range_height_atr_14": range_atr,
                     "range_height_atr_60": (height / a60) if a60 else None,
                     "amplitude_score": height / c[i],
                     "mean_abs_return_inside_range": _mean([abs(x) for x in rets]),

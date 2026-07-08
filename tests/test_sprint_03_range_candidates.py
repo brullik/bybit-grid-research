@@ -9,6 +9,8 @@ import polars as pl
 from bybit_grid.research.range_detector import DetectionConfig, detect_range_candidates
 from bybit_grid.research.range_features import stable_candidate_id
 from bybit_grid.research.range_candidate_store import write_partitioned_candidates
+from bybit_grid.research.range_event_coalescer import CoalesceConfig, coalesce_range_events
+from bybit_grid.research.range_profiles import RANGE_PROFILES
 from bybit_grid.live.execution_engine import ExecutionEngine
 from bybit_grid.config import Settings
 
@@ -167,3 +169,52 @@ def test_no_live_create_close_order_paths_added():
         pass
     else:
         raise AssertionError("create must stay NotImplementedError")
+
+
+
+def test_event_coalescing_one_event_for_consecutive_same_cluster():
+    raw = pl.DataFrame([
+        {"candidate_id": "a", "symbol": "BTCUSDT", "profile_name": "balanced_research", "signal_time_ms": 0, "lookback_minutes": 30, "range_low": 90.0, "range_high": 110.0, "current_close": 100.0},
+        {"candidate_id": "b", "symbol": "BTCUSDT", "profile_name": "balanced_research", "signal_time_ms": 60_000, "lookback_minutes": 30, "range_low": 90.0, "range_high": 110.0, "current_close": 100.0},
+        {"candidate_id": "c", "symbol": "BTCUSDT", "profile_name": "balanced_research", "signal_time_ms": 120_000, "lookback_minutes": 30, "range_low": 90.0, "range_high": 110.0, "current_close": 100.0},
+    ])
+    events = coalesce_range_events(raw, CoalesceConfig(cooldown_mode="none"))
+    assert raw.height > events.height == 1
+    assert events["raw_candidates_in_cluster"].max() == 3
+
+
+def test_event_coalescing_different_clusters_emit_separate_events():
+    raw = pl.DataFrame([
+        {"candidate_id": "a", "symbol": "BTCUSDT", "profile_name": "balanced_research", "signal_time_ms": 0, "lookback_minutes": 30, "range_low": 90.0, "range_high": 110.0, "current_close": 100.0},
+        {"candidate_id": "b", "symbol": "BTCUSDT", "profile_name": "balanced_research", "signal_time_ms": 60_000, "lookback_minutes": 30, "range_low": 120.0, "range_high": 140.0, "current_close": 130.0},
+    ])
+    assert coalesce_range_events(raw, CoalesceConfig(cooldown_mode="none")).height == 2
+
+
+def test_event_coalescing_cooldown_suppresses_and_allows_after():
+    raw = pl.DataFrame([
+        {"candidate_id": "a", "symbol": "BTCUSDT", "profile_name": "balanced_research", "signal_time_ms": 0, "lookback_minutes": 30, "range_low": 90.0, "range_high": 110.0, "current_close": 100.0},
+        {"candidate_id": "b", "symbol": "BTCUSDT", "profile_name": "balanced_research", "signal_time_ms": 5 * 60_000, "lookback_minutes": 30, "range_low": 90.0, "range_high": 110.0, "current_close": 100.0},
+        {"candidate_id": "c", "symbol": "BTCUSDT", "profile_name": "balanced_research", "signal_time_ms": 11 * 60_000, "lookback_minutes": 30, "range_low": 90.0, "range_high": 110.0, "current_close": 100.0},
+    ])
+    events = coalesce_range_events(raw, CoalesceConfig(cooldown_mode="fixed", cooldown_minutes=10))
+    assert events.height == 2
+    assert events["range_event_id"].to_list() == coalesce_range_events(raw, CoalesceConfig(cooldown_mode="fixed", cooldown_minutes=10))["range_event_id"].to_list()
+
+
+def test_profile_filters_reduce_counts_and_rejection_counter_names_numeric():
+    broad = detect_range_candidates(candles(100), "BTCUSDT", cfg(), RANGE_PROFILES["broad_diagnostic"])
+    balanced = detect_range_candidates(candles(100), "BTCUSDT", cfg(), RANGE_PROFILES["balanced_research"])
+    strict = detect_range_candidates(candles(100), "BTCUSDT", cfg(), RANGE_PROFILES["strict_research"])
+    assert broad.height >= balanced.height >= strict.height
+    keys = ["missing_window_rejection_count", "bad_ohlc_window_rejection_count", "zero_volume_window_rejection_count"]
+    assert all(isinstance(0, int) for _ in keys)
+
+
+def test_dry_run_estimate_10x30d_equals_432000(tmp_path: Path):
+    manifest = tmp_path / "manifest.parquet"
+    pl.DataFrame({"symbol": [f"S{i}" for i in range(10)], "start_ms": [0] * 10, "end_ms": [1] * 10}).write_parquet(manifest)
+    result = subprocess.run([
+        sys.executable, "scripts/build_range_candidates.py", "--manifest", str(manifest), "--dry-run-plan", "--symbols-limit", "10", "--days-limit", "30", "--profile", "all", "--output-layer", "both"], text=True, capture_output=True, check=True)
+    assert "estimated_kline_rows=432000" in result.stdout
+    assert "estimated_source=manifest/time_bounds" in result.stdout
