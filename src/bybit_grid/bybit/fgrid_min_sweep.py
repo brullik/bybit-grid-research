@@ -118,16 +118,26 @@ def should_stop_symbol(
 
 
 def progress_line(
-    done: int,
-    total: int,
+    done_rows: int,
+    planned_requests: int,
     start: float,
     best_5usdt_symbols: int = 0,
     errors: int = 0,
     skipped_resume: int = 0,
+    api_calls: int | None = None,
+    skipped_disabled: int = 0,
 ) -> str:
     elapsed = max(time.monotonic() - start, 1e-9)
-    rps = done / elapsed
-    remaining = max(total - done, 0)
-    eta = int(remaining / rps) if rps > 0 else 0
-    pct = (done / total * 100) if total else 100.0
-    return f"progress done={done} total={total} pct={pct:.1f} rps={rps:.1f} eta_sec={eta} best_5usdt_symbols={best_5usdt_symbols} errors={errors} skipped_resume={skipped_resume}"
+    api_calls = done_rows if api_calls is None else api_calls
+    rows_per_sec = done_rows / elapsed
+    api_rps = api_calls / elapsed
+    remaining = max(planned_requests - done_rows - skipped_resume, 0)
+    eta = int(remaining / rows_per_sec) if rows_per_sec > 0 else 0
+    pct = (done_rows / planned_requests * 100) if planned_requests else 100.0
+    return (
+        f"progress done={done_rows} total={planned_requests} done_rows={done_rows} "
+        f"api_calls={api_calls} planned_requests={planned_requests} "
+        f"pct={pct:.1f} rows_per_sec={rows_per_sec:.1f} api_rps={api_rps:.1f} "
+        f"eta_sec={eta} skipped_disabled={skipped_disabled} errors={errors} "
+        f"skipped_resume={skipped_resume} best_5usdt_symbols={best_5usdt_symbols}"
+    )

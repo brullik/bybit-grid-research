@@ -45,15 +45,14 @@ def summarize_min_investment(df: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, 
             )
         rows.append(row)
     out = pl.DataFrame(rows).sort("min_investment_min_seen", nulls_last=True)
+    median_val = out["min_investment_min_seen"].drop_nulls().median() if not out.is_empty() else None
     agg = {
         "symbols_tested": df["symbol"].unique().len(),
         "configs_tested": df.height,
         "min_investment_min_global": float(valid["investment_min"].min())
         if not valid.is_empty()
         else None,
-        "min_investment_median_by_symbol": float(out["min_investment_min_seen"].median())
-        if not out.is_empty()
-        else None,
+        "min_investment_median_by_symbol": float(median_val) if median_val is not None else None,
     }
     for t in THRESHOLDS:
         agg[f"symbols_feasible_at_{t}"] = out.filter(
