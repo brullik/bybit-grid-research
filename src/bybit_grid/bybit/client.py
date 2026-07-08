@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -15,6 +16,21 @@ log = logging.getLogger(__name__)
 RETRYABLE_RETCODES = {10006, "10006"}
 NON_RETRYABLE_RETCODES = {10001, "10001", 10003, "10003", 10004, "10004", 10005, "10005"}
 RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+RATE_LIMIT_HEADER_NAMES = (
+    "X-Bapi-Limit",
+    "X-Bapi-Limit-Status",
+    "X-Bapi-Limit-Reset-Timestamp",
+)
+
+
+@dataclass
+class BybitClientStats:
+    api_calls_attempted: int = 0
+    api_calls_succeeded: int = 0
+    api_calls_failed: int = 0
+    max_observed_endpoint_limit: int | None = None
+    min_observed_limit_status: int | None = None
+    rate_limit_10006_count: int = 0
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -29,6 +45,7 @@ class BybitClient:
     def __init__(self, settings: Settings, timeout: float = 20.0, rate_limiter: SimpleRateLimiter | None = None):
         self.settings = settings
         self.rate_limiter = rate_limiter or SimpleRateLimiter()
+        self.stats = BybitClientStats()
         self.http = httpx.Client(base_url=settings.bybit_api_base_url, timeout=timeout)
 
     def close(self):
@@ -71,8 +88,15 @@ class BybitClient:
         headers = self._private_headers(json_body)
         headers["Content-Type"] = "application/json"
         self.rate_limiter.wait()
+        self.stats.api_calls_attempted += 1
         response = self.http.post(endpoint, content=json_body, headers=headers)
-        return self._handle_response(endpoint, response, "bybit_post")
+        try:
+            data = self._handle_response(endpoint, response, "bybit_post")
+        except Exception:
+            self.stats.api_calls_failed += 1
+            raise
+        self.stats.api_calls_succeeded += 1
+        return data
 
     def _private_headers(self, signed_payload: str) -> dict[str, str]:
         ts = str(int(time.time() * 1000))
@@ -108,6 +132,7 @@ class BybitClient:
         except ValueError:
             data = {"retCode": None, "retMsg": response.text[:200]}
 
+        self._capture_rate_limit_headers(data, response)
         ret_code = data.get("retCode")
         status_code = data.get("status_code")
         message = data.get("retMsg") or data.get("debug_msg")
@@ -143,6 +168,39 @@ class BybitClient:
             debug_msg = "non-retryable" if ret_code in NON_RETRYABLE_RETCODES else data.get("debug_msg")
             raise BybitAPIError(endpoint, response.status_code, api_code, message, debug_msg, data)
         return data
+
+    def _capture_rate_limit_headers(self, data: dict[str, Any], response: httpx.Response) -> None:
+        rate_meta: dict[str, str] = {}
+        for name in RATE_LIMIT_HEADER_NAMES:
+            value = response.headers.get(name)
+            if value is not None:
+                rate_meta[name] = value
+        if rate_meta:
+            data["rate_limit_headers"] = rate_meta
+        endpoint_limit = rate_meta.get("X-Bapi-Limit")
+        limit_status = rate_meta.get("X-Bapi-Limit-Status")
+        if endpoint_limit is not None:
+            try:
+                value = int(endpoint_limit)
+                self.stats.max_observed_endpoint_limit = (
+                    value
+                    if self.stats.max_observed_endpoint_limit is None
+                    else max(self.stats.max_observed_endpoint_limit, value)
+                )
+            except ValueError:
+                pass
+        if limit_status is not None:
+            try:
+                value = int(limit_status)
+                self.stats.min_observed_limit_status = (
+                    value
+                    if self.stats.min_observed_limit_status is None
+                    else min(self.stats.min_observed_limit_status, value)
+                )
+            except ValueError:
+                pass
+        if data.get("retCode") in RETRYABLE_RETCODES:
+            self.stats.rate_limit_10006_count += 1
 
     def validate_grid_bot(
         self, payload: dict[str, Any], runtime_live: bool = False

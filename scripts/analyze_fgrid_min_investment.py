@@ -16,6 +16,17 @@ def main() -> None:
     if df.is_empty():
         print("No constraints available. Run validate_universe_fgrid_constraints.py first.")
         return
+    has_real_investment = "investment_min" in df.columns and df["investment_min"].drop_nulls().len() > 0
+    if not has_real_investment:
+        message = (
+            "No real investment_min values found. Check GRID_VALIDATE_ENABLED and purge skipped constraints."
+        )
+        Path("reports").mkdir(exist_ok=True)
+        Path("reports/sprint_02_native_grid_feasibility_report.md").write_text(
+            f"# Sprint 02 Native Grid Feasibility Report\n\n{message}\n", encoding="utf-8"
+        )
+        print(message)
+        raise SystemExit(1)
     summary, aggregate = summarize_min_investment(df)
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     summary.write_parquet("data/processed/fgrid_min_investment_by_symbol.parquet")
