@@ -14,27 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import polars as pl
 
 from bybit_grid.research.range_candidate_store import write_partitioned_candidates
-from bybit_grid.research.range_detector import DetectionConfig, detect_range_candidates
+from bybit_grid.research.range_detector import DetectionConfig
+from bybit_grid.research.range_core import FUNNEL_KEYS, arrays_from_frame, detect_ranges_core_with_funnel
 from bybit_grid.research.range_event_coalescer import CoalesceConfig, coalesce_range_events
 from bybit_grid.research.range_actionable_events import ActionableEventConfig, build_actionable_events
 from bybit_grid.research.range_features import DEFAULT_LOOKBACKS
 from bybit_grid.research.range_profiles import resolve_profiles
 
-REJECTION_KEYS = (
-    "missing_window_rejection_count",
-    "bad_ohlc_window_rejection_count",
-    "zero_volume_window_rejection_count",
-    "insufficient_history_rejection_count",
-    "range_height_rejection_count",
-    "middle_zone_rejection_count",
-    "lower_upper_entry_rejection_count",
-    "slope_rejection_count",
-    "midline_cross_rejection_count",
-    "touch_count_rejection_count",
-    "range_atr_rejection_count",
-    "boring_range_rejection_count",
-    "raw_candidate_pass_count",
-)
+REJECTION_KEYS = FUNNEL_KEYS
 
 
 def default_workers() -> int:
@@ -78,10 +65,23 @@ def _worker(row: dict, args_dict: dict) -> dict:
         return {"symbol": symbol, "skipped_existing_ok": True, "candles_scanned": 0, "raw_candidate_rows": 0, "event_candidate_rows": 0}
     df = _read_symbol(args_dict["data_dir"], symbol, start_ms, end_ms)
     cfg = DetectionConfig(lookbacks=tuple(int(x) for x in args_dict["lookbacks"].split(",")))
-    raw_parts = [detect_range_candidates(df, symbol, cfg, prof) for prof in resolve_profiles(args_dict["profile"])]
+    arrays = arrays_from_frame(df) if not df.is_empty() else None
+    core_start = time.monotonic()
+    raw_parts = []
+    counters = {k: 0 for k in REJECTION_KEYS}
+    if arrays is not None:
+        for prof in resolve_profiles(args_dict["profile"]):
+            part, funnel = detect_ranges_core_with_funnel(arrays, symbol, prof, cfg.lookbacks, core=args_dict.get("core", "numpy_fast"))
+            raw_parts.append(part)
+            for k in REJECTION_KEYS:
+                counters[k] += int(funnel.get(k, 0))
+    core_detect_seconds = time.monotonic() - core_start
     raw = pl.concat([x for x in raw_parts if not x.is_empty()], how="diagonal_relaxed") if any(not x.is_empty() for x in raw_parts) else pl.DataFrame()
+    coalesce_start = time.monotonic()
     events = coalesce_range_events(raw, CoalesceConfig(cooldown_mode=args_dict["cooldown_mode"], cooldown_minutes=args_dict.get("cooldown_minutes"), range_cluster_bps=float(args_dict["range_cluster_bps"]))) if not raw.is_empty() and "event" in layers else pl.DataFrame()
     regimes, actionable = build_actionable_events(raw, event_cfg=ActionableEventConfig(allow_reentry_events=bool(args_dict.get("allow_reentry_events")), max_events_per_regime=int(args_dict.get("max_events_per_regime") or 1))) if not raw.is_empty() and ("actionable" in layers or "range_regimes" in layers) else (pl.DataFrame(), pl.DataFrame())
+    coalesce_seconds = time.monotonic() - coalesce_start
+    write_start = time.monotonic()
     if "raw" in layers and not raw.is_empty():
         write_partitioned_candidates(raw, raw_base)
     if "event" in layers and not events.is_empty():
@@ -90,12 +90,7 @@ def _worker(row: dict, args_dict: dict) -> dict:
         write_partitioned_candidates(regimes.rename({"first_seen_time_ms": "signal_time_ms"}), regime_base)
     if "actionable" in layers and not actionable.is_empty():
         write_partitioned_candidates(actionable, actionable_base)
-    total_positions = sum(max(0, df.height - int(lb) + 1) for lb in cfg.lookbacks)
-    counters = {k: 0 for k in REJECTION_KEYS}
-    counters["total_window_positions"] = total_positions
-    counters["insufficient_history_rejection_count"] = sum(max(0, int(lb) - df.height) for lb in cfg.lookbacks)
-    counters["range_height_rejection_count"] = max(0, total_positions - raw.height)
-    counters["raw_candidate_pass_count"] = raw.height
+    write_seconds = time.monotonic() - write_start
     return {
         "symbol": symbol,
         "skipped_existing_ok": False,
@@ -104,6 +99,9 @@ def _worker(row: dict, args_dict: dict) -> dict:
         "event_candidate_rows": events.height,
         "range_regime_rows": regimes.height,
         "actionable_event_rows": actionable.height,
+        "core_detect_seconds": core_detect_seconds,
+        "coalesce_seconds": coalesce_seconds,
+        "write_seconds": write_seconds,
         **counters,
     }
 
@@ -138,7 +136,8 @@ def main() -> None:
     p.add_argument("--resume", action="store_true")
     p.add_argument("--skip-existing-ok", action="store_true")
     p.add_argument("--confirm-large-run", action="store_true")
-    p.add_argument("--profile", choices=["broad_diagnostic", "balanced_research", "strict_research", "actionable_research", "strict_actionable", "all"], default="actionable_research")
+    p.add_argument("--profile", choices=["broad_diagnostic", "balanced_research", "strict_research", "actionable_research", "strict_actionable", "actionable_fast_strict", "all"], default="actionable_research")
+    p.add_argument("--core", choices=["python_reference", "numpy_fast", "numba_optional"], default="numpy_fast")
     p.add_argument("--output-layer", default="actionable")
     p.add_argument("--coalesce-events", action="store_true", default=True)
     p.add_argument("--cooldown-mode", choices=["lookback_fraction", "fixed", "none"], default="lookback_fraction")
@@ -169,7 +168,7 @@ def main() -> None:
         work = work.head(args.symbols_limit)
     est_rows, est_source = estimate_rows(work, args.days_limit)
     profiles = ",".join(p.name for p in resolve_profiles(args.profile))
-    plan = {"run_id": args.run_id, "symbols": work.height, "workers": args.workers, "estimated_kline_rows": est_rows, "estimated_source": est_source, "profiles": profiles, "lookbacks": args.lookbacks, "output_layer": args.output_layer}
+    plan = {"run_id": args.run_id, "symbols": work.height, "workers": args.workers, "estimated_kline_rows": est_rows, "estimated_source": est_source, "profiles": profiles, "lookbacks": args.lookbacks, "output_layer": args.output_layer, "core_name": args.core}
     print("dry_run_plan " + " ".join(f"{k}={v}" for k, v in plan.items()))
     if args.dry_run_plan:
         return
@@ -217,9 +216,16 @@ def main() -> None:
         "actionable_event_rows_written": int(summary["actionable_event_rows"].sum()) if summary.height and "actionable_event_rows" in summary.columns else 0,
         "runtime_seconds": runtime,
         "workers_used": args.workers,
+        "core_name": args.core,
+        "core_detect_seconds": float(summary["core_detect_seconds"].sum()) if summary.height and "core_detect_seconds" in summary.columns else 0.0,
+        "coalesce_seconds": float(summary["coalesce_seconds"].sum()) if summary.height and "coalesce_seconds" in summary.columns else 0.0,
+        "write_seconds": float(summary["write_seconds"].sum()) if summary.height and "write_seconds" in summary.columns else 0.0,
         **{k: int(summary[k].sum()) if summary.height and k in summary.columns else 0 for k in REJECTION_KEYS},
     }
     perf["candidate_rows_written"] = perf["raw_candidate_rows_written"]
+    perf["rows_per_sec_by_core"] = perf["candles_scanned"] / perf["core_detect_seconds"] if perf["core_detect_seconds"] else 0
+    perf["raw_candidates_per_sec"] = perf["raw_candidate_rows_written"] / runtime if runtime else 0
+    perf["actionable_events_per_sec"] = perf["actionable_event_rows_written"] / runtime if runtime else 0
     candles = perf["candles_scanned"]
     perf["candidates_per_10k_candles"] = perf["raw_candidate_rows_written"] / candles * 10_000 if candles else 0
     Path("reports").mkdir(exist_ok=True)

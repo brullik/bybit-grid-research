@@ -86,6 +86,20 @@ RANGE_PROFILES: dict[str, RangeProfile] = {
         min_path_length_over_range=4.0,
         min_range_quality_score=1.5,
     ),
+    "actionable_fast_strict": RangeProfile(
+        name="actionable_fast_strict",
+        range_height_pct_min=0.003,
+        range_height_pct_max=0.05,
+        range_height_atr_min=5.0,
+        range_height_atr_max=30.0,
+        min_midline_cross_count=7,
+        min_touches_lower_zone=3,
+        min_touches_upper_zone=3,
+        max_abs_slope_pct_per_window=0.003,
+        max_zero_volume_window_pct=0.005,
+        min_path_length_over_range=5.0,
+        min_range_quality_score=2.0,
+    ),
 }
 
 
