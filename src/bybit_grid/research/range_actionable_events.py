@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import polars as pl
 
+from bybit_grid.research.range_profiles import RANGE_PROFILES
 from bybit_grid.research.range_regime_coalescer import RegimeCoalesceConfig, add_actionable_cluster_id, coalesce_range_regimes
 
 
@@ -53,6 +54,21 @@ def build_actionable_events(raw: pl.DataFrame, regime_cfg: RegimeCoalesceConfig 
     if "raw_candidate_id" not in df.columns:
         df = df.with_columns(pl.col("candidate_id").alias("raw_candidate_id"))
     regimes = coalesce_range_regimes(df, regime_cfg)
+    if not regimes.is_empty():
+        keep_ids: list[str] = []
+        for reg in regimes.to_dicts():
+            prof = RANGE_PROFILES.get(str(reg.get("profile_name", "")))
+            if prof is None:
+                keep_ids.append(str(reg["range_regime_id"]))
+                continue
+            unique_lookbacks = len([x for x in str(reg.get("lookbacks_observed") or "").split(",") if x])
+            if (
+                int(reg.get("regime_duration_minutes") or 0) >= prof.min_regime_duration_minutes
+                and int(reg.get("raw_candidates_in_regime") or 0) >= prof.min_raw_candidates_in_regime
+                and unique_lookbacks >= prof.min_unique_lookbacks_in_regime
+            ):
+                keep_ids.append(str(reg["range_regime_id"]))
+        regimes = regimes.filter(pl.col("range_regime_id").is_in(keep_ids)) if keep_ids else pl.DataFrame()
     rows: list[dict[str, object]] = []
     for reg in regimes.to_dicts():
         part = df.filter((pl.col("symbol") == reg["symbol"]) & (pl.col("profile_name") == reg["profile_name"]) & (pl.col("range_cluster_id") == reg["range_cluster_id"]) & (pl.col("signal_time_ms") >= reg["first_seen_time_ms"]) & (pl.col("signal_time_ms") <= reg["last_seen_time_ms"]))
