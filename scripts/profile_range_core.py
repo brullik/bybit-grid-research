@@ -34,9 +34,9 @@ def sample(symbol: str, days: int):
 def run(args: argparse.Namespace) -> dict[str, object]:
     profile = RANGE_PROFILES[args.profile]
     timings: dict[str, float] = {}
-    rows_in = args.symbols_limit * args.days_limit * 1440
     t0 = time.monotonic()
-    symbols = [f"S{i:03d}USDT" for i in range(args.symbols_limit)]
+    symbols = args.symbols.split(",") if args.symbols else [f"S{i:03d}USDT" for i in range(args.symbols_limit)]
+    rows_in = len(symbols) * args.days_limit * 1440
     timings["load_parquet_seconds"] = time.monotonic() - t0
 
     try:
@@ -84,6 +84,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "raw_candidates": raw.height,
         "range_regimes": regimes.height,
         "actionable_events": actionable.height,
+        "detect_seconds": timings.get("detect_raw_candidates_seconds", 0.0),
+        "coalesce_seconds": timings.get("coalesce_regimes_seconds", 0.0),
+        "write_seconds": timings.get("write_outputs_seconds", 0.0),
+        "rows_per_sec": rows_in / sum(timings.values()) if sum(timings.values()) else 0,
+        "raw_candidates_per_sec": raw.height / timings.get("detect_raw_candidates_seconds", 0.0) if timings.get("detect_raw_candidates_seconds", 0.0) else 0,
+        "actionable_events_per_sec": actionable.height / timings.get("coalesce_regimes_seconds", 0.0) if timings.get("coalesce_regimes_seconds", 0.0) else 0,
         "stage_seconds": timings,
         "rows_per_sec_by_stage": {
             k.replace("seconds", "rows_per_sec"): (rows_in / v if v else 0) for k, v in timings.items()
@@ -99,11 +105,15 @@ def main() -> None:
     ap.add_argument("--symbols-limit", type=int, default=3)
     ap.add_argument("--days-limit", type=int, default=7)
     ap.add_argument("--core", choices=["python_reference","numpy_fast","numba_optional"], default="numpy_fast")
-    ap.add_argument("--profile", default="actionable_fast_strict")
+    ap.add_argument("--profile", default="actionable_density_v2")
+    ap.add_argument("--require-candidates", action="store_true")
+    ap.add_argument("--symbols")
     args=ap.parse_args()
     tracemalloc.start()
     prof=cProfile.Profile()
     stats=prof.runcall(run,args)
+    if args.require_candidates and int(stats.get("raw_candidates") or 0) == 0:
+        raise SystemExit("--require-candidates requested but raw_candidates=0; try a looser profile or different --symbols")
     s=io.StringIO()
     pstats.Stats(prof, stream=s).sort_stats("cumtime").print_stats(25)
     stats["cprofile_top"] = s.getvalue().splitlines()[:35]

@@ -19,7 +19,7 @@ from bybit_grid.research.range_core import FUNNEL_KEYS, arrays_from_frame, detec
 from bybit_grid.research.range_event_coalescer import CoalesceConfig, coalesce_range_events
 from bybit_grid.research.range_actionable_events import ActionableEventConfig, build_actionable_events
 from bybit_grid.research.range_features import DEFAULT_LOOKBACKS
-from bybit_grid.research.range_profiles import resolve_profiles
+from bybit_grid.research.range_profiles import RANGE_PROFILES, resolve_profiles
 
 REJECTION_KEYS = FUNNEL_KEYS
 
@@ -136,7 +136,7 @@ def main() -> None:
     p.add_argument("--resume", action="store_true")
     p.add_argument("--skip-existing-ok", action="store_true")
     p.add_argument("--confirm-large-run", action="store_true")
-    p.add_argument("--profile", choices=["broad_diagnostic", "balanced_research", "strict_research", "actionable_research", "strict_actionable", "actionable_fast_strict", "all"], default="actionable_research")
+    p.add_argument("--profile", choices=[*RANGE_PROFILES.keys(), "all"], default="actionable_research")
     p.add_argument("--core", choices=["python_reference", "numpy_fast", "numba_optional"], default="numpy_fast")
     p.add_argument("--output-layer", default="actionable")
     p.add_argument("--coalesce-events", action="store_true", default=True)
@@ -148,6 +148,8 @@ def main() -> None:
     p.add_argument("--max-events-per-regime", type=int, default=1)
     p.add_argument("--max-event-candidates-per-symbol-day", type=int, default=300)
     p.add_argument("--materialize-rejection-counters", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--require-density-smoke-pass")
+    p.add_argument("--override-density-fail", action="store_true")
     p.add_argument("--lookbacks", default=",".join(str(x) for x in DEFAULT_LOOKBACKS))
     p.add_argument("--max-zero-volume-window-pct", type=float, default=0.05)
     p.add_argument("--debug-write-all-features", action="store_true")
@@ -174,6 +176,13 @@ def main() -> None:
         return
     if not args.confirm_large_run and est_rows > 5_000_000:
         raise SystemExit("large run guard: pass --confirm-large-run")
+    if args.require_density_smoke_pass and not args.override_density_fail:
+        cal = Path("data/processed/range_runs") / args.require_density_smoke_pass / "summary" / "actionable_density_calibration.parquet"
+        if not cal.exists():
+            raise SystemExit(f"density smoke guard: calibration summary not found: {cal}")
+        cal_df = pl.read_parquet(cal)
+        if cal_df.is_empty() or not (cal_df["acceptance_density_status"] == "pass").any():
+            raise SystemExit("density smoke guard: no passing calibration profile; use --override-density-fail with PM approval")
     results = []
     rows = work.to_dicts()
     args_dict = vars(args)

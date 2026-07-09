@@ -40,8 +40,8 @@ def main() -> None:
         for c in rej.columns:
             if c.endswith("_count") or c in {"total_window_positions", "raw_candidate_pass_count"}:
                 flat[c] = int(rej[c].sum())
-    out = Path(f"reports/sprint_03_2_range_actionable_report_{run_id}.md")
-    out.parent.mkdir(exist_ok=True)
+    out = Path("reports/range_runs") / run_id / "range_candidate_report.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# Sprint 03.2 Range Candidate Report", ""] + [f"- {k}: {v}" for k, v in flat.items()] + ["", "## Recommendation", "Use actionable_events only for Gate 3 density review; do not proceed to outcomes unless density gates pass."]
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(" ".join(f"{k}={v}" for k, v in flat.items()))
