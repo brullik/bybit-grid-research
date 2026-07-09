@@ -16,6 +16,7 @@ import polars as pl
 from bybit_grid.research.range_candidate_store import write_partitioned_candidates
 from bybit_grid.research.range_detector import DetectionConfig, detect_range_candidates
 from bybit_grid.research.range_event_coalescer import CoalesceConfig, coalesce_range_events
+from bybit_grid.research.range_actionable_events import ActionableEventConfig, build_actionable_events
 from bybit_grid.research.range_features import DEFAULT_LOOKBACKS
 from bybit_grid.research.range_profiles import resolve_profiles
 
@@ -28,7 +29,11 @@ REJECTION_KEYS = (
     "middle_zone_rejection_count",
     "lower_upper_entry_rejection_count",
     "slope_rejection_count",
+    "midline_cross_rejection_count",
+    "touch_count_rejection_count",
+    "range_atr_rejection_count",
     "boring_range_rejection_count",
+    "raw_candidate_pass_count",
 )
 
 
@@ -62,6 +67,8 @@ def _worker(row: dict, args_dict: dict) -> dict:
         start_ms = max(start_ms or 0, end_ms - int(args_dict["days_limit"]) * 86_400_000 + 60_000)
     raw_base = Path(args_dict["raw_output_dir"])
     event_base = Path(args_dict["event_output_dir"])
+    regime_base = Path(args_dict["regime_output_dir"])
+    actionable_base = Path(args_dict["actionable_output_dir"])
     layers = set(str(args_dict["output_layer"]).replace(",", " ").split())
     if "both" in layers:
         layers = {"raw", "event"}
@@ -73,19 +80,30 @@ def _worker(row: dict, args_dict: dict) -> dict:
     cfg = DetectionConfig(lookbacks=tuple(int(x) for x in args_dict["lookbacks"].split(",")))
     raw_parts = [detect_range_candidates(df, symbol, cfg, prof) for prof in resolve_profiles(args_dict["profile"])]
     raw = pl.concat([x for x in raw_parts if not x.is_empty()], how="diagonal_relaxed") if any(not x.is_empty() for x in raw_parts) else pl.DataFrame()
-    events = coalesce_range_events(raw, CoalesceConfig(cooldown_mode=args_dict["cooldown_mode"], cooldown_minutes=args_dict.get("cooldown_minutes"), range_cluster_bps=float(args_dict["range_cluster_bps"]))) if not raw.is_empty() else pl.DataFrame()
+    events = coalesce_range_events(raw, CoalesceConfig(cooldown_mode=args_dict["cooldown_mode"], cooldown_minutes=args_dict.get("cooldown_minutes"), range_cluster_bps=float(args_dict["range_cluster_bps"]))) if not raw.is_empty() and "event" in layers else pl.DataFrame()
+    regimes, actionable = build_actionable_events(raw, event_cfg=ActionableEventConfig(allow_reentry_events=bool(args_dict.get("allow_reentry_events")), max_events_per_regime=int(args_dict.get("max_events_per_regime") or 1))) if not raw.is_empty() and ("actionable" in layers or "range_regimes" in layers) else (pl.DataFrame(), pl.DataFrame())
     if "raw" in layers and not raw.is_empty():
         write_partitioned_candidates(raw, raw_base)
     if "event" in layers and not events.is_empty():
         write_partitioned_candidates(events, event_base)
+    if "range_regimes" in layers and not regimes.is_empty():
+        write_partitioned_candidates(regimes.rename({"first_seen_time_ms": "signal_time_ms"}), regime_base)
+    if "actionable" in layers and not actionable.is_empty():
+        write_partitioned_candidates(actionable, actionable_base)
+    total_positions = sum(max(0, df.height - int(lb) + 1) for lb in cfg.lookbacks)
     counters = {k: 0 for k in REJECTION_KEYS}
+    counters["total_window_positions"] = total_positions
     counters["insufficient_history_rejection_count"] = sum(max(0, int(lb) - df.height) for lb in cfg.lookbacks)
+    counters["range_height_rejection_count"] = max(0, total_positions - raw.height)
+    counters["raw_candidate_pass_count"] = raw.height
     return {
         "symbol": symbol,
         "skipped_existing_ok": False,
         "candles_scanned": df.height,
         "raw_candidate_rows": raw.height,
         "event_candidate_rows": events.height,
+        "range_regime_rows": regimes.height,
+        "actionable_event_rows": actionable.height,
         **counters,
     }
 
@@ -106,9 +124,12 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--manifest", default="data/processed/research_download_manifest.parquet")
     p.add_argument("--data-dir", default="data")
-    p.add_argument("--output-dir", default="data/processed/range_raw_candidates")
-    p.add_argument("--raw-output-dir", default="data/processed/range_raw_candidates")
-    p.add_argument("--event-output-dir", default="data/processed/range_event_candidates")
+    p.add_argument("--run-id", default="auto")
+    p.add_argument("--output-dir", default="")
+    p.add_argument("--raw-output-dir", default="")
+    p.add_argument("--event-output-dir", default="")
+    p.add_argument("--regime-output-dir", default="")
+    p.add_argument("--actionable-output-dir", default="")
     p.add_argument("--workers", type=int, default=default_workers())
     p.add_argument("--symbols-limit", type=int)
     p.add_argument("--days-limit", type=int)
@@ -117,19 +138,28 @@ def main() -> None:
     p.add_argument("--resume", action="store_true")
     p.add_argument("--skip-existing-ok", action="store_true")
     p.add_argument("--confirm-large-run", action="store_true")
-    p.add_argument("--profile", choices=["broad_diagnostic", "balanced_research", "strict_research", "all"], default="balanced_research")
-    p.add_argument("--output-layer", default="both")
+    p.add_argument("--profile", choices=["broad_diagnostic", "balanced_research", "strict_research", "actionable_research", "strict_actionable", "all"], default="actionable_research")
+    p.add_argument("--output-layer", default="actionable")
     p.add_argument("--coalesce-events", action="store_true", default=True)
     p.add_argument("--cooldown-mode", choices=["lookback_fraction", "fixed", "none"], default="lookback_fraction")
     p.add_argument("--cooldown-minutes", type=int)
-    p.add_argument("--range-cluster-bps", type=float, default=5.0)
+    p.add_argument("--range-cluster-bps", type=float, default=25.0)
+    p.add_argument("--allow-reentry-events", action="store_true")
+    p.add_argument("--min-minutes-outside-midzone-before-reentry", type=int, default=30)
+    p.add_argument("--max-events-per-regime", type=int, default=1)
     p.add_argument("--max-event-candidates-per-symbol-day", type=int, default=300)
     p.add_argument("--materialize-rejection-counters", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--lookbacks", default=",".join(str(x) for x in DEFAULT_LOOKBACKS))
     p.add_argument("--max-zero-volume-window-pct", type=float, default=0.05)
     p.add_argument("--debug-write-all-features", action="store_true")
     args = p.parse_args()
-    args.raw_output_dir = args.output_dir if args.output_dir != "data/processed/range_raw_candidates" else args.raw_output_dir
+    if args.run_id == "auto":
+        args.run_id = time.strftime("range_%Y%m%d_%H%M%S")
+    run_root = Path("data/processed/range_runs") / args.run_id
+    args.raw_output_dir = args.raw_output_dir or str(run_root / "raw_candidates")
+    args.event_output_dir = args.event_output_dir or str(run_root / "event_candidates")
+    args.regime_output_dir = args.regime_output_dir or str(run_root / "range_regimes")
+    args.actionable_output_dir = args.actionable_output_dir or str(run_root / "actionable_events")
     start = time.monotonic()
     manifest = load_manifest(Path(args.manifest))
     if "symbol" not in manifest.columns:
@@ -139,7 +169,7 @@ def main() -> None:
         work = work.head(args.symbols_limit)
     est_rows, est_source = estimate_rows(work, args.days_limit)
     profiles = ",".join(p.name for p in resolve_profiles(args.profile))
-    plan = {"symbols": work.height, "workers": args.workers, "estimated_kline_rows": est_rows, "estimated_source": est_source, "profiles": profiles, "lookbacks": args.lookbacks, "output_layer": args.output_layer}
+    plan = {"run_id": args.run_id, "symbols": work.height, "workers": args.workers, "estimated_kline_rows": est_rows, "estimated_source": est_source, "profiles": profiles, "lookbacks": args.lookbacks, "output_layer": args.output_layer}
     print("dry_run_plan " + " ".join(f"{k}={v}" for k, v in plan.items()))
     if args.dry_run_plan:
         return
@@ -148,7 +178,7 @@ def main() -> None:
     results = []
     rows = work.to_dicts()
     args_dict = vars(args)
-    for base in [Path(args.raw_output_dir), Path(args.event_output_dir)]:
+    for base in [Path(args.raw_output_dir), Path(args.event_output_dir), Path(args.regime_output_dir), Path(args.actionable_output_dir), run_root / "summary"]:
         base.mkdir(parents=True, exist_ok=True)
     if args.workers <= 1:
         for done, row in enumerate(rows, start=1):
@@ -157,7 +187,7 @@ def main() -> None:
             eta = ((time.monotonic() - start) / done) * (len(rows) - done) if done else 0
             print(
                 f"progress {done}/{len(rows)} symbol={res['symbol']} raw={res['raw_candidate_rows']} "
-                f"event={res['event_candidate_rows']} skipped_existing_ok={res.get('skipped_existing_ok')} eta_sec={eta:.1f}"
+                f"event={res['event_candidate_rows']} actionable={res.get('actionable_event_rows',0)} skipped_existing_ok={res.get('skipped_existing_ok')} eta_sec={eta:.1f}"
             )
     else:
         with ProcessPoolExecutor(max_workers=max(1, args.workers)) as ex:
@@ -168,17 +198,23 @@ def main() -> None:
                 eta = ((time.monotonic() - start) / done) * (len(rows) - done) if done else 0
                 print(
                     f"progress {done}/{len(rows)} symbol={res['symbol']} raw={res['raw_candidate_rows']} "
-                    f"event={res['event_candidate_rows']} skipped_existing_ok={res.get('skipped_existing_ok')} eta_sec={eta:.1f}"
+                    f"event={res['event_candidate_rows']} actionable={res.get('actionable_event_rows',0)} skipped_existing_ok={res.get('skipped_existing_ok')} eta_sec={eta:.1f}"
                 )
     runtime = time.monotonic() - start
     summary = pl.DataFrame(results)
-    Path("data/processed").mkdir(parents=True, exist_ok=True)
-    summary.write_parquet("data/processed/range_candidate_summary.parquet")
+    (run_root / "summary").mkdir(parents=True, exist_ok=True)
+    summary.write_parquet(run_root / "summary" / "range_candidate_summary.parquet")
+    summary.write_parquet(run_root / "summary" / "range_rejection_summary.parquet")
+    latest = Path("data/processed/range_runs/latest_run.txt")
+    latest.parent.mkdir(parents=True, exist_ok=True)
+    latest.write_text(args.run_id, encoding="utf-8")
     perf = {
         "symbols_processed": len(rows),
         "candles_scanned": int(summary["candles_scanned"].sum()) if summary.height else 0,
         "raw_candidate_rows_written": int(summary["raw_candidate_rows"].sum()) if summary.height else 0,
         "event_candidate_rows_written": int(summary["event_candidate_rows"].sum()) if summary.height else 0,
+        "range_regime_rows_written": int(summary["range_regime_rows"].sum()) if summary.height and "range_regime_rows" in summary.columns else 0,
+        "actionable_event_rows_written": int(summary["actionable_event_rows"].sum()) if summary.height and "actionable_event_rows" in summary.columns else 0,
         "runtime_seconds": runtime,
         "workers_used": args.workers,
         **{k: int(summary[k].sum()) if summary.height and k in summary.columns else 0 for k in REJECTION_KEYS},
@@ -187,8 +223,8 @@ def main() -> None:
     candles = perf["candles_scanned"]
     perf["candidates_per_10k_candles"] = perf["raw_candidate_rows_written"] / candles * 10_000 if candles else 0
     Path("reports").mkdir(exist_ok=True)
-    Path("reports/sprint_03_1_range_candidate_perf.json").write_text(json.dumps(perf, indent=2), encoding="utf-8")
-    Path("reports/sprint_03_range_candidate_perf.json").write_text(json.dumps(perf, indent=2), encoding="utf-8")
+    (run_root / "summary" / "range_candidate_perf.json").write_text(json.dumps(perf, indent=2), encoding="utf-8")
+    Path(f"reports/sprint_03_2_range_actionable_report_{args.run_id}.md").write_text("# Sprint 03.2 Range Actionable Report\n\n" + "\n".join(f"- {k}: {v}" for k, v in perf.items()) + "\n", encoding="utf-8")
     print("completed " + " ".join(f"{k}={v}" for k, v in perf.items()))
 
 

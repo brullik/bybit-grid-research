@@ -8,6 +8,7 @@ import polars as pl
 
 from bybit_grid.research.range_features import DEFAULT_LOOKBACKS, ONE_MINUTE_MS, stable_candidate_id
 from bybit_grid.research.range_profiles import RANGE_PROFILES, RangeProfile
+from bybit_grid.research.range_actionable_events import add_range_quality_score
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,8 @@ def detect_range_candidates(
                 continue
             if range_atr is not None and not (prof.range_height_atr_min <= range_atr <= prof.range_height_atr_max):
                 continue
+            if range_atr is not None and range_atr < prof.min_path_length_over_range:
+                continue
             rows.append(
                 {
                     "candidate_id": stable_candidate_id(f"{symbol}:{prof.name}", int(t[i]), lb),
@@ -201,4 +204,9 @@ def detect_range_candidates(
                     "launch_age_days_at_signal": None,
                 }
             )
-    return pl.DataFrame(rows)
+    out = pl.DataFrame(rows)
+    if not out.is_empty():
+        out = add_range_quality_score(out)
+        if prof.min_range_quality_score:
+            out = out.filter(pl.col("range_quality_score") >= prof.min_range_quality_score)
+    return out

@@ -42,8 +42,8 @@ def write_partitioned_candidates(df: pl.DataFrame, base_dir: Path) -> list[Path]
         if path.exists():
             part = (
                 pl.concat([pl.read_parquet(path), part], how="diagonal_relaxed")
-                .unique("range_event_id" if "range_event_id" in part.columns else "candidate_id", keep="last")
-                .sort(["signal_time_ms", "lookback_minutes"])
+                .unique("range_action_event_id" if "range_action_event_id" in part.columns else ("range_event_id" if "range_event_id" in part.columns else ("range_regime_id" if "range_regime_id" in part.columns else "candidate_id")), keep="last")
+                .sort([c for c in ["signal_time_ms", "lookback_minutes", "best_lookback_minutes"] if c in part.columns])
             )
         part.write_parquet(path)
         paths.append(path)
