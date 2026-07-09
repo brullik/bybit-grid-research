@@ -68,11 +68,14 @@ def detect_ranges_core_with_funnel(
 ) -> tuple[pl.DataFrame, dict[str, int]]:
     try:
         if core in {"numpy_fast", "numba_optional"}:
+            import numpy as np
+            if not hasattr(np, "__version__"):
+                raise ModuleNotFoundError("numpy")
             from bybit_grid.research.range_core.numpy_fast import detect_ranges
 
             return detect_ranges(arrays, symbol, profile, lookbacks)
     except ModuleNotFoundError as exc:
-        if exc.name != "numpy":
+        if exc.name not in {"numpy", None}:
             raise
     from bybit_grid.research.range_detector import DetectionConfig
     from bybit_grid.research.range_core.python_reference import detect_from_frame

@@ -66,3 +66,19 @@ def test_no_live_create_close_order_code_in_outcome_files():
     for path in list(Path('src/bybit_grid/research').glob('outcome*.py')) + list(Path('src/bybit_grid/research/outcome_core').glob('*.py')) + list(Path('scripts').glob('*outcome*.py')):
         txt=path.read_text().lower()
         assert 'create order' not in txt and 'close order' not in txt and 'telegram' not in txt
+
+def test_partition_write_dedupes_across_append(tmp_path: Path):
+    row=compute_event_outcomes(event(), klines([(105,106,104,105)]), pl.DataFrame(), pl.DataFrame(), [1], [5], [0.5])[0]
+    paths=write_partitioned_outcomes(pl.DataFrame([row]), tmp_path)
+    write_partitioned_outcomes(pl.DataFrame([row]), tmp_path)
+    assert pl.read_parquet(paths[0]).height == 1
+
+
+def test_funding_aggregation_recognizes_sprint02_columns_and_statuses():
+    f=pl.DataFrame({"funding_rate_timestamp_ms":[60_000,120_000],"funding_rate":[0.1,0.2]})
+    got=aggregate_funding(f, 0, 180_000)
+    assert got["funding_rows_in_horizon"] == 2
+    assert got["funding_source_status"] == "ok"
+    assert got["funding_rate_mean"] == 0.15000000000000002
+    assert aggregate_funding(pl.DataFrame(), 0, 1)["funding_source_status"] == "missing_file"
+    assert aggregate_funding(f, 180_000, 240_000)["funding_source_status"] == "no_overlap"

@@ -37,7 +37,7 @@ def scan_events(range_run_id: str) -> pl.DataFrame:
 
 
 def read_symbol_frame(base: Path, symbol: str) -> pl.DataFrame:
-    files = list(base.glob(f"**/{symbol}*.parquet")) + list(
+    files = list(base.glob(f"**/{symbol}*.parquet")) + list(base.glob(f"symbol={symbol}/**/*.parquet")) + list(
         base.glob(f"**/symbol={symbol}/**/*.parquet")
     )
     if not files:
@@ -60,6 +60,7 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--skip-existing-ok", action="store_true")
     ap.add_argument("--confirm-large-run", action="store_true")
+    ap.add_argument("--funding-debug", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
     events = scan_events(args.range_run_id)
