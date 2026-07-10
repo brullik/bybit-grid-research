@@ -19,6 +19,7 @@ def main() -> None:
         Path("data/processed/outcome_runs") / rid / "summary/outcome_quality_summary.parquet",
         Path("data/processed/outcome_runs") / rid / "summary/outcome_perf.json",
         Path("data/processed/outcome_runs") / rid / "summary/outcome_semantic_audit.json",
+        Path("data/processed/outcome_runs") / rid / "summary/outcome_grid_serialization_repair_report.json",
     ]
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for file in files:
