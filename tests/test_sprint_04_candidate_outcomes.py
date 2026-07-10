@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -82,3 +85,85 @@ def test_funding_aggregation_recognizes_sprint02_columns_and_statuses():
     assert got["funding_rate_mean"] == 0.15000000000000002
     assert aggregate_funding(pl.DataFrame(), 0, 1)["funding_source_status"] == "missing_file"
     assert aggregate_funding(f, 180_000, 240_000)["funding_source_status"] == "no_overlap"
+
+
+def test_funding_aggregation_empty_file_status():
+    got = aggregate_funding(pl.DataFrame({"unexpected": [1]}), 0, 1)
+    assert got["funding_source_status"] == "empty_file"
+
+
+def test_imported_numpy_is_not_project_root_shim():
+    project_root = Path.cwd().resolve()
+    numpy_file = Path(np.__file__).resolve()
+    assert not numpy_file.is_relative_to(project_root)
+    assert not (project_root / "numpy").exists()
+    assert not (project_root / "numpy.py").exists()
+
+
+def _write_minimal_review_pack(path: Path, perf: dict) -> None:
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("outcome_report.md", "# report\n")
+        z.writestr("outcome_quality_report.md", "# quality\n")
+        z.writestr("outcome_summary.parquet", b"placeholder")
+        z.writestr("outcome_quality_summary.parquet", b"placeholder")
+        z.writestr("outcome_perf.json", json.dumps(perf))
+
+
+def test_review_pack_checker_rejects_zero_rows_and_missing_funding_diagnostics(tmp_path: Path):
+    base_perf = {
+        "outcome_rows_total": 1,
+        "unique_outcome_id_count": 1,
+        "duplicate_range_action_event_horizon_grid_sl_rows": 0,
+        "funding_rows_total": 1,
+        "funding_files_found_count": 1,
+        "funding_symbols_with_files": ["BTCUSDT"],
+        "funding_rows_scanned_total": 1,
+        "funding_rows_joined_total": 1,
+        "funding_join_coverage_rate": 1.0,
+        "funding_missing_symbols": [],
+        "funding_source_status_counts": {"ok": 1},
+        "funding_zero_reason": "",
+    }
+    zero_pack = tmp_path / "zero.zip"
+    _write_minimal_review_pack(zero_pack, base_perf | {"outcome_rows_total": 0})
+    zero = subprocess.run(
+        [sys.executable, "scripts/check_outcome_review_pack.py", "--zip", str(zero_pack), "--outcome-run-id", "test"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert zero.returncode != 0
+    assert "outcome_rows_total" in zero.stderr
+
+    missing_pack = tmp_path / "missing.zip"
+    bad_perf = dict(base_perf)
+    bad_perf.pop("funding_rows_total")
+    _write_minimal_review_pack(missing_pack, bad_perf)
+    missing = subprocess.run(
+        [sys.executable, "scripts/check_outcome_review_pack.py", "--zip", str(missing_pack), "--outcome-run-id", "test"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing.returncode != 0
+    assert "missing funding diagnostics" in missing.stderr
+
+
+def test_report_candidate_outcomes_stdout_is_parseable_json(tmp_path: Path):
+    rid = "pytest_json_report"
+    root = Path("data/processed/outcome_runs") / rid
+    (root / "outcomes").mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(
+            [sys.executable, "scripts/report_candidate_outcomes.py", "--outcome-run-id", rid],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        parsed = json.loads(result.stdout)
+        assert parsed["outcome_rows_total"] == 0
+    finally:
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(Path("reports/outcome_runs") / rid, ignore_errors=True)

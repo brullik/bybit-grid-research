@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import polars as pl
 
 from bybit_grid.research.range_core.models import RangeInputArrays, empty_funnel
@@ -44,6 +46,22 @@ def arrays_from_frame(df: pl.DataFrame) -> RangeInputArrays:
     )
 
 
+def _import_real_numpy_for_fast_core():
+    try:
+        import numpy as np
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "numpy_fast requires real numpy. Install dependencies with: python -m pip install -e .[dev]"
+        ) from exc
+    project_root = Path(__file__).resolve().parents[4]
+    numpy_file = Path(getattr(np, "__file__", "")).resolve()
+    if not getattr(np, "__version__", None) or numpy_file.is_relative_to(project_root):
+        raise ModuleNotFoundError(
+            "numpy_fast requires real numpy. Install dependencies with: python -m pip install -e .[dev]"
+        )
+    return np
+
+
 def _frame_from_arrays(a: RangeInputArrays) -> pl.DataFrame:
     data = {
         "open_time_ms": list(a.open_time_ms),
@@ -66,17 +84,11 @@ def detect_ranges_core_with_funnel(
     *,
     core: str = "numpy_fast",
 ) -> tuple[pl.DataFrame, dict[str, int]]:
-    try:
-        if core in {"numpy_fast", "numba_optional"}:
-            import numpy as np
-            if not hasattr(np, "__version__"):
-                raise ModuleNotFoundError("numpy")
-            from bybit_grid.research.range_core.numpy_fast import detect_ranges
+    if core in {"numpy_fast", "numba_optional"}:
+        _import_real_numpy_for_fast_core()
+        from bybit_grid.research.range_core.numpy_fast import detect_ranges
 
-            return detect_ranges(arrays, symbol, profile, lookbacks)
-    except ModuleNotFoundError as exc:
-        if exc.name not in {"numpy", None}:
-            raise
+        return detect_ranges(arrays, symbol, profile, lookbacks)
     from bybit_grid.research.range_detector import DetectionConfig
     from bybit_grid.research.range_core.python_reference import detect_from_frame
 

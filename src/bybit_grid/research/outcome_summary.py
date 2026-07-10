@@ -49,5 +49,5 @@ def write_summary(root: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     summary.write_parquet(out / "outcome_summary.parquet")
     quality.write_parquet(out / "outcome_quality_summary.parquet")
-    (out / "outcome_perf.json").write_text(json.dumps(perf, indent=2, default=str) + "\n")
+    (out / "outcome_perf.json").write_text(json.dumps(perf, indent=2, ensure_ascii=False, default=str) + "\n")
     return perf

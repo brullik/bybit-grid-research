@@ -26,7 +26,7 @@ def main() -> None:
     (rep / "outcome_quality_report.md").write_text(
         "# Outcome Quality Report\n\n" + "\n".join(lines[2:]) + "\n"
     )
-    print(json.dumps(perf, indent=2, default=str))
+    print(json.dumps(perf, indent=2, ensure_ascii=False, default=str))
 
 
 if __name__ == "__main__":
