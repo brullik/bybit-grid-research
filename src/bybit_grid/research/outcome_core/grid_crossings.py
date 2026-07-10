@@ -5,12 +5,21 @@ import json
 import numpy as np
 
 
-def geometric_grid_levels(low: float, high: float, grid_count: int) -> np.ndarray:
-    if grid_count < 2:
-        raise ValueError("grid_count must be >= 2")
-    if low <= 0 or high <= 0 or high <= low:
-        return np.linspace(low, high, grid_count, dtype=float)
-    return np.geomspace(low, high, grid_count, dtype=float)
+def geometric_grid_levels(low: float, high: float, cell_number: int) -> np.ndarray:
+    """Return N+1 native-grid boundary levels for N geometric cells."""
+    if cell_number < 2:
+        raise ValueError("cell_number must be >= 2")
+    if low <= 0:
+        raise ValueError("low must be > 0 for geometric grid levels")
+    if high <= low:
+        raise ValueError("high must be greater than low for geometric grid levels")
+    ratio = (high / low) ** (1.0 / cell_number)
+    levels = low * np.power(ratio, np.arange(cell_number + 1, dtype=float))
+    levels[0] = low
+    levels[-1] = high
+    if levels.size != cell_number + 1 or not np.all(np.diff(levels) > 0):
+        raise ValueError("geometric grid levels must be strictly increasing")
+    return levels.astype(float)
 
 
 def levels_json(levels: np.ndarray) -> str:

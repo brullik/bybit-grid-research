@@ -20,8 +20,23 @@ from bybit_grid.research.outcome_core.sl_proxy import compute_sl_proxy
 MINUTE_MS = 60_000
 
 
-def deterministic_outcome_id(event_id: str, horizon: int, grid_count: int, sl_atr_buffer: float) -> str:
-    key = f"{event_id}|{horizon}|{grid_count}|{sl_atr_buffer:g}"
+OUTCOME_SEMANTICS_VERSION = "v4_native_grid_geometry"
+GRID_GEOMETRY_SEMANTICS_VERSION = "v1_n_cells_n_plus_1_levels"
+
+
+def outcome_match_key(event_id: str, horizon: int, grid_cell_number: int, sl_atr_buffer: float) -> str:
+    key = f"{event_id}|{horizon}|{grid_cell_number}|{sl_atr_buffer:g}"
+    return hashlib.sha256(key.encode()).hexdigest()[:24]
+
+
+def deterministic_outcome_id(
+    event_id: str,
+    horizon: int,
+    grid_cell_number: int,
+    sl_atr_buffer: float,
+    semantics_version: str = OUTCOME_SEMANTICS_VERSION,
+) -> str:
+    key = f"{semantics_version}|{event_id}|{horizon}|{grid_cell_number}|{sl_atr_buffer:g}"
     return hashlib.sha256(key.encode()).hexdigest()[:24]
 
 
@@ -85,12 +100,17 @@ def compute_event_outcomes(
             last = closes[0]
             mark_dev = float(np.max(np.abs(mc - last) / last * 100)) if last else 0.0
         for grid_count in grid_counts:
-            levels = geometric_grid_levels(range_low, range_high, grid_count)
+            grid_cell_number = int(grid_count)
+            levels = geometric_grid_levels(range_low, range_high, grid_cell_number)
+            internal_levels = levels[1:-1]
             grid_cross = count_level_crossings(closes, levels)
             intrabar_touches = count_intrabar_level_touches(lows, highs, levels)
             unique_touched = count_unique_intrabar_levels_touched(lows, highs, levels)
+            internal_grid_cross = count_level_crossings(closes, internal_levels)
+            internal_intrabar_touches = count_intrabar_level_touches(lows, highs, internal_levels)
             mid_cross = count_midline_crossings(closes, range_mid)
-            step_pct = float(np.mean(np.diff(levels) / levels[:-1] * 100)) if len(levels) > 1 and np.all(levels[:-1] != 0) else 0.0
+            interval_ratio = (range_high / range_low) ** (1.0 / grid_cell_number)
+            step_pct = float((interval_ratio - 1.0) * 100.0)
             for sl_buf in sl_atr_buffers:
                 sl = compute_sl_proxy(event, range_low, range_high, float(sl_buf))
                 lower_sl = sl.lower_sl_price if sl.lower_sl_price is not None else -math.inf
@@ -111,15 +131,16 @@ def compute_event_outcomes(
                         first_sl_side, first_sl_time = "lower", int(times[d])
                 min_cross = max(1, horizon // 240)
                 rows.append({
-                    "outcome_id": deterministic_outcome_id(str(_col(event,"range_action_event_id", _col(event,"range_event_id",""))), horizon, grid_count, float(sl_buf)),
-                    "range_action_event_id": str(_col(event,"range_action_event_id", _col(event,"range_event_id",""))), "range_regime_id": str(_col(event,"range_regime_id", "")), "symbol": symbol, "profile_name": profile_name, "outcome_semantics_version": "v3_atr_correct", "range_run_id": range_run_id, "outcome_run_id": outcome_run_id,
-                    "signal_time_ms": signal, "entry_time_ms": entry, "future_horizon_minutes": horizon, "grid_count": grid_count, "sl_atr_buffer": float(sl_buf),
+                    "outcome_id": deterministic_outcome_id(str(_col(event,"range_action_event_id", _col(event,"range_event_id",""))), horizon, grid_cell_number, float(sl_buf), OUTCOME_SEMANTICS_VERSION),
+                    "outcome_match_key": outcome_match_key(str(_col(event,"range_action_event_id", _col(event,"range_event_id",""))), horizon, grid_cell_number, float(sl_buf)),
+                    "range_action_event_id": str(_col(event,"range_action_event_id", _col(event,"range_event_id",""))), "range_regime_id": str(_col(event,"range_regime_id", "")), "symbol": symbol, "profile_name": profile_name, "outcome_semantics_version": OUTCOME_SEMANTICS_VERSION, "range_run_id": range_run_id, "outcome_run_id": outcome_run_id,
+                    "signal_time_ms": signal, "entry_time_ms": entry, "future_horizon_minutes": horizon, "grid_count": grid_cell_number, "grid_cell_number": grid_cell_number, "grid_price_level_count": grid_cell_number + 1, "grid_interval_count": grid_cell_number, "grid_interval_ratio": interval_ratio, "grid_interval_pct": step_pct, "grid_interval_bps": step_pct * 100, "grid_count_semantics": "native_bybit_cell_number", "grid_geometry_semantics_version": GRID_GEOMETRY_SEMANTICS_VERSION, "sl_atr_buffer": float(sl_buf),
                     **{k: _col(event,k,None) for k in ["best_lookback_minutes","lookbacks_observed","range_low","range_high","range_mid","range_height_pct","range_height_atr_14","range_quality_score","path_length_over_range","midline_crosses","min_touches_lower_zone","min_touches_upper_zone","fgrid_investment_min","min_investment_feasible_at_5usdt"]},
                     "future_rows_available": int(len(times)), "future_coverage_minutes": int(len(times)), "future_data_complete_bool": len(times) >= horizon, "future_missing_minutes_count": missing, "future_bad_ohlc_count": bad, "future_zero_volume_count": zero_vol,
-                    "first_exit_side": first_exit_side, "first_exit_ambiguous_bool": first_exit_ambiguous, "first_exit_time_ms": first_exit_time, "minutes_to_first_exit": None if first_exit_time is None else int((first_exit_time-entry)//MINUTE_MS), "time_inside_range_minutes": inside, "inside_range_ratio": inside_ratio,
+                    "first_exit_side": first_exit_side, "first_exit_ambiguous_bool": first_exit_ambiguous, "first_exit_time_ms": first_exit_time, "minutes_to_first_exit": None if first_exit_time is None else int((first_exit_time-entry)//MINUTE_MS), "time_inside_range_minutes": inside, "inside_range_candle_count": inside, "inside_range_ratio": inside_ratio,
                     "max_high_above_range_pct": float(max(0, (np.max(highs)-range_high)/range_high*100)) if highs.size and range_high else 0.0, "max_low_below_range_pct": float(max(0, (range_low-np.min(lows))/range_low*100)) if lows.size and range_low else 0.0, "max_close_distance_from_mid_pct": float(np.max(np.abs(closes-range_mid))/range_mid*100) if closes.size and range_mid else 0.0,
                     **sl.as_dict(), "first_sl_side": first_sl_side, "first_sl_ambiguous_bool": first_sl_ambiguous, "first_sl_time_ms": first_sl_time, "minutes_to_first_sl": None if first_sl_time is None else int((first_sl_time-entry)//MINUTE_MS), "sl_hit_bool": first_sl_side != "none",
-                    "geometric_grid_levels_json": levels_json(levels), "future_close_level_cross_count": grid_cross, "future_intrabar_level_touch_count": intrabar_touches, "future_unique_grid_levels_touched_count": unique_touched, "fill_activity_lower_bound_proxy": grid_cross, "fill_activity_upper_bound_proxy": intrabar_touches, "future_grid_level_cross_count": grid_cross, "future_midline_cross_count": mid_cross, "future_upper_zone_touch_count": int(np.sum(highs >= range_high)) if highs.size else 0, "future_lower_zone_touch_count": int(np.sum(lows <= range_low)) if lows.size else 0, "grid_crossings_per_hour": grid_cross / (horizon / 60), "grid_step_pct_mean": step_pct, "grid_step_bps_mean": step_pct * 100, "grid_step_fee_multiple_proxy": None, "grid_step_fee_multiple_proxy_deprecated_bool": True,
+                    "geometric_grid_levels_json": levels_json(levels), "future_close_level_cross_count": grid_cross, "future_intrabar_level_touch_count": intrabar_touches, "future_unique_grid_levels_touched_count": unique_touched, "future_internal_level_close_cross_count": internal_grid_cross, "future_internal_level_intrabar_touch_count": internal_intrabar_touches, "fill_activity_lower_bound_proxy": grid_cross, "fill_activity_upper_bound_proxy": intrabar_touches, "future_grid_level_cross_count": grid_cross, "future_midline_cross_count": mid_cross, "future_upper_zone_touch_count": int(np.sum(highs >= range_high)) if highs.size else 0, "future_lower_zone_touch_count": int(np.sum(lows <= range_low)) if lows.size else 0, "grid_crossings_per_hour": grid_cross / (horizon / 60), "grid_step_pct_mean": step_pct, "grid_step_bps_mean": step_pct * 100, "grid_step_fee_multiple_proxy": None, "grid_step_fee_multiple_proxy_deprecated_bool": True,
                     **fund, "mark_price_future_rows_available": mark_rows.height, "mark_price_max_deviation_from_last_pct": mark_dev,
                     "label_stayed_in_range_until_horizon": first_exit_side == "none", "label_sl_hit_before_horizon": first_sl_side != "none", "label_good_chop_proxy": inside_ratio >= 0.70 and grid_cross >= min_cross, "label_low_activity_proxy": grid_cross < min_cross, "label_high_breakout_risk_proxy": first_sl_side != "none" or inside_ratio < 0.40,
                 })
