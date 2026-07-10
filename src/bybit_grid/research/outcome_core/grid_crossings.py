@@ -33,3 +33,21 @@ def count_level_crossings(closes: np.ndarray, levels: np.ndarray) -> int:
 
 def count_midline_crossings(closes: np.ndarray, mid: float) -> int:
     return count_level_crossings(closes, np.array([mid], dtype=float))
+
+
+def count_intrabar_level_touches(lows: np.ndarray, highs: np.ndarray, levels: np.ndarray) -> int:
+    if lows.size == 0 or highs.size == 0 or levels.size == 0:
+        return 0
+    count = 0
+    for lo, hi in zip(lows, highs, strict=False):
+        count += int(np.sum((levels >= lo) & (levels <= hi)))
+    return count
+
+
+def count_unique_intrabar_levels_touched(lows: np.ndarray, highs: np.ndarray, levels: np.ndarray) -> int:
+    if lows.size == 0 or highs.size == 0 or levels.size == 0:
+        return 0
+    touched = np.zeros(levels.shape, dtype=bool)
+    for lo, hi in zip(lows, highs, strict=False):
+        touched |= (levels >= lo) & (levels <= hi)
+    return int(np.sum(touched))

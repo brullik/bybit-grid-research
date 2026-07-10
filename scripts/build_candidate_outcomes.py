@@ -93,7 +93,7 @@ def main() -> None:
         funding = read_symbol_frame(Path("data/raw/funding"), sym)
         result = []
         for ev in evs:
-            result.extend(compute_event_outcomes(ev, klines, marks, funding, horizons, grids, sls))
+            result.extend(compute_event_outcomes(ev, klines, marks, funding, horizons, grids, sls, range_run_id=args.range_run_id, outcome_run_id=args.outcome_run_id))
         return result
 
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
