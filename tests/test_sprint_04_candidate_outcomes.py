@@ -12,7 +12,9 @@ import polars as pl
 from bybit_grid.research.outcome_core.funding_join import aggregate_funding
 from bybit_grid.research.outcome_core.grid_crossings import count_level_crossings, geometric_grid_levels
 from bybit_grid.research.outcome_core.outcome_numpy import compute_event_outcomes, deterministic_outcome_id
+from bybit_grid.research.outcome_core.sl_proxy import compute_sl_proxy
 from bybit_grid.research.outcome_store import write_partitioned_outcomes
+from bybit_grid.research.outcome_summary import build_summaries
 from bybit_grid.research.range_core.adapter import numpy_is_project_shadow
 
 
@@ -176,3 +178,72 @@ def test_report_candidate_outcomes_stdout_is_parseable_json(tmp_path: Path):
 
         shutil.rmtree(root, ignore_errors=True)
         shutil.rmtree(Path("reports/outcome_runs") / rid, ignore_errors=True)
+
+
+
+def test_v3_atr_unit_derivation_and_half_atr_boundary():
+    sl = compute_sl_proxy({"range_height_atr_14": 4.0}, 100.0, 108.0, 0.5)
+    assert sl.sl_proxy_valid_bool
+    assert sl.atr_14_abs_used == 2.0
+    assert sl.lower_sl_price == 99.0
+    assert sl.upper_sl_price == 109.0
+    assert sl.sl_distance_lower_abs == 1.0
+
+
+def test_v3_direct_atr_preferred_with_mismatch_reason():
+    sl = compute_sl_proxy({"atr_14": 3.0, "range_height_atr_14": 4.0}, 100.0, 108.0, 1.0)
+    assert sl.atr_value_source == "direct_event_atr_14"
+    assert sl.atr_14_abs_used == 3.0
+    assert sl.sl_proxy_invalid_reason == "direct_derived_atr_mismatch"
+
+
+def test_v3_invalid_zero_atr_rejected():
+    sl = compute_sl_proxy({"range_height_atr_14": 0.0}, 100.0, 108.0, 1.0)
+    assert not sl.sl_proxy_valid_bool
+    assert sl.atr_value_source == "missing_or_invalid"
+
+
+def test_v3_range_height_atr_ratio_not_treated_as_percent():
+    row = compute_event_outcomes(event(), klines([(105, 111, 99, 105)]), pl.DataFrame(), pl.DataFrame(), [1], [5], [0.5])[0]
+    # range height is 10 and ratio is 1 => ATR is 10, so 0.5 ATR distance is 5 dollars, not 0.5%.
+    assert row["sl_distance_lower_abs"] == 5.0
+    assert row["lower_sl_price"] == 95.0
+
+
+def test_v3_same_candle_exit_and_sl_ambiguity():
+    row = compute_event_outcomes(event(), klines([(105, 116, 94, 105)]), pl.DataFrame(), pl.DataFrame(), [1], [5], [0.5])[0]
+    assert row["first_exit_side"] == "ambiguous_both"
+    assert row["first_exit_ambiguous_bool"] is True
+    assert row["first_sl_side"] == "ambiguous_both"
+    assert row["first_sl_ambiguous_bool"] is True
+
+
+def test_v3_activity_proxies():
+    row = compute_event_outcomes(event(), klines([(105, 109, 101, 106), (106, 109, 101, 104)]), pl.DataFrame(), pl.DataFrame(), [2], [5], [0])[0]
+    assert row["future_close_level_cross_count"] >= 1
+    assert row["future_grid_level_cross_count"] == row["future_close_level_cross_count"]
+    assert row["future_intrabar_level_touch_count"] >= row["future_close_level_cross_count"]
+    assert row["future_unique_grid_levels_touched_count"] > 0
+    assert row["fill_activity_lower_bound_proxy"] == row["future_close_level_cross_count"]
+    assert row["fill_activity_upper_bound_proxy"] == row["future_intrabar_level_touch_count"]
+
+
+def test_v3_summary_grains_not_multiplied(tmp_path: Path):
+    rows = []
+    for grid in [5, 10, 20]:
+        for sl in [0.0, 0.5, 1.0]:
+            r = compute_event_outcomes(event(), klines([(105, 106, 104, 105)]), pl.DataFrame(), pl.DataFrame({"funding_time_ms": [1], "funding_rate": [0.1]}), [1], [grid], [sl])[0]
+            r["funding_rows_in_horizon"] = 1
+            r["funding_source_status"] = "ok"
+            rows.append(r)
+    root = tmp_path / "run"
+    write_partitioned_outcomes(pl.DataFrame(rows), root / "outcomes")
+    _, _, perf = build_summaries(root)
+    assert perf["unique_event_horizon_rows"] == 1
+    assert perf["funding_joined_unique_event_horizon"] == 1
+    assert len(perf["sl_probe_summary"]) == 3
+
+
+def test_v3_no_hardcoded_fee_divisor_in_outcome_core():
+    for path in Path("src/bybit_grid/research/outcome_core").glob("*.py"):
+        assert "0.055" not in path.read_text()
