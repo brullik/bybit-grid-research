@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import polars as pl
 from bybit_grid.research.outcome_store import read_outcomes
+from bybit_grid.research.outcome_core.grid_crossings import GRID_LEVELS_SERIALIZATION_VERSION
 
 OUTCOME_SEMANTICS_VERSION = "v4_native_grid_geometry"
 GRID_GEOMETRY_SEMANTICS_VERSION = "v1_n_cells_n_plus_1_levels"
@@ -48,6 +49,7 @@ def main() -> None:
         "grid_interval_bps", "grid_count_semantics", "sl_atr_buffer", "atr_14_abs_used",
         "sl_proxy_valid_bool", "first_exit_side", "first_exit_ambiguous_bool", "first_sl_side",
         "first_sl_ambiguous_bool", "geometric_grid_levels_json", "range_low", "range_high",
+        "grid_levels_serialization_version",
     }
     missing = sorted(required - cols)
     if missing:
@@ -68,23 +70,40 @@ def main() -> None:
         checks["grid_count_rows_failed"] = bad_counts
         if bad_counts:
             fail(failures, "grid count/level semantics invalid")
-        for r in df.select(["geometric_grid_levels_json", "grid_cell_number", "range_low", "range_high", "grid_interval_ratio", "grid_interval_pct", "grid_interval_bps"]).iter_rows(named=True):
-            levels = json.loads(r["geometric_grid_levels_json"])
+        if set(df["grid_levels_serialization_version"].unique().to_list()) != {GRID_LEVELS_SERIALIZATION_VERSION}:
+            fail(failures, "grid_levels_serialization_version invalid")
+        geometry_failure = None
+        for r in df.select(["symbol", "outcome_id", "geometric_grid_levels_json", "grid_cell_number", "range_low", "range_high", "grid_interval_ratio", "grid_interval_pct", "grid_interval_bps"]).iter_rows(named=True):
+            levels = [float(x) for x in json.loads(r["geometric_grid_levels_json"])]
             n = int(r["grid_cell_number"])
             low = float(r["range_low"])
             high = float(r["range_high"])
             ratio = (high / low) ** (1.0 / n)
-            if len(levels) != n + 1 or not math.isclose(levels[0], low, rel_tol=1e-9, abs_tol=1e-8) or not math.isclose(levels[-1], high, rel_tol=1e-9, abs_tol=1e-8):
+            base_detail = {"symbol": r.get("symbol"), "outcome_id": r.get("outcome_id"), "range_low": low, "range_high": high, "grid_cell_number": n, "expected_ratio": ratio}
+            if len(levels) != n + 1 or not math.isclose(levels[0], low, rel_tol=0.0, abs_tol=max(1e-15, abs(low) * 1e-14)) or not math.isclose(levels[-1], high, rel_tol=0.0, abs_tol=max(1e-15, abs(high) * 1e-14)):
+                geometry_failure = base_detail | {"reason": "grid levels length/endpoints invalid"}
                 fail(failures, "grid levels length/endpoints invalid")
                 break
-            adj = [levels[i+1] / levels[i] for i in range(n)]
-            if any(not math.isclose(x, ratio, rel_tol=1e-8, abs_tol=1e-8) for x in adj):
+            if any(not math.isfinite(x) or x <= 0 for x in levels) or any(levels[i + 1] <= levels[i] for i in range(n)):
+                geometry_failure = base_detail | {"reason": "grid levels not strictly monotonic"}
+                fail(failures, "grid levels not strictly monotonic")
+                break
+            expected_log_ratio = math.log(high / low) / n
+            actual_log_ratios = [math.log(levels[i + 1] / levels[i]) for i in range(n)]
+            log_errors = [abs(x - expected_log_ratio) for x in actual_log_ratios]
+            max_abs_error = max(log_errors) if log_errors else 0.0
+            max_rel_error = max_abs_error / abs(expected_log_ratio) if expected_log_ratio else max_abs_error
+            if max_abs_error > 1e-12 and max_rel_error > 1e-10:
+                geometry_failure = base_detail | {"reason": "adjacent grid ratio is not constant", "max_adjacent_ratio_abs_error": max_abs_error, "max_adjacent_ratio_rel_error": max_rel_error}
                 fail(failures, "adjacent grid ratio is not constant")
                 break
             pct = (ratio - 1.0) * 100.0
             if not (math.isclose(float(r["grid_interval_ratio"]), ratio, rel_tol=1e-10) and math.isclose(float(r["grid_interval_pct"]), pct, rel_tol=1e-10) and math.isclose(float(r["grid_interval_bps"]), pct * 100, rel_tol=1e-10)):
+                geometry_failure = base_detail | {"reason": "stored interval ratio/pct/bps mismatch"}
                 fail(failures, "stored interval ratio/pct/bps mismatch")
                 break
+        if geometry_failure:
+            checks["first_geometry_failure"] = geometry_failure
         valid = df.filter(pl.col("sl_proxy_valid_bool"))
         bad_atr = valid.filter((~pl.col("atr_14_abs_used").is_finite()) | (pl.col("atr_14_abs_used") <= 0)).height
         if bad_atr:

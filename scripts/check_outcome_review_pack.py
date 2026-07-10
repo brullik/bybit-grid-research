@@ -12,6 +12,7 @@ ALLOW = {
     "outcome_perf.json",
     "outcome_semantic_audit.md",
     "outcome_semantic_audit.json",
+    "outcome_grid_serialization_repair_report.json",
 }
 
 
@@ -30,6 +31,11 @@ def main() -> None:
             raise SystemExit(f"bad={bad} missing={missing} forbidden={forbidden}")
         perf = json.loads(z.read("outcome_perf.json").decode("utf-8"))
         audit = json.loads(z.read("outcome_semantic_audit.json").decode("utf-8"))
+        repair = json.loads(z.read("outcome_grid_serialization_repair_report.json").decode("utf-8"))
+    if repair.get("non_grid_drift_count") != 0:
+        raise SystemExit("repair non-grid drift detected")
+    if repair.get("semantic_audit_ok") is not True:
+        raise SystemExit("repair report semantic_audit_ok is not true")
     if audit.get("semantic_audit_ok") is not True:
         raise SystemExit("semantic audit failed or absent")
     if audit.get("outcome_semantics_version") != "v4_native_grid_geometry":

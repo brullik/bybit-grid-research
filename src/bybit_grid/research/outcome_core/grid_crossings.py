@@ -4,6 +4,8 @@ import json
 
 import numpy as np
 
+GRID_LEVELS_SERIALIZATION_VERSION = "float64_roundtrip_v1"
+
 
 def geometric_grid_levels(low: float, high: float, cell_number: int) -> np.ndarray:
     """Return N+1 native-grid boundary levels for N geometric cells."""
@@ -23,7 +25,8 @@ def geometric_grid_levels(low: float, high: float, cell_number: int) -> np.ndarr
 
 
 def levels_json(levels: np.ndarray) -> str:
-    return json.dumps([round(float(x), 10) for x in levels.tolist()], separators=(",", ":"))
+    values = [float(x) for x in levels]
+    return json.dumps(values, separators=(",", ":"), allow_nan=False)
 
 
 def count_level_crossings(closes: np.ndarray, levels: np.ndarray) -> int:
