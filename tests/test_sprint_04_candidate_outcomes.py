@@ -13,6 +13,7 @@ from bybit_grid.research.outcome_core.funding_join import aggregate_funding
 from bybit_grid.research.outcome_core.grid_crossings import count_level_crossings, geometric_grid_levels
 from bybit_grid.research.outcome_core.outcome_numpy import compute_event_outcomes, deterministic_outcome_id
 from bybit_grid.research.outcome_store import write_partitioned_outcomes
+from bybit_grid.research.range_core.adapter import numpy_is_project_shadow
 
 
 def event():
@@ -95,9 +96,17 @@ def test_funding_aggregation_empty_file_status():
 def test_imported_numpy_is_not_project_root_shim():
     project_root = Path.cwd().resolve()
     numpy_file = Path(np.__file__).resolve()
-    assert not numpy_file.is_relative_to(project_root)
+    assert not numpy_is_project_shadow(numpy_file, project_root)
     assert not (project_root / "numpy").exists()
     assert not (project_root / "numpy.py").exists()
+
+
+def test_numpy_shadow_detection_allows_project_venv_site_packages():
+    project_root = Path.cwd().resolve()
+    venv_numpy = project_root / ".venv" / "Lib" / "site-packages" / "numpy" / "__init__.py"
+    assert not numpy_is_project_shadow(venv_numpy, project_root)
+    assert numpy_is_project_shadow(project_root / "numpy" / "__init__.py", project_root)
+    assert numpy_is_project_shadow(project_root / "numpy.py", project_root)
 
 
 def _write_minimal_review_pack(path: Path, perf: dict) -> None:

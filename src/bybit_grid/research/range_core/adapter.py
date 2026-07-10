@@ -46,6 +46,13 @@ def arrays_from_frame(df: pl.DataFrame) -> RangeInputArrays:
     )
 
 
+def numpy_is_project_shadow(numpy_file: Path, project_root: Path) -> bool:
+    project_numpy_dir = (project_root / "numpy").resolve()
+    project_numpy_file = (project_root / "numpy.py").resolve()
+    numpy_file = numpy_file.resolve()
+    return numpy_file == project_numpy_file or numpy_file.is_relative_to(project_numpy_dir)
+
+
 def _import_real_numpy_for_fast_core():
     try:
         import numpy as np
@@ -55,7 +62,7 @@ def _import_real_numpy_for_fast_core():
         ) from exc
     project_root = Path(__file__).resolve().parents[4]
     numpy_file = Path(getattr(np, "__file__", "")).resolve()
-    if not getattr(np, "__version__", None) or numpy_file.is_relative_to(project_root):
+    if not getattr(np, "__version__", None) or numpy_is_project_shadow(numpy_file, project_root):
         raise ModuleNotFoundError(
             "numpy_fast requires real numpy. Install dependencies with: python -m pip install -e .[dev]"
         )
