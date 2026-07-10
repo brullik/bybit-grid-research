@@ -22,8 +22,10 @@ def main() -> None:
         names = set(z.namelist())
         bad = names - ALLOW
         missing = ALLOW - names
-        if bad or missing or any("outcomes.parquet" in n for n in names):
-            raise SystemExit(f"bad={bad} missing={missing}")
+        forbidden_fragments = ("outcomes.parquet", "data/raw", ".env", "__pycache__", ".pytest_cache", ".ruff_cache")
+        forbidden = [n for n in names if any(fragment in n for fragment in forbidden_fragments)]
+        if bad or missing or forbidden:
+            raise SystemExit(f"bad={bad} missing={missing} forbidden={forbidden}")
         perf = json.loads(z.read("outcome_perf.json").decode("utf-8"))
     if perf.get("outcome_rows_total", 0) <= 0:
         raise SystemExit("outcome_rows_total must be > 0")
@@ -31,7 +33,17 @@ def main() -> None:
         raise SystemExit("duplicate outcome_id rows detected")
     if perf.get("duplicate_range_action_event_horizon_grid_sl_rows") != 0:
         raise SystemExit("duplicate composite outcome rows detected")
-    required = ["funding_files_found_count", "funding_rows_joined_total", "funding_source_status_counts"]
+    required = [
+        "funding_rows_total",
+        "funding_files_found_count",
+        "funding_symbols_with_files",
+        "funding_rows_scanned_total",
+        "funding_rows_joined_total",
+        "funding_join_coverage_rate",
+        "funding_missing_symbols",
+        "funding_source_status_counts",
+        "funding_zero_reason",
+    ]
     missing_diag = [k for k in required if k not in perf]
     if missing_diag:
         raise SystemExit(f"missing funding diagnostics: {missing_diag}")
