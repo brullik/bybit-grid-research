@@ -10,6 +10,8 @@ ALLOW = {
     "outcome_summary.parquet",
     "outcome_quality_summary.parquet",
     "outcome_perf.json",
+    "outcome_semantic_audit.md",
+    "outcome_semantic_audit.json",
 }
 
 
@@ -27,6 +29,14 @@ def main() -> None:
         if bad or missing or forbidden:
             raise SystemExit(f"bad={bad} missing={missing} forbidden={forbidden}")
         perf = json.loads(z.read("outcome_perf.json").decode("utf-8"))
+        audit = json.loads(z.read("outcome_semantic_audit.json").decode("utf-8"))
+    if audit.get("semantic_audit_ok") is not True:
+        raise SystemExit("semantic audit failed or absent")
+    if audit.get("outcome_semantics_version") != "v4_native_grid_geometry":
+        raise SystemExit("outcome semantics version is not v4")
+    checks = audit.get("checks", {})
+    if checks.get("grid_count_rows_failed", 0) != 0:
+        raise SystemExit("grid geometry checks failed")
     if perf.get("outcome_rows_total", 0) <= 0:
         raise SystemExit("outcome_rows_total must be > 0")
     if perf.get("unique_outcome_id_count") != perf.get("outcome_rows_total"):

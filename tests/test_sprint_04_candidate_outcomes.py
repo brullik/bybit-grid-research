@@ -11,7 +11,7 @@ import polars as pl
 
 from bybit_grid.research.outcome_core.funding_join import aggregate_funding
 from bybit_grid.research.outcome_core.grid_crossings import count_level_crossings, geometric_grid_levels
-from bybit_grid.research.outcome_core.outcome_numpy import compute_event_outcomes, deterministic_outcome_id
+from bybit_grid.research.outcome_core.outcome_numpy import compute_event_outcomes, deterministic_outcome_id, outcome_match_key
 from bybit_grid.research.outcome_core.sl_proxy import compute_sl_proxy
 from bybit_grid.research.outcome_store import write_partitioned_outcomes
 from bybit_grid.research.outcome_summary import build_summaries
@@ -63,10 +63,10 @@ def test_partition_write_and_dedupe(tmp_path: Path):
 def test_review_pack_allowlist(tmp_path: Path):
     p=tmp_path/'pack.zip'
     with zipfile.ZipFile(p,'w') as z:
-        for n in ['outcome_report.md','outcome_quality_report.md','outcome_summary.parquet','outcome_quality_summary.parquet','outcome_perf.json']:
+        for n in ['outcome_report.md','outcome_quality_report.md','outcome_semantic_audit.md','outcome_summary.parquet','outcome_quality_summary.parquet','outcome_perf.json','outcome_semantic_audit.json']:
             z.writestr(n, 'x')
     with zipfile.ZipFile(p) as z:
-        assert set(z.namelist()) == {'outcome_report.md','outcome_quality_report.md','outcome_summary.parquet','outcome_quality_summary.parquet','outcome_perf.json'}
+        assert set(z.namelist()) == {'outcome_report.md','outcome_quality_report.md','outcome_semantic_audit.md','outcome_summary.parquet','outcome_quality_summary.parquet','outcome_perf.json','outcome_semantic_audit.json'}
 
 def test_no_live_create_close_order_code_in_outcome_files():
     for path in list(Path('src/bybit_grid/research').glob('outcome*.py')) + list(Path('src/bybit_grid/research/outcome_core').glob('*.py')) + list(Path('scripts').glob('*outcome*.py')):
@@ -118,6 +118,8 @@ def _write_minimal_review_pack(path: Path, perf: dict) -> None:
         z.writestr("outcome_summary.parquet", b"placeholder")
         z.writestr("outcome_quality_summary.parquet", b"placeholder")
         z.writestr("outcome_perf.json", json.dumps(perf))
+        z.writestr("outcome_semantic_audit.md", "# audit\n")
+        z.writestr("outcome_semantic_audit.json", json.dumps({"semantic_audit_ok": True, "outcome_semantics_version": "v4_native_grid_geometry", "checks": {"grid_count_rows_failed": 0}}))
 
 
 def test_review_pack_checker_rejects_zero_rows_and_missing_funding_diagnostics(tmp_path: Path):
@@ -247,3 +249,40 @@ def test_v3_summary_grains_not_multiplied(tmp_path: Path):
 def test_v3_no_hardcoded_fee_divisor_in_outcome_core():
     for path in Path("src/bybit_grid/research/outcome_core").glob("*.py"):
         assert "0.055" not in path.read_text()
+
+
+def test_native_geometric_grid_levels_contract():
+    levels = geometric_grid_levels(10_000, 30_000, 5)
+    assert len(levels) == 6
+    assert levels[0] == 10_000
+    assert levels[-1] == 30_000
+    assert np.all(np.diff(levels) > 0)
+    assert np.allclose(levels[1:] / levels[:-1], (3.0) ** (1 / 5))
+
+
+def test_native_geometric_grid_invalid_bounds_raise():
+    import pytest
+
+    for args in [(0, 10, 5), (10, 10, 5), (10, 9, 5), (10, 20, 1)]:
+        with pytest.raises(ValueError):
+            geometric_grid_levels(*args)
+
+
+def test_v4_grid_semantic_fields_and_activity_use_n_plus_1_levels():
+    row = compute_event_outcomes(event(), klines([(100, 110, 100, 110)]), pl.DataFrame(), pl.DataFrame(), [1], [5], [0.0])[0]
+    levels = json.loads(row["geometric_grid_levels_json"])
+    assert row["outcome_semantics_version"] == "v4_native_grid_geometry"
+    assert row["grid_cell_number"] == 5
+    assert row["grid_price_level_count"] == 6
+    assert row["grid_interval_count"] == 5
+    assert len(levels) == 6
+    assert row["grid_interval_pct"] == ((110 / 100) ** (1 / 5) - 1) * 100
+    assert row["future_intrabar_level_touch_count"] == 6
+    assert row["future_internal_level_intrabar_touch_count"] == 4
+
+
+def test_v4_ids_versioned_and_match_key_stable():
+    v3 = deterministic_outcome_id("a", 60, 10, 0.5, "v3_atr_correct")
+    v4 = deterministic_outcome_id("a", 60, 10, 0.5, "v4_native_grid_geometry")
+    assert v3 != v4
+    assert outcome_match_key("a", 60, 10, 0.5) == outcome_match_key("a", 60, 10, 0.5)

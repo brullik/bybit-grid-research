@@ -10,9 +10,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import polars as pl
 from bybit_grid.research.outcome_store import read_outcomes
 
+OUTCOME_SEMANTICS_VERSION = "v4_native_grid_geometry"
+GRID_GEOMETRY_SEMANTICS_VERSION = "v1_n_cells_n_plus_1_levels"
 
-def fail(msgs, msg):
-    msgs.append(msg)
+
+def fail(msgs: list[str], msg: str) -> None:
+    if msg not in msgs:
+        msgs.append(msg)
+
+
+def write_artifacts(run_id: str, result: dict) -> None:
+    summary_dir = Path("data/processed/outcome_runs") / run_id / "summary"
+    report_dir = Path("reports/outcome_runs") / run_id
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (summary_dir / "outcome_semantic_audit.json").write_text(json.dumps(result, indent=2, default=str) + "\n")
+    lines = ["# Outcome Semantic Audit", "", f"- outcome_run_id: `{run_id}`", f"- semantic_audit_ok: `{result['semantic_audit_ok']}`", f"- rows_checked: `{result['rows_checked']}`", "", "## Failures"]
+    lines += [f"- {x}" for x in result["failures"]] or ["- none"]
+    (report_dir / "outcome_semantic_audit.md").write_text("\n".join(lines) + "\n")
 
 
 def main() -> None:
@@ -22,22 +37,60 @@ def main() -> None:
     root = Path("data/processed/outcome_runs") / args.outcome_run_id
     df = read_outcomes(root)
     failures: list[str] = []
+    checks: dict[str, object] = {}
     if df.is_empty():
         fail(failures, "no outcome rows")
     cols = set(df.columns)
-    required = {"outcome_id","range_action_event_id","future_horizon_minutes","grid_count","sl_atr_buffer","atr_14_abs_used","sl_proxy_valid_bool","first_exit_side","first_exit_ambiguous_bool","first_sl_side","first_sl_ambiguous_bool"}
+    required = {
+        "outcome_id", "outcome_match_key", "outcome_semantics_version", "grid_geometry_semantics_version",
+        "range_action_event_id", "future_horizon_minutes", "grid_count", "grid_cell_number",
+        "grid_price_level_count", "grid_interval_count", "grid_interval_ratio", "grid_interval_pct",
+        "grid_interval_bps", "grid_count_semantics", "sl_atr_buffer", "atr_14_abs_used",
+        "sl_proxy_valid_bool", "first_exit_side", "first_exit_ambiguous_bool", "first_sl_side",
+        "first_sl_ambiguous_bool", "geometric_grid_levels_json", "range_low", "range_high",
+    }
     missing = sorted(required - cols)
     if missing:
         fail(failures, "missing columns: " + ",".join(missing))
     if not failures:
-        dup_composite = df.height - df.select(["range_action_event_id","future_horizon_minutes","grid_count","sl_atr_buffer"]).unique().height
+        checks["outcome_semantics_version"] = df["outcome_semantics_version"].unique().to_list()
+        if set(checks["outcome_semantics_version"]) != {OUTCOME_SEMANTICS_VERSION}:
+            fail(failures, "outcome_semantics_version is not v4_native_grid_geometry")
+        if set(df["grid_geometry_semantics_version"].unique().to_list()) != {GRID_GEOMETRY_SEMANTICS_VERSION}:
+            fail(failures, "grid_geometry_semantics_version invalid")
+        dup_composite = df.height - df.select(["range_action_event_id", "future_horizon_minutes", "grid_count", "sl_atr_buffer"]).unique().height
+        checks["duplicate_composite_rows"] = dup_composite
         if df["outcome_id"].n_unique() != df.height:
             fail(failures, "outcome_id is not unique")
         if dup_composite != 0:
             fail(failures, f"composite duplicates={dup_composite}")
+        bad_counts = df.filter((pl.col("grid_price_level_count") != pl.col("grid_cell_number") + 1) | (pl.col("grid_interval_count") != pl.col("grid_cell_number")) | (pl.col("grid_count") != pl.col("grid_cell_number"))).height
+        checks["grid_count_rows_failed"] = bad_counts
+        if bad_counts:
+            fail(failures, "grid count/level semantics invalid")
+        for r in df.select(["geometric_grid_levels_json", "grid_cell_number", "range_low", "range_high", "grid_interval_ratio", "grid_interval_pct", "grid_interval_bps"]).iter_rows(named=True):
+            levels = json.loads(r["geometric_grid_levels_json"])
+            n = int(r["grid_cell_number"])
+            low = float(r["range_low"])
+            high = float(r["range_high"])
+            ratio = (high / low) ** (1.0 / n)
+            if len(levels) != n + 1 or not math.isclose(levels[0], low, rel_tol=1e-9, abs_tol=1e-8) or not math.isclose(levels[-1], high, rel_tol=1e-9, abs_tol=1e-8):
+                fail(failures, "grid levels length/endpoints invalid")
+                break
+            adj = [levels[i+1] / levels[i] for i in range(n)]
+            if any(not math.isclose(x, ratio, rel_tol=1e-8, abs_tol=1e-8) for x in adj):
+                fail(failures, "adjacent grid ratio is not constant")
+                break
+            pct = (ratio - 1.0) * 100.0
+            if not (math.isclose(float(r["grid_interval_ratio"]), ratio, rel_tol=1e-10) and math.isclose(float(r["grid_interval_pct"]), pct, rel_tol=1e-10) and math.isclose(float(r["grid_interval_bps"]), pct * 100, rel_tol=1e-10)):
+                fail(failures, "stored interval ratio/pct/bps mismatch")
+                break
         valid = df.filter(pl.col("sl_proxy_valid_bool"))
+        bad_atr = valid.filter((~pl.col("atr_14_abs_used").is_finite()) | (pl.col("atr_14_abs_used") <= 0)).height
+        if bad_atr:
+            fail(failures, "finite/nonpositive ATR accepted")
         nonzero = valid.filter(pl.col("sl_atr_buffer") > 0)
-        for r in nonzero.select(["sl_atr_buffer","atr_14_abs_used","sl_distance_lower_abs","sl_distance_upper_abs","lower_sl_price","upper_sl_price","range_low","range_high"]).iter_rows(named=True):
+        for r in nonzero.select(["sl_atr_buffer", "atr_14_abs_used", "sl_distance_lower_abs", "sl_distance_upper_abs", "lower_sl_price", "upper_sl_price", "range_low", "range_high"]).iter_rows(named=True):
             exp = float(r["sl_atr_buffer"]) * float(r["atr_14_abs_used"])
             if not (math.isclose(float(r["sl_distance_lower_abs"]), exp, rel_tol=1e-8, abs_tol=1e-8) and math.isclose(float(r["sl_distance_upper_abs"]), exp, rel_tol=1e-8, abs_tol=1e-8)):
                 fail(failures, "SL distance is not buffer*ATR")
@@ -45,21 +98,18 @@ def main() -> None:
             if not (float(r["upper_sl_price"]) > float(r["range_high"]) and float(r["lower_sl_price"]) < float(r["range_low"])):
                 fail(failures, "SL boundary direction invalid")
                 break
-        bad_atr = valid.filter((~pl.col("atr_14_abs_used").is_finite()) | (pl.col("atr_14_abs_used") <= 0)).height
-        if bad_atr:
-            fail(failures, "finite/nonpositive ATR accepted")
-        bad_exit = df.filter((pl.col("first_exit_side") == "ambiguous_both") != pl.col("first_exit_ambiguous_bool")).height
-        bad_sl = df.filter((pl.col("first_sl_side") == "ambiguous_both") != pl.col("first_sl_ambiguous_bool")).height
-        if bad_exit or bad_sl:
+        if df.filter((pl.col("first_exit_side") == "ambiguous_both") != pl.col("first_exit_ambiguous_bool")).height or df.filter((pl.col("first_sl_side") == "ambiguous_both") != pl.col("first_sl_ambiguous_bool")).height:
             fail(failures, "ambiguity fields inconsistent")
-        for c in ["future_close_level_cross_count","future_intrabar_level_touch_count","future_unique_grid_levels_touched_count","fill_activity_lower_bound_proxy","fill_activity_upper_bound_proxy"]:
+        for c in ["future_close_level_cross_count", "future_intrabar_level_touch_count", "future_unique_grid_levels_touched_count", "fill_activity_lower_bound_proxy", "fill_activity_upper_bound_proxy"]:
             if c not in cols:
                 fail(failures, f"missing activity proxy {c}")
         if "grid_step_fee_multiple_proxy" in cols and df.filter(pl.col("grid_step_fee_multiple_proxy").is_not_null()).height:
             fail(failures, "hardcoded fee proxy remains populated")
-    result = {"ok": not failures, "outcome_run_id": args.outcome_run_id, "rows": df.height, "failures": failures}
+    result = {"semantic_audit_ok": not failures, "outcome_run_id": args.outcome_run_id, "outcome_semantics_version": OUTCOME_SEMANTICS_VERSION, "rows_checked": df.height, "failures": failures, "checks": checks}
+    write_artifacts(args.outcome_run_id, result)
     print(json.dumps(result, separators=(",", ":")))
     raise SystemExit(0 if not failures else 1)
+
 
 if __name__ == "__main__":
     main()

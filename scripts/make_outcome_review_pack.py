@@ -14,9 +14,11 @@ def main() -> None:
     files = [
         Path("reports/outcome_runs") / rid / "outcome_report.md",
         Path("reports/outcome_runs") / rid / "outcome_quality_report.md",
+        Path("reports/outcome_runs") / rid / "outcome_semantic_audit.md",
         Path("data/processed/outcome_runs") / rid / "summary/outcome_summary.parquet",
         Path("data/processed/outcome_runs") / rid / "summary/outcome_quality_summary.parquet",
         Path("data/processed/outcome_runs") / rid / "summary/outcome_perf.json",
+        Path("data/processed/outcome_runs") / rid / "summary/outcome_semantic_audit.json",
     ]
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for file in files:
