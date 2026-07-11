@@ -13,6 +13,7 @@ from bybit_grid.research.scoring.components import add_ex_post_components
 from bybit_grid.research.scoring.outcome_grains import build_outcome_grains
 from bybit_grid.research.walk_forward.leakage_audit import audit_splits
 from bybit_grid.research.walk_forward.splits import build_splits
+from scripts.check_scoring_review_pack import REQUIRED
 
 
 def test_safety_audit_has_no_external_rg_or_git_dependency():
@@ -200,3 +201,34 @@ def test_walk_forward_excludes_incomplete_max_horizon_events_and_marks_prototype
     assert "e10" not in out["range_action_event_id"].to_list()
     assert out["incomplete_label_excluded_count"].max() == 1
     assert out["sufficient_for_parameter_selection_bool"].unique().to_list() == [False]
+
+
+def test_walk_forward_boundary_and_cross_role_regime_counts_reconcile():
+    day = 86_400_000
+    rows = []
+    for i in range(90):
+        rows.append(
+            {
+                "range_action_event_id": f"e{i}",
+                "range_regime_id": "span" if i in (40, 47) else f"r{i}",
+                "signal_time_ms": i * day,
+                "future_horizon_minutes": 2880,
+                "future_data_complete_bool": True,
+                "outcome_end_ms": (i + 2) * day,
+                "symbol": "BTCUSDT",
+            }
+        )
+    out = build_splits(pl.DataFrame(rows), "prototype_90d")
+    summary = pl.DataFrame(out.attrs["fold_summary"])
+    first = summary.filter(pl.col("fold_id") == "wf_000").row(0, named=True)
+    assert first["train_horizon_boundary_excluded_count"] > 0
+    assert first["validation_horizon_boundary_excluded_count"] > 0
+    assert first["test_horizon_boundary_excluded_count"] > 0
+    assert first["cross_role_regime_excluded_event_count"] == 2
+    assert first["coverage_reconciliation_delta"] == 0
+    assert first["coverage_reconciliation_ok"] is True
+
+
+def test_review_pack_requires_cost_audit_and_exclusion_summary():
+    assert "cost_summary_audit.json" in REQUIRED
+    assert "walk_forward_exclusion_reason_summary.parquet" in REQUIRED
