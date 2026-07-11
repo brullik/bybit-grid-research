@@ -14,6 +14,9 @@ BASE = {
     "outcome_semantic_audit.md",
     "outcome_semantic_audit.json",
     "review_pack_manifest.json",
+    "outcome_input_hygiene.json",
+    "outcome_input_hygiene_by_symbol.parquet",
+    "outcome_core_equivalence_report.json",
 }
 FORBIDDEN = (
     "outcomes.parquet",
@@ -64,6 +67,8 @@ def main() -> None:
             raise SystemExit("manifest mismatch")
         perf = json.loads(z.read("outcome_perf.json").decode("utf-8"))
         audit = json.loads(z.read("outcome_semantic_audit.json").decode("utf-8"))
+        hygiene = json.loads(z.read("outcome_input_hygiene.json").decode("utf-8"))
+        equivalence = json.loads(z.read("outcome_core_equivalence_report.json").decode("utf-8"))
         if run_kind == "repair":
             repair = json.loads(
                 z.read("outcome_grid_serialization_repair_report.json").decode("utf-8")
@@ -73,10 +78,12 @@ def main() -> None:
                 or repair.get("semantic_audit_ok") is not True
             ):
                 raise SystemExit("repair report failed")
-    if audit.get("semantic_audit_ok") is not True or (
-        manifest and manifest.get("semantic_audit_ok") is not True
-    ):
+    if audit.get("semantic_audit_ok") is not True or (manifest and manifest.get("semantic_audit_ok") is not True):
         raise SystemExit("semantic audit failed or absent")
+    if hygiene.get("input_hygiene_ok") is not True or (manifest and manifest.get("input_hygiene_ok") is not True):
+        raise SystemExit("input hygiene failed or absent")
+    if equivalence.get("equivalence_ok") is not True or (manifest and manifest.get("equivalence_ok") is not True):
+        raise SystemExit("equivalence failed or absent")
     if perf.get("outcome_rows_total", 0) <= 0:
         raise SystemExit("outcome_rows_total must be > 0")
     if manifest and manifest.get("outcome_rows_total") != perf.get("outcome_rows_total"):

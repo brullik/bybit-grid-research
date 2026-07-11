@@ -73,7 +73,7 @@ def main() -> None:
         if set(df["grid_levels_serialization_version"].unique().to_list()) != {GRID_LEVELS_SERIALIZATION_VERSION}:
             fail(failures, "grid_levels_serialization_version invalid")
         geometry_failure = None
-        for r in df.select(["symbol", "outcome_id", "geometric_grid_levels_json", "grid_cell_number", "range_low", "range_high", "grid_interval_ratio", "grid_interval_pct", "grid_interval_bps"]).iter_rows(named=True):
+        for r in df.select([c for c in ["symbol", "outcome_id", "geometric_grid_levels_json", "grid_cell_number", "range_low", "range_high", "grid_interval_ratio", "grid_interval_pct", "grid_interval_bps"] if c in cols]).iter_rows(named=True):
             levels = [float(x) for x in json.loads(r["geometric_grid_levels_json"])]
             n = int(r["grid_cell_number"])
             low = float(r["range_low"])
@@ -122,6 +122,29 @@ def main() -> None:
         for c in ["future_close_level_cross_count", "future_intrabar_level_touch_count", "future_unique_grid_levels_touched_count", "fill_activity_lower_bound_proxy", "fill_activity_upper_bound_proxy"]:
             if c not in cols:
                 fail(failures, f"missing activity proxy {c}")
+
+        invariant_checks = [
+            (("future_rows_available", "future_horizon_minutes"), pl.col("future_rows_available") <= pl.col("future_horizon_minutes"), "future_rows_available > horizon"),
+            (("future_coverage_minutes", "future_horizon_minutes"), pl.col("future_coverage_minutes") <= pl.col("future_horizon_minutes"), "future_coverage_minutes > horizon"),
+            (("inside_range_candle_count", "future_rows_available"), pl.col("inside_range_candle_count") <= pl.col("future_rows_available"), "inside_range_candle_count > future_rows_available"),
+            (("future_bad_ohlc_count", "future_rows_available"), pl.col("future_bad_ohlc_count") <= pl.col("future_rows_available"), "future_bad_ohlc_count > future_rows_available"),
+            (("future_zero_volume_count", "future_rows_available"), pl.col("future_zero_volume_count") <= pl.col("future_rows_available"), "future_zero_volume_count > future_rows_available"),
+        ]
+        for needed_cols, expr, msg in invariant_checks:
+            if all(c in cols for c in needed_cols) and df.filter(~expr).height:
+                fail(failures, msg)
+        hygiene_path = root / "summary" / "outcome_input_hygiene.json"
+        if not hygiene_path.exists():
+            fail(failures, "missing outcome_input_hygiene.json")
+        else:
+            hygiene = json.loads(hygiene_path.read_text())
+            checks["input_hygiene_ok"] = hygiene.get("input_hygiene_ok")
+            checks["funding_duplicate_timestamps_removed"] = hygiene.get("funding_duplicate_timestamps_removed")
+            if hygiene.get("input_hygiene_ok") is not True:
+                fail(failures, "input_hygiene_ok is not true")
+            if hygiene.get("kline_duplicate_timestamps_removed", 0) and not hygiene.get("input_hygiene_ok"):
+                fail(failures, "duplicated candle timestamps detected")
+
         if "grid_step_fee_multiple_proxy" in cols and df.filter(pl.col("grid_step_fee_multiple_proxy").is_not_null()).height:
             fail(failures, "hardcoded fee proxy remains populated")
     result = {"semantic_audit_ok": not failures, "outcome_run_id": args.outcome_run_id, "outcome_semantics_version": OUTCOME_SEMANTICS_VERSION, "rows_checked": df.height, "failures": failures, "checks": checks}

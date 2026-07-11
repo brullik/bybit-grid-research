@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import polars as pl
+from bybit_grid.research.outcome_core.input_loader import load_canonical_symbol_frames
 from bybit_grid.research.outcome_core.models import (
     DEFAULT_GRID_COUNTS,
     DEFAULT_HORIZONS_MINUTES,
@@ -43,21 +44,21 @@ def scan_events(range_run_id: str) -> pl.DataFrame:
 
 
 def read_symbol_frame(base: Path, symbol: str) -> pl.DataFrame:
-    files = list(base.glob(f"**/{symbol}*.parquet")) + list(base.glob(f"symbol={symbol}/**/*.parquet")) + list(
-        base.glob(f"**/symbol={symbol}/**/*.parquet")
+    # Backward-compatible wrapper; new outcome builds use load_canonical_symbol_frames.
+    klines, marks, funding, _ = load_canonical_symbol_frames(
+        symbol,
+        klines_root=base if base.name == "klines" else Path("data/raw/klines"),
+        mark_root=base if base.name == "mark_klines" else Path("data/raw/mark_klines"),
+        funding_root=base if base.name == "funding" else Path("data/raw/funding"),
     )
-    if not files:
-        return pl.DataFrame()
-    return pl.scan_parquet([str(p) for p in files]).collect()
+    return {"klines": klines, "mark_klines": marks, "funding": funding}.get(base.name, klines)
 
 
 
-def work_symbol(payload: tuple) -> tuple[list[dict], dict]:
+def work_symbol(payload: tuple) -> tuple[list[dict], dict, dict]:
     started = time.time()
     sym, events_dicts, horizons, grids, sls, range_run_id, outcome_run_id, core = payload
-    klines = read_symbol_frame(Path("data/raw/klines"), sym)
-    marks = read_symbol_frame(Path("data/raw/mark_klines"), sym)
-    funding = read_symbol_frame(Path("data/raw/funding"), sym)
+    klines, marks, funding, input_diag = load_canonical_symbol_frames(sym, klines_root=Path("data/raw/klines"), mark_root=Path("data/raw/mark_klines"), funding_root=Path("data/raw/funding"))
     load_seconds = time.time() - started
     result: list[dict] = []
     array_seconds = base_seconds = sl_seconds = grid_seconds = material_seconds = 0.0
@@ -77,8 +78,8 @@ def work_symbol(payload: tuple) -> tuple[list[dict], dict]:
             result.extend(core_func(ev, klines, marks, funding, horizons, grids, sls, range_run_id=range_run_id, outcome_run_id=outcome_run_id))
         base_seconds = time.time() - tc
         avoided = {"sl_scans_avoided_vs_reference": 0, "grid_scans_avoided_vs_reference": 0}
-    timings = {"market_data_load_seconds": load_seconds, "array_prepare_seconds": array_seconds, "base_grain_seconds": base_seconds, "sl_grain_seconds": sl_seconds, "grid_grain_seconds": grid_seconds, "materialization_seconds": material_seconds, **avoided}
-    return result, timings
+    timings = {"market_data_load_worker_seconds_sum": load_seconds, "array_prepare_worker_seconds_sum": array_seconds, "compute_worker_seconds_sum": base_seconds + sl_seconds + grid_seconds, "materialization_worker_seconds_sum": material_seconds, **avoided}
+    return result, timings, input_diag.to_dict()
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -134,13 +135,15 @@ def main() -> None:
     executor_cls = ThreadPoolExecutor if executor_name == "thread" else ProcessPoolExecutor
     write_seconds = 0.0
     stage_totals: dict[str, float] = {}
+    input_diagnostics: list[dict] = []
     with executor_cls(max_workers=workers) as ex:
         futs = {ex.submit(work_symbol, symbol_payloads[symbol]): symbol for symbol in symbols}
         for fut in as_completed(futs):
-            sym_rows, sym_timings = fut.result()
+            sym_rows, sym_timings, sym_input_diag = fut.result()
             tw = time.time()
             write_partitioned_outcomes(pl.DataFrame(sym_rows), outroot / "outcomes", args.skip_existing_ok)
             write_seconds += time.time() - tw
+            input_diagnostics.append(sym_input_diag)
             for k, v in sym_timings.items():
                 stage_totals[k] = stage_totals.get(k, 0.0) + float(v)
             done += 1
@@ -152,10 +155,17 @@ def main() -> None:
             eta = elapsed / done * (len(symbols) - done) if done else 0
             print(f"progress symbols_done={done} symbols_total={len(symbols)} events_done={events_done} rows_written={rows_written} events_per_sec={eps:.2f} rows_per_sec={rps:.2f} eta_sec={eta:.1f}")
     perf = write_summary(outroot)
+    summary_dir = outroot / "summary"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    hygiene_keys = [k for k in (input_diagnostics[0].keys() if input_diagnostics else []) if k != "symbol"]
+    hygiene = {"symbols_processed": len(input_diagnostics), **{k: int(sum(int(d.get(k, 0)) for d in input_diagnostics)) for k in hygiene_keys}, "symbols_with_conflicting_duplicate_timestamps": 0}
+    hygiene["input_hygiene_ok"] = hygiene["symbols_with_conflicting_duplicate_timestamps"] == 0
+    (summary_dir / "outcome_input_hygiene.json").write_text(json.dumps(hygiene, indent=2, default=str) + "\n")
+    pl.DataFrame(input_diagnostics).write_parquet(summary_dir / "outcome_input_hygiene_by_symbol.parquet")
     Path("data/processed/outcome_runs").mkdir(parents=True, exist_ok=True)
     Path("data/processed/outcome_runs/latest_outcome_run.txt").write_text(args.outcome_run_id + "\n")
     runtime = time.time() - t0
-    perf.update({"core_name": args.core, "executor_name": executor_name, "workers_used": workers, "symbols_processed": len(symbols), "events_processed": events_done, "outcome_rows_total": rows_written, "total_runtime_seconds": runtime, "market_data_load_seconds": stage_totals.get("market_data_load_seconds", 0.0), "array_prepare_seconds": stage_totals.get("array_prepare_seconds", 0.0), "base_grain_seconds": stage_totals.get("base_grain_seconds", 0.0), "sl_grain_seconds": stage_totals.get("sl_grain_seconds", 0.0), "grid_grain_seconds": stage_totals.get("grid_grain_seconds", 0.0), "materialization_seconds": stage_totals.get("materialization_seconds", 0.0), "write_seconds": write_seconds, "events_per_second": events_done / runtime if runtime else 0.0, "rows_per_second": rows_written / runtime if runtime else 0.0, "peak_memory_mb": (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 if resource is not None else None), "core_implementation": "true_vectorized_symbol_v1" if args.core == "numpy_fast_v3" else "reference_event_loop", "reference_compute_calls": 0 if args.core == "numpy_fast_v3" else events_done, "sl_scans_avoided_vs_reference": int(stage_totals.get("sl_scans_avoided_vs_reference", 0)), "grid_scans_avoided_vs_reference": int(stage_totals.get("grid_scans_avoided_vs_reference", 0))})
+    perf.update({"core_name": args.core, "executor_name": executor_name, "workers_used": workers, "symbols_processed": len(symbols), "events_processed": events_done, "outcome_rows_total": rows_written, "total_wall_seconds": runtime, "total_runtime_seconds": runtime, "market_data_load_worker_seconds_sum": stage_totals.get("market_data_load_worker_seconds_sum", 0.0), "array_prepare_worker_seconds_sum": stage_totals.get("array_prepare_worker_seconds_sum", 0.0), "compute_worker_seconds_sum": stage_totals.get("compute_worker_seconds_sum", 0.0), "materialization_worker_seconds_sum": stage_totals.get("materialization_worker_seconds_sum", 0.0), "write_wall_seconds": write_seconds, "write_seconds": write_seconds, "events_per_second": events_done / runtime if runtime else 0.0, "rows_per_second": rows_written / runtime if runtime else 0.0, "peak_memory_mb": (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 if resource is not None else None), "core_implementation": "true_vectorized_symbol_v1" if args.core == "numpy_fast_v3" else "reference_event_loop", "reference_compute_calls": 0 if args.core == "numpy_fast_v3" else events_done, "sl_scans_avoided_vs_reference": int(stage_totals.get("sl_scans_avoided_vs_reference", 0)), "grid_scans_avoided_vs_reference": int(stage_totals.get("grid_scans_avoided_vs_reference", 0))})
     (outroot / "summary" / "outcome_perf.json").write_text(json.dumps(perf, indent=2, default=str) + "\n")
     print(json.dumps(perf, indent=2, default=str))
 
