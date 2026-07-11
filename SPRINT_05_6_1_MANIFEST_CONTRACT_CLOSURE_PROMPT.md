@@ -1,5 +1,41 @@
 # Sprint 05.6.1 — Manifest Contract Cross-Checks and Test Closure
 
+## Codex execution mode: text-only repository update
+
+This task must update **source code and tests only**.
+
+Codex must not create, modify, stage, commit, attach, or upload binary/generated artifacts in the repository. In particular, do not add or modify:
+
+```text
+*.zip
+*.parquet
+*.pickle
+*.pkl
+*.npy
+*.npz
+*.db
+*.sqlite
+*.sqlite3
+*.png
+*.jpg
+*.pdf
+*.pyc
+```
+
+Also do not add generated files under:
+
+```text
+data/
+reports/
+logs/
+.pytest_cache/
+__pycache__/
+```
+
+Temporary ZIP files created by automated tests inside pytest `tmp_path` or the operating-system temporary directory are allowed only as ephemeral test fixtures. They must not be written into the repository, staged, committed, or returned as task artifacts.
+
+If canonical owner-run data or review-pack files are absent in the Codex environment, do not recreate them and do not fail the implementation task. Validate the behavior with small synthetic text-driven fixtures and temporary files in tests.
+
 ## PM decision
 
 The concrete Sprint 05.6 owner pack is valid: 29 members, all non-manifest hashes match, category/fee evidence passes, and the scoring run is complete.
@@ -14,6 +50,7 @@ A final narrow checker hardening is required before Sprint 06. The manifest uses
 - No Telegram.
 - Do not change market data, ranges, outcomes, grain contents, scoring formulas, weights, costs, fee snapshot, or walk-forward splits.
 - Do not rebuild market/range/outcome/scoring datasets.
+- Do not generate the canonical PM ZIP in the Codex environment.
 - Preserve:
   - `review_pack_schema_version=scoring_review_pack_v4_audit_complete`;
   - `manifest_hash_policy=self_excluded_v1`;
@@ -25,13 +62,15 @@ A final narrow checker hardening is required before Sprint 06. The manifest uses
   - `grain_contract_version=grain_contract_v3_whole_row`;
   - `sufficient_for_parameter_selection_bool=false`.
 
-Source run:
+Source run metadata used by the owner environment:
 
 ```text
 scoring_run_id = scoring_cost_v6_123x90
 source_outcome_run_id = outcomes_true_fast_v4_canonical_123x90_v1
 fee_snapshot_id = fee_linear_20260711T112444Z
 ```
+
+These owner artifacts may be unavailable in the Codex environment. The code and tests must not depend on them.
 
 ## Observed defect
 
@@ -83,7 +122,7 @@ Do not silently coerce strings such as `"false"`, `"v3 "`, or mixed-case version
 
 ## Task 2 — Reconcile manifest claims to hashed evidence
 
-Require these exact reconciliations:
+Require these exact reconciliations.
 
 ### Source outcome provenance
 
@@ -156,9 +195,11 @@ The manifest can be edited without a hash mismatch by design, so Task 1 and Task
 
 ## Task 4 — Add manifest tamper regression tests
 
-Extend `tests/test_sprint_05_6_review_pack_closure.py` or add a narrowly named test file.
+Extend `tests/test_sprint_05_6_review_pack_closure.py` or add one narrowly named Python test file.
 
-Use the existing tiny synthetic pack helper. Add a parametrized test that mutates one manifest field at a time and proves the checker rejects at least:
+Use the existing tiny synthetic pack helper. The helper may create a temporary ZIP only inside pytest `tmp_path`; the ZIP must never be written to the repository.
+
+Add a parametrized test that mutates one manifest field at a time and proves the checker rejects at least:
 
 1. `risk_budget_proven_bool=true`;
 2. `canonical_score_version="v999"`;
@@ -180,7 +221,7 @@ Add separate tests for:
 3. a successful minimal controlled scoring build ends with `status=complete` only after its required artifacts exist;
 4. a deliberate build failure ends with `status=failed` and never leaves `status=complete`.
 
-For the successful lifecycle test, use a tiny synthetic local fixture. Do not depend on owner market data.
+For the successful lifecycle test, use a tiny synthetic local fixture in `tmp_path`. Do not depend on owner market data.
 
 A small lifecycle refactor is allowed only when needed to make the wrapper own the atomic sequence:
 
@@ -195,20 +236,25 @@ Do not change row-level scoring semantics.
 
 Expected operator failures must remain strict JSON without traceback.
 
-After tests pass, use the existing completed local scoring run and only regenerate the pack:
+Do not build the canonical owner review pack in Codex. Prove builder/checker behavior only through unit/regression tests using temporary fixtures.
 
-```powershell
-python scripts/make_scoring_review_pack.py `
-  --scoring-run-id scoring_cost_v6_123x90
+The owner will run canonical pack generation manually after the text-only code commit is merged.
 
-python scripts/check_scoring_review_pack.py `
-  --zip pm_review_pack_scoring_scoring_cost_v6_123x90.zip `
-  --scoring-run-id scoring_cost_v6_123x90
+## Files Codex may change
+
+Prefer limiting the change set to:
+
+```text
+scripts/check_scoring_review_pack.py
+scripts/make_scoring_review_pack.py
+tests/test_sprint_05_6_review_pack_closure.py
 ```
 
-Do not rebuild grains or scoring.
+One additional `.py` test helper is allowed only when it materially improves clarity.
 
-## Required commands
+Do not change or commit generated JSON, ZIP, Parquet, reports, owner data, or the full scoring run.
+
+## Required commands for Codex
 
 ```powershell
 python scripts/check_numeric_environment.py
@@ -217,59 +263,66 @@ python scripts/check_no_live_execution.py
 python -m pytest -q
 python -m pytest tests/test_sprint_05_6_review_pack_closure.py -q
 ruff check .
+git diff --check
+git status --short
 ```
 
-## Acceptance criteria
+Before committing, verify that `git status --short` contains only intended text source/test files. If a binary or generated artifact appears, leave it untracked/unstaged and remove it from the task output without changing owner data.
+
+## Codex acceptance criteria
 
 ```text
 all tests passed
 ruff passed
 no-live audit passed
-29 unique review-pack members
-no forbidden paths
-no duplicate ZIP members
-manifest self-hash absent
-all 28 non-manifest hashes verified
+git diff --check passed
+only text source/test files changed
+no ZIP/Parquet/generated artifact added or modified
 manifest risk_budget_proven_bool validated false
 manifest canonical_score_version validated v3
 manifest grain_contract_version validated grain_contract_v3_whole_row
 source outcome provenance reconciled across manifest/audits/status
 fee snapshot provenance reconciled across manifest/audits
 cost formula reconciled across manifest/cost audit
+manifest tamper test rejects all 8 required mutations
 missing category audit refusal has a dedicated test
 missing fee-join audit refusal has a dedicated test
 successful scoring lifecycle has a dedicated test
 failed scoring lifecycle has a dedicated test
 risk_budget_proven_bool remains false
 sufficient_for_parameter_selection_bool remains false
-review_pack_ok=true
+synthetic checker happy-path returns review_pack_ok=true
 ```
 
-## Required return to PM
+The following owner-environment checks are **not** required from Codex because they create or inspect binary runtime artifacts:
 
-Return text:
+```text
+29 unique canonical review-pack members
+all 28 canonical non-manifest hashes verified
+canonical pm_review_pack_scoring_scoring_cost_v6_123x90.zip regenerated
+```
+
+They will be performed manually by the owner after the commit.
+
+## Required return from Codex
+
+Return text only:
 
 ```text
 commit hash
-changed files
+changed text files
+git diff --stat
 full pytest output
 focused test output
 ruff output
 no-live audit output
+git diff --check output
+git status --short output
 manifest contract checks implemented
 manifest tamper tests summary
 successful/failed lifecycle tests summary
-review-pack builder JSON
-review-pack checker JSON
 risk_budget_proven_bool
 sufficient_for_parameter_selection_bool
 ```
 
-Upload:
-
-```text
-pm_review_pack_scoring_scoring_cost_v6_123x90.zip
-sprint_05_6_1_changed_files.zip
-```
-
-The changed-files ZIP should contain only modified source/test files with repository-relative paths. Do not upload `.env`, market data, outcomes, scoring datasets, caches, or the full repository.
+Do not upload or attach ZIP files. Do not create `sprint_05_6_1_changed_files.zip`. Do not include binary files in the commit or pull request.
