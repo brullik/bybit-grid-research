@@ -22,12 +22,15 @@ D = Decimal
 
 
 def cfg(lower_term=D("70"), upper_term=D("130")):
+    lower = D("80")
+    upper = D("125")
+    base = geometric_grid_levels_decimal(lower, upper, 4).levels[2]
     return NeutralGridConfig(
         "linear",
         "BTCUSDT",
-        D("80"),
-        D("125"),
-        D("100"),
+        lower,
+        upper,
+        base,
         4,
         D("1"),
         QuantitySource.synthetic_explicit,
@@ -79,7 +82,7 @@ def test_neutral_initialization_order_book_invariants():
 def test_buy_then_adjacent_sell_opens_long_closes_and_exact_long_cycle_fee_once():
     c = cfg()
     levels = geometric_grid_levels_decimal(c.lower_price, c.upper_price, c.grid_cell_number).levels
-    r = run([PriceEvent(1, 1, levels[1]), PriceEvent(2, 2, D("100"))], c)
+    r = run([PriceEvent(1, 1, levels[1]), PriceEvent(2, 2, levels[2])], c)
     assert r.signed_position == ZERO and len(r.completed_cycles) == 1
     assert [e.side for e in r.ledger if e.side] == [OrderSide.buy, OrderSide.sell]
     cyc = r.completed_cycles[0]
@@ -95,7 +98,7 @@ def test_buy_then_adjacent_sell_opens_long_closes_and_exact_long_cycle_fee_once(
 def test_sell_then_adjacent_buy_opens_short_closes_and_exact_short_cycle():
     c = cfg()
     levels = geometric_grid_levels_decimal(c.lower_price, c.upper_price, c.grid_cell_number).levels
-    r = run([PriceEvent(1, 1, levels[3]), PriceEvent(2, 2, D("100"))], c)
+    r = run([PriceEvent(1, 1, levels[3]), PriceEvent(2, 2, levels[2])], c)
     assert r.signed_position == ZERO and len(r.completed_cycles) == 1
     cyc = r.completed_cycles[0]
     assert cyc.gross_usdt == levels[3] - levels[2]
@@ -120,16 +123,16 @@ def test_reversal_no_double_count_and_rearmed_second_cycle_boundary_no_double_fi
     r = run(
         [
             PriceEvent(1, 1, levels[1]),
-            PriceEvent(2, 2, D("100")),
+            PriceEvent(2, 2, levels[2]),
             PriceEvent(3, 3, levels[1]),
-            PriceEvent(4, 4, D("100")),
-            PriceEvent(5, 5, D("100")),
+            PriceEvent(4, 4, levels[2]),
+            PriceEvent(5, 5, levels[2]),
         ],
         c,
     )
     assert r.signed_position == ZERO and len(r.completed_cycles) == 2
     assert len({cyc.open_fill_id for cyc in r.completed_cycles}) == 2
-    assert [e.price for e in r.ledger if e.side][-1] == D("100")
+    assert [e.price for e in r.ledger if e.side][-1] == levels[2]
 
 
 def test_ordering_validation_and_same_timestamp_funding_order():

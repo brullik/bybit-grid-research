@@ -8,16 +8,29 @@ class DecimalGridGeometry:
     levels: tuple[Decimal, ...]
     ratio: Decimal
     geometry_rounding_applied_bool: bool = False
-    ratio_tolerance: Decimal = Decimal("0.03")
+    ratio_tolerance: Decimal = Decimal("0")
 
 
-def geometric_grid_levels_decimal(
-    lower: Decimal, upper: Decimal, cell_number: int
-) -> DecimalGridGeometry:
-    if not isinstance(lower, Decimal) or not isinstance(upper, Decimal):
-        raise ValueError("lower and upper must be Decimal")
-    if cell_number < 2 or lower <= 0 or upper <= lower:
-        raise ValueError("invalid geometric grid inputs")
+def _finite_positive_decimal(value: Decimal, name: str) -> None:
+    if not isinstance(value, Decimal) or isinstance(value, bool) or not value.is_finite():
+        raise ValueError(f"{name} must be a finite Decimal")
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+
+
+def _cell_number(value: int) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError("cell_number must be int, not bool")
+    if value < 2:
+        raise ValueError("cell_number must be >= 2")
+
+
+def geometric_grid_levels_decimal(lower: Decimal, upper: Decimal, cell_number: int) -> DecimalGridGeometry:
+    _finite_positive_decimal(lower, "lower")
+    _finite_positive_decimal(upper, "upper")
+    _cell_number(cell_number)
+    if not lower < upper:
+        raise ValueError("requires 0 < lower < upper")
     with localcontext() as ctx:
         ctx.prec = 80
         ratio = (upper / lower).ln().__truediv__(Decimal(cell_number)).exp()
@@ -30,21 +43,15 @@ def geometric_grid_levels_decimal(
     return DecimalGridGeometry(tuple(levels), ratio)
 
 
-def validate_grid_geometry(
-    levels: tuple[Decimal, ...],
-    lower: Decimal,
-    upper: Decimal,
-    cell_number: int,
-    ratio_tolerance: Decimal = Decimal("0.03"),
-) -> None:
+def validate_grid_geometry(levels: tuple[Decimal, ...], lower: Decimal, upper: Decimal, cell_number: int) -> None:
+    if not isinstance(levels, tuple):
+        raise ValueError("levels must be a tuple")
     geom = geometric_grid_levels_decimal(lower, upper, cell_number)
     if len(levels) != cell_number + 1:
         raise ValueError("expected N+1 levels")
-    if levels[0] != lower or levels[-1] != upper:
-        raise ValueError("levels must preserve exact lower/upper endpoints")
+    for i, level in enumerate(levels):
+        _finite_positive_decimal(level, f"levels[{i}]")
     if any(levels[i] >= levels[i + 1] for i in range(len(levels) - 1)):
         raise ValueError("levels must strictly increase")
-    for i in range(cell_number):
-        ratio = levels[i + 1] / levels[i]
-        if abs(ratio - geom.ratio) > ratio_tolerance:
-            raise ValueError("adjacent ratio outside tolerance")
+    if levels != geom.levels:
+        raise ValueError("levels must exactly match canonical Decimal geometric levels")

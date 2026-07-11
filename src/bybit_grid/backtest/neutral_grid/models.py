@@ -109,10 +109,12 @@ class NeutralGridConfig:
             raise ValueError("quantity_per_grid_base and leverage must be > 0")
         if self.maker_fee_rate < ZERO or self.taker_fee_rate < ZERO or self.termination_slippage_bps < ZERO:
             raise ValueError("fee rates and slippage must be non-negative")
+        if self.termination_slippage_bps >= Decimal("10000"):
+            raise ValueError("termination_slippage_bps must be < 10000")
         if self.lower_termination_price is not None:
             _finite_decimal(self.lower_termination_price, "lower_termination_price")
-            if self.lower_termination_price >= self.lower_price:
-                raise ValueError("lower termination must be below lower_price")
+            if self.lower_termination_price <= ZERO or self.lower_termination_price >= self.lower_price:
+                raise ValueError("lower termination must be positive and below lower_price")
         if self.upper_termination_price is not None:
             _finite_decimal(self.upper_termination_price, "upper_termination_price")
             if self.upper_termination_price <= self.upper_price:

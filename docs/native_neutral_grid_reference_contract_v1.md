@@ -43,3 +43,11 @@ Both normal `process()` events and explicit `terminate_now()` events are rejecte
 
 ### Proof-flag audit
 Audit guardrails require all native-equivalence, native quantity mapping, native termination mapping, liquidation, OHLC replay, risk-budget, parameter-selection, profitability-claim, and live-execution readiness flags to remain false. The two-sided termination flag must exactly reflect whether both lower and upper termination prices are configured.
+
+## Sprint 06.1A.2 canonical geometry and audit closure
+
+Reference v1 preserves canonical Decimal geometric levels exactly as returned by `geometric_grid_levels_decimal(lower, upper, cell_number)`. It does not snap, round, tick-adjust, or otherwise move any level toward `base_price`; tick-size behavior is out of scope for a later sprint. Initialization places a buy below base, a sell above base, and no order only when a canonical level is exactly equal to base by Decimal equality.
+
+Geometry validation fails closed: bounds and levels must be finite positive `Decimal` values, `cell_number` must be a non-boolean integer of at least two, and the supplied `N+1` levels must exactly match the canonical generated tuple. Arithmetic grids, duplicate levels, altered endpoints, altered interior levels, NaN, Infinity, non-Decimal prices, and bool/float cell counts are rejected.
+
+The core audit verifies emitted-ledger accounting, canonical order provenance, active-order/all-order consistency, initialization evidence from activation-sequence-zero orders, termination trigger/fill reconciliation, exact proof-flag keys, exact initialization-audit keys, and false non-readiness flags. It does not prove full input-path completeness, native API equivalence, native quantity mapping, native termination mapping, liquidation behavior, OHLC replay, risk-budget suitability, parameter selection, profitability, or live execution. Therefore `event_path_completeness_proven_bool` and all other non-readiness flags remain false.
