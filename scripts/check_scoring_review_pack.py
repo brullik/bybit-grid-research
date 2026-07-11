@@ -127,20 +127,25 @@ def check_zip(zip_path: str, scoring_run_id: str) -> dict[str, object]:
                 ]
             )
 
-            if (
-                manifest.get("review_pack_schema_version")
-                != "scoring_review_pack_v4_audit_complete"
-            ):
-                consistency.append("review_pack_schema_version")
-            if manifest.get("manifest_hash_policy") != "self_excluded_v1":
-                consistency.append("manifest_hash_policy")
-            for k, exp in {
+            manifest_contract = {
+                "review_pack_schema_version": "scoring_review_pack_v4_audit_complete",
+                "manifest_hash_policy": "self_excluded_v1",
                 "review_phase": "state_machine_engineering_ready",
                 "parameter_selection_authorized_bool": False,
                 "live_authorized_bool": False,
-            }.items():
+                "risk_budget_proven_bool": False,
+                "canonical_score_version": "v3",
+                "grain_contract_version": "grain_contract_v3_whole_row",
+                "scoring_run_id": scoring_run_id,
+            }
+            manifest_error_names = {
+                "risk_budget_proven_bool": "manifest_risk_budget_proven_bool",
+                "canonical_score_version": "manifest_canonical_score_version",
+                "grain_contract_version": "manifest_grain_contract_version",
+            }
+            for k, exp in manifest_contract.items():
                 if manifest.get(k) != exp:
-                    consistency.append(k)
+                    consistency.append(manifest_error_names.get(k, k))
             cat = _json(z, "outcome_category_normalization_audit.json")
             if cat.get("rows_before") != cat.get("rows_after"):
                 consistency.append("category_rows_before_after")
@@ -214,14 +219,51 @@ def check_zip(zip_path: str, scoring_run_id: str) -> dict[str, object]:
             cfg = z.read("cost_model_config_resolved.yml").decode()
             if "REQUIRED_FOR_ACCOUNT_ACTUAL" in cfg or "manual_scenario" in cfg:
                 consistency.append("unresolved_fee_provenance")
-            if cost.get("fee_snapshot_id_resolved") != fee.get("fee_snapshot_id_resolved"):
-                consistency.append("fee_snapshot_mismatch")
+
+            outcome_source = _json(z, "outcome_source_audit.json")
+            source_outcome_values = [
+                manifest.get("source_outcome_run_id"),
+                outcome_source.get("source_outcome_run_id"),
+                status.get("source_outcome_run_id"),
+                sem.get("source_outcome_run_id"),
+            ]
+            if not all(isinstance(v, str) and v for v in source_outcome_values) or len(
+                set(source_outcome_values)
+            ) != 1:
+                consistency.append("manifest_source_outcome_run_id")
+
+            fee_snapshot_values = [
+                manifest.get("fee_snapshot_id_resolved"),
+                fee.get("fee_snapshot_id_resolved"),
+                cost.get("fee_snapshot_id_resolved"),
+            ]
+            if not all(isinstance(v, str) and v for v in fee_snapshot_values) or len(
+                set(fee_snapshot_values)
+            ) != 1:
+                consistency.append("manifest_fee_snapshot_id_resolved")
             if cost.get("fee_source") != fee.get("fee_source"):
                 consistency.append("fee_source_mismatch")
-            if grain.get("grain_contract_version") != "grain_contract_v3_whole_row":
-                consistency.append("grain_contract_version")
-            if sem.get("canonical_score_version") != "v3":
-                consistency.append("canonical_score_version")
+
+            if [
+                manifest.get("cost_formula_version"),
+                cost.get("cost_formula_version"),
+            ] != ["cost_formula_v2_asymmetric_slippage"] * 2:
+                consistency.append("manifest_cost_formula_version")
+            if [
+                manifest.get("grain_contract_version"),
+                grain.get("grain_contract_version"),
+            ] != ["grain_contract_v3_whole_row"] * 2:
+                consistency.append("manifest_grain_contract_version")
+            if [manifest.get("canonical_score_version"), sem.get("canonical_score_version")] != [
+                "v3"
+            ] * 2:
+                consistency.append("manifest_canonical_score_version")
+            if (
+                manifest.get("risk_budget_proven_bool") is not False
+                or cost.get("risk_budget_proven_bool") is not False
+                or sem.get("risk_budget_proven_bool") is not False
+            ):
+                consistency.append("manifest_risk_budget_proven_bool")
             if cost_summary.get("cost_summary_grain") != "event_horizon_grid":
                 consistency.append("cost_summary_grain")
             if cost_summary.get("cost_summary_duplicate_key_count") != 0:
