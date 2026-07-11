@@ -145,15 +145,7 @@ def test_semantic_audit_rejects_future_rows_over_horizon(tmp_path: Path):
 
 
 def test_no_live_order_telegram_additions():
-    res = subprocess.run(
-        [
-            "rg",
-            "telegram|create_order|cancel_order|live trading|grid create|grid close",
-            "src",
-            "scripts",
-            "tests",
-        ],
-        text=True,
-        capture_output=True,
-    )
-    assert res.returncode in (0, 1)
+    from bybit_grid.common.source_safety_audit import audit_source_tree
+
+    result = audit_source_tree(Path.cwd())
+    assert result.ok, result.violations
