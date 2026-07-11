@@ -51,3 +51,11 @@ Reference v1 preserves canonical Decimal geometric levels exactly as returned by
 Geometry validation fails closed: bounds and levels must be finite positive `Decimal` values, `cell_number` must be a non-boolean integer of at least two, and the supplied `N+1` levels must exactly match the canonical generated tuple. Arithmetic grids, duplicate levels, altered endpoints, altered interior levels, NaN, Infinity, non-Decimal prices, and bool/float cell counts are rejected.
 
 The core audit verifies emitted-ledger accounting, canonical order provenance, active-order/all-order consistency, initialization evidence from activation-sequence-zero orders, termination trigger/fill reconciliation, exact proof-flag keys, exact initialization-audit keys, and false non-readiness flags. It does not prove full input-path completeness, native API equivalence, native quantity mapping, native termination mapping, liquidation behavior, OHLC replay, risk-budget suitability, parameter selection, profitability, or live execution. Therefore `event_path_completeness_proven_bool` and all other non-readiness flags remain false.
+
+## Sprint 06.1B sequence-zero and synthetic evidence contract
+
+`activation_sequence_id = 0` is reserved exclusively for initialization orders created by the reference engine constructor. All external `PriceEvent`, `FundingEvent`, and explicit manual synthetic termination inputs must provide `sequence_id >= 1`; zero is rejected and is never silently coerced.
+
+The public audit boundary fails closed for malformed result snapshots. It returns a failed audit result rather than allowing expected tamper classes such as malformed order IDs, invalid level indices, bad enum values, invalid Decimal values, malformed termination fields, bad cycle references, or unexpected ledger structures to traceback.
+
+The synthetic scenario evidence catalog is deterministic and input-event complete for the packaged 33 canonical synthetic scenarios only. This separate pack-level evidence does not change standalone result proof flags: `event_path_completeness_proven_bool`, native equivalence, native quantity mapping, native termination mapping, liquidation modeling, OHLC replay support, risk-budget proof, parameter-selection authorization, profitability claims, and live-execution flags remain false.

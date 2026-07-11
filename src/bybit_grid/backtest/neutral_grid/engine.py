@@ -117,8 +117,8 @@ class NeutralGridReferenceEngine:
         if not isinstance(time_ms, int) or isinstance(time_id := time_ms, bool):
             raise ValueError("time_ms must be int, not bool")
         _ = time_id
-        if sequence_id < 0 or time_ms < 0:
-            raise ValueError("sequence_id and time_ms must be >= 0")
+        if sequence_id < 1 or time_ms < 0:
+            raise ValueError("sequence_id must be >= 1 and time_ms must be >= 0")
         if self.terminated:
             self.rejected += 1
             raise ValueError("event accepted after termination is forbidden")
@@ -420,7 +420,11 @@ class NeutralGridReferenceEngine:
         )
 
     def terminate_now(self, sequence_id: int, time_ms: int, trigger_price: Decimal) -> None:
-        if not isinstance(trigger_price, Decimal) or not trigger_price.is_finite() or trigger_price <= ZERO:
+        if (
+            not isinstance(trigger_price, Decimal)
+            or not trigger_price.is_finite()
+            or trigger_price <= ZERO
+        ):
             raise ValueError("trigger_price must be a finite positive Decimal")
         self._guard_event_order(sequence_id, time_ms)
         self._accept_event_order(sequence_id, time_ms)
