@@ -1,20 +1,30 @@
 from __future__ import annotations
 import argparse
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from bybit_grid.backtest.neutral_grid.audit import audit_simulation_result
-from bybit_grid.backtest.neutral_grid.scenario_audit import (
-    audit_scenario_evidence,
-    scenario_input_record,
+from bybit_grid.backtest.neutral_grid.evidence import (
+    CONTRACT_AUDIT,
+    MEMBERS,
+    RISK_REPORT_GUARDRAILS,
+    RUN_ID,
+    RUN_STATUS_SCHEMA_VERSION,
+    SCENARIO_IDS,
+    STATE_MACHINE_CONTRACT_VERSION,
+    audit_persisted_scenario_evidence,
+    build_evidence_records,
+    derive_reproducibility_audit,
+    jsonl_bytes,
+    read_jsonl,
+    validate_reports,
 )
-from bybit_grid.backtest.neutral_grid.scenarios import canonical_scenarios, replay_scenario
-from bybit_grid.backtest.neutral_grid.serialization import (
-    CANONICAL_SERIALIZATION_VERSION,
-    canonical_json_bytes,
-    normalize,
-)
+from bybit_grid.backtest.neutral_grid.serialization import canonical_json_bytes
+
+
+def emit(o):
+    print(json.dumps(o, sort_keys=True, separators=(",", ":")))
 
 
 def write_json(p: Path, o):
@@ -22,31 +32,38 @@ def write_json(p: Path, o):
 
 
 def write_jsonl(p: Path, rows):
-    p.write_text("".join(canonical_json_bytes(r).decode() for r in rows), encoding="utf-8")
+    p.write_bytes(jsonl_bytes(rows))
 
 
-def status(run_id, status, **kw):
-    return {
-        "schema_version": "neutral_grid_state_machine_run_status_v1",
+def status(run_id, status_, **kw):
+    d = {
+        "schema_version": RUN_STATUS_SCHEMA_VERSION,
         "run_id": run_id,
-        "status": status,
+        "status": status_,
         "canonical_scenario_count": 33,
         "completed_scenario_count": kw.get("completed", 0),
         "failed_scenario_count": kw.get("failed", 0),
-        "state_machine_contract_version": "native_neutral_grid_reference_contract_v1",
-        **(
-            {"error_type": kw["error_type"], "error_summary": kw["error_summary"]}
-            if "error_type" in kw
-            else {}
-        ),
+        "state_machine_contract_version": STATE_MACHINE_CONTRACT_VERSION,
     }
+    for k in [
+        "input_record_count",
+        "result_record_count",
+        "ledger_event_count",
+        "completed_cycle_count",
+        "error_type",
+        "error_summary",
+    ]:
+        if k in kw:
+            d[k] = kw[k]
+    return d
 
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--run-id", default="neutral_sm_v1_synthetic")
+    p.add_argument("--run-id", default=RUN_ID)
     p.add_argument("--output-root", default="data/processed/state_machine_runs")
     p.add_argument("--report-root", default="reports/state_machine_runs")
+    p.add_argument("--fail-after-building-test-hook", action="store_true")
     a = p.parse_args(argv)
     out = Path(a.output_root) / a.run_id
     rep = Path(a.report_root) / a.run_id
@@ -55,98 +72,75 @@ def main(argv=None):
     sp = out / "state_machine_run_status.json"
     write_json(sp, status(a.run_id, "building"))
     try:
-        sc = canonical_scenarios()
-        results = []
-        led = []
-        cyc = []
-        inputs = [scenario_input_record(s) for s in sc]
-        for s in sc:
-            r = replay_scenario(s)
-            au = audit_simulation_result(r)
-            if not au.passed_bool:
-                raise RuntimeError(f"audit failed {s.scenario_id}: {au.failures}")
-            nr = normalize(r)
-            results.append(
-                {
-                    "scenario_id": s.scenario_id,
-                    "result_audit_passed_bool": True,
-                    "normalized_result": nr,
-                }
-            )
-            led += [{"scenario_id": s.scenario_id, **normalize(e)} for e in r.ledger]
-            cyc += [{"scenario_id": s.scenario_id, **normalize(c)} for c in r.completed_cycles]
-        write_json(
-            out / "state_machine_contract_audit.json",
-            {
-                "contract_audit_ok": True,
-                "canonical_geometry_exact_bool": True,
-                "sequence_zero_reserved_bool": True,
-                "active_order_bijection_enforced_bool": True,
-                "linked_fill_provenance_enforced_bool": True,
-                "cycle_provenance_enforced_bool": True,
-                "termination_contract_enforced_bool": True,
-                "audit_fail_closed_bool": True,
-                "no_live_execution_bool": True,
-            },
-        )
+        if a.fail_after_building_test_hook:
+            raise RuntimeError("deliberate test hook failure")
+        inputs, results, ledger, cycles = build_evidence_records()
+        write_json(out / "state_machine_contract_audit.json", CONTRACT_AUDIT)
         write_json(
             out / "scenario_catalog.json",
-            {"canonical_scenario_count": 33, "scenario_ids": [s.scenario_id for s in sc]},
+            {"canonical_scenario_count": 33, "scenario_ids": list(SCENARIO_IDS)},
         )
         write_jsonl(out / "scenario_inputs.jsonl", inputs)
         write_jsonl(out / "scenario_results.jsonl", results)
-        write_jsonl(out / "ledger_events.jsonl", led)
-        write_jsonl(out / "completed_cycles.jsonl", cyc)
-        aud = audit_scenario_evidence(sc)
-        write_json(out / "scenario_audit.json", normalize(aud))
-        write_json(
-            out / "reproducibility_audit.json",
-            {
-                "reproducibility_audit_ok": True,
-                "canonical_serialization_version": CANONICAL_SERIALIZATION_VERSION,
-                "same_inputs_same_bytes_bool": True,
-                "same_inputs_same_hashes_bool": True,
-                "machine_specific_fields_present_bool": False,
-                "wall_clock_fields_present_bool": False,
-            },
+        write_jsonl(out / "ledger_events.jsonl", ledger)
+        write_jsonl(out / "completed_cycles.jsonl", cycles)
+        persisted = {
+            "inputs": read_jsonl(out / "scenario_inputs.jsonl"),
+            "results": read_jsonl(out / "scenario_results.jsonl"),
+            "ledger": read_jsonl(out / "ledger_events.jsonl"),
+            "cycles": read_jsonl(out / "completed_cycles.jsonl"),
+        }
+        aud = audit_persisted_scenario_evidence(
+            persisted["inputs"], persisted["results"], persisted["ledger"], persisted["cycles"]
         )
+        if not aud["scenario_audit_ok"]:
+            raise RuntimeError(f"scenario audit failed: {aud['failures']}")
+        repro = derive_reproducibility_audit({**persisted, "scenario_audit": aud})
+        if not repro["reproducibility_audit_ok"]:
+            raise RuntimeError("reproducibility audit failed")
+        write_json(out / "scenario_audit.json", aud)
+        write_json(out / "reproducibility_audit.json", repro)
         (rep / "synthetic_scenario_report.md").write_text(
-            "# Synthetic scenario report\n\ncanonical_scenario_count = 33\ninput_event_evidence_complete_bool = true\n",
+            "# Synthetic scenario report\n\ncanonical_scenario_count = 33\ninput_event_evidence_complete_bool = true\nall_scenarios_replay_match_bool = true\nall_result_audits_pass_bool = true\n",
             encoding="utf-8",
         )
         (rep / "risk_budget_readiness_report.md").write_text(
-            "\n".join(
-                [
-                    "# Risk budget readiness",
-                    "native_equivalence_proven_bool = false",
-                    "native_quantity_mapping_proven_bool = false",
-                    "native_termination_mapping_proven_bool = false",
-                    "liquidation_modeled_bool = false",
-                    "ohlc_replay_supported_bool = false",
-                    "risk_budget_proven_bool = false",
-                    "sufficient_for_parameter_selection_bool = false",
-                    "profitability_claims_present_bool = false",
-                    "live_execution_present_bool = false",
-                    "sufficient_for_ohlc_replay_engineering_bool = true",
-                    "",
-                ]
-            ),
+            "# Risk budget readiness\n"
+            + "\n".join(f"{k} = {str(v).lower()}" for k, v in RISK_REPORT_GUARDRAILS.items())
+            + "\n",
             encoding="utf-8",
         )
-        required = [
-            "state_machine_run_status.json",
-            "state_machine_contract_audit.json",
-            "scenario_catalog.json",
-            "scenario_inputs.jsonl",
-            "scenario_results.jsonl",
-            "ledger_events.jsonl",
-            "completed_cycles.jsonl",
-            "scenario_audit.json",
-            "reproducibility_audit.json",
-        ]
-        if not all((out / x).exists() for x in required):
-            raise RuntimeError("missing artifact")
-        write_json(sp, status(a.run_id, "complete", completed=33, failed=0))
+        artifacts = {m: (out / m).read_bytes() for m in MEMBERS[1:10]} | {
+            m: (rep / m).read_bytes() for m in MEMBERS[10:]
+        }
+        # validate reports/audits before completion; status is validated after final write by builder/checker
+        validate_reports(
+            artifacts["synthetic_scenario_report.md"].decode(),
+            artifacts["risk_budget_readiness_report.md"].decode(),
+        )
+        final = status(
+            a.run_id,
+            "complete",
+            completed=33,
+            failed=0,
+            input_record_count=len(inputs),
+            result_record_count=len(results),
+            ledger_event_count=len(ledger),
+            completed_cycle_count=len(cycles),
+        )
+        write_json(sp, final)
+        emit(
+            {
+                "run_ok": True,
+                "run_id": a.run_id,
+                "status": "complete",
+                "canonical_scenario_count": 33,
+                "input_record_count": len(inputs),
+                "result_record_count": len(results),
+                "ledger_event_count": len(ledger),
+                "completed_cycle_count": len(cycles),
+            }
+        )
         return 0
     except Exception as e:
         write_json(
@@ -158,6 +152,15 @@ def main(argv=None):
                 error_type=type(e).__name__,
                 error_summary=str(e)[:200],
             ),
+        )
+        emit(
+            {
+                "run_ok": False,
+                "run_id": a.run_id,
+                "status": "failed",
+                "error_type": type(e).__name__,
+                "error_summary": str(e)[:200],
+            }
         )
         return 1
 

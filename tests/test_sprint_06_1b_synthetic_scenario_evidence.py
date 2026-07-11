@@ -201,6 +201,51 @@ def test_runner_pack_checker_tmp(tmp_path: Path):
     )
 
 
+FORBIDDEN_GENERATED_SUFFIXES = {".zip", ".jsonl", ".parquet", ".db", ".sqlite", ".duckdb"}
+SOURCE_HYGIENE_DIRS = ("src", "scripts", "tests", "docs", "config")
+
+
+def find_forbidden_generated_source_files(root: Path) -> list[Path]:
+    found: list[Path] = []
+    for rel in SOURCE_HYGIENE_DIRS:
+        base = root / rel
+        if base.exists():
+            found.extend(
+                p
+                for p in base.rglob("*")
+                if p.is_file() and p.suffix in FORBIDDEN_GENERATED_SUFFIXES
+            )
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=root, text=True, capture_output=True, check=False
+        )
+    except (FileNotFoundError, OSError):
+        tracked = None
+    if tracked and tracked.returncode == 0:
+        for line in tracked.stdout.splitlines():
+            p = root / line
+            if p.suffix in FORBIDDEN_GENERATED_SUFFIXES and p not in found:
+                found.append(p)
+    return sorted(found)
+
+
 def test_no_forbidden_generated_repo_files():
-    forbidden = list(Path(".").glob("**/*.zip")) + list(Path(".").glob("**/*.jsonl"))
-    assert not [p for p in forbidden if ".git" not in p.parts]
+    assert not find_forbidden_generated_source_files(Path("."))
+
+
+def test_source_hygiene_ignores_operator_root_zip_and_data_jsonl(tmp_path: Path):
+    (tmp_path / "pm_review_pack_old.zip").write_bytes(b"old")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "owner.jsonl").write_text("{}\n")
+    (tmp_path / "src").mkdir()
+    assert find_forbidden_generated_source_files(tmp_path) == []
+
+
+def test_source_hygiene_rejects_generated_files_in_source_dirs(tmp_path: Path):
+    bads = []
+    for rel in ["src/a.zip", "scripts/a.jsonl", "tests/a.parquet", "docs/a.db", "config/a.duckdb"]:
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+        bads.append(p)
+    assert find_forbidden_generated_source_files(tmp_path) == sorted(bads)
