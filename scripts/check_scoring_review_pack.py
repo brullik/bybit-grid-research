@@ -4,6 +4,7 @@ import hashlib
 import json
 import sys
 import zipfile
+from pathlib import Path
 from io import BytesIO
 
 import polars as pl
@@ -11,7 +12,7 @@ import polars as pl
 REQUIRED = {
     "review_pack_manifest.json", "fee_snapshot_report.md", "fee_coverage_audit.json",
     "cost_model_config_resolved.yml", "cost_model_audit.json", "cost_scenario_summary.parquet",
-    "cost_summary_audit.json",
+    "cost_summary_audit.json", "scoring_run_status.json",
     "cost_scenario_report.md", "outcome_source_audit.json", "outcome_grain_audit.json",
     "outcome_cartesian_completeness_audit.json", "outcome_grain_contract_audit.json",
     "scoring_semantics_audit.json", "scoring_null_policy.md", "score_component_summary.parquet",
@@ -48,6 +49,8 @@ def _parquet(z, name):
     return pl.read_parquet(BytesIO(z.read(name)))
 
 def check_zip(zip_path: str, scoring_run_id: str) -> dict[str, object]:
+    if not Path(zip_path).exists():
+        return {"review_pack_ok": False, "error": "zip_not_found", "zip": zip_path, "scoring_run_id": scoring_run_id}
     with zipfile.ZipFile(zip_path) as z:
         raw_names = z.namelist()
         names = set(raw_names)
@@ -73,6 +76,9 @@ def check_zip(zip_path: str, scoring_run_id: str) -> dict[str, object]:
         consistency = []
         if not missing:
             fee, cost, sem, grain = (_json(z, n) for n in ["fee_coverage_audit.json","cost_model_audit.json","scoring_semantics_audit.json","outcome_grain_contract_audit.json"])
+            status = _json(z, "scoring_run_status.json")
+            if status.get("status") != "complete" or status.get("scoring_run_id") != scoring_run_id:
+                consistency.append("scoring_run_status")
             cost_summary = _json(z, "cost_summary_audit.json")
             cfg = z.read("cost_model_config_resolved.yml").decode()
             if "REQUIRED_FOR_ACCOUNT_ACTUAL" in cfg or "manual_scenario" in cfg:

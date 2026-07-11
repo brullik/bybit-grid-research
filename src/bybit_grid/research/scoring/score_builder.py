@@ -47,6 +47,53 @@ DEFAULT_WEIGHTS = {
 COST_FORMULA_VERSION = "cost_formula_v2_asymmetric_slippage"
 
 
+
+def _write_status(root: Path, payload: dict[str, object]) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "scoring_run_status.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
+
+
+def join_account_fees(
+    df: pl.DataFrame,
+    fees: pl.DataFrame,
+    *,
+    context: str,
+) -> tuple[pl.DataFrame, dict[str, object]]:
+    for label, frame in [("scoring", df), ("fees", fees)]:
+        missing = sorted({"category", "symbol"} - set(frame.columns))
+        if missing:
+            raise ValueError(f"{context}: {label} missing fee join columns: {missing}")
+    scoring_categories = sorted(df["category"].drop_nulls().cast(pl.Utf8).unique().to_list())
+    fee_categories = sorted(fees["category"].drop_nulls().cast(pl.Utf8).unique().to_list())
+    if scoring_categories != ["linear"]:
+        raise ValueError(f"{context}: unsupported scoring categories {scoring_categories}")
+    if "linear" not in fee_categories:
+        raise ValueError(f"{context}: fee snapshot missing linear category")
+    dup = fees.group_by(["category", "symbol"]).len().filter(pl.col("len") > 1)
+    if dup.height:
+        raise ValueError(f"{context}: duplicate fee rows per category/symbol")
+    joined = df.join(fees, on=["category", "symbol"], how="left")
+    missing_fee = joined.filter(pl.col("maker_fee_rate").is_null() | pl.col("taker_fee_rate").is_null())
+    missing_symbols = sorted(missing_fee["symbol"].unique().to_list()) if missing_fee.height else []
+    audit = {
+        "context": context,
+        "input_rows": df.height,
+        "output_rows": joined.height,
+        "scoring_symbol_count": df["symbol"].n_unique(),
+        "scoring_symbols": sorted(df["symbol"].unique().to_list()),
+        "scoring_categories": scoring_categories,
+        "fee_symbol_count": fees["symbol"].n_unique(),
+        "fee_categories": fee_categories,
+        "missing_fee_row_count": missing_fee.height,
+        "symbols_missing_fee_rates": missing_symbols,
+        "fee_join_ok": missing_fee.height == 0,
+    }
+    if missing_fee.height:
+        raise ValueError(json.dumps(audit, sort_keys=True))
+    return joined, audit
+
 def load_weights(path: str | Path | None = None):
     return DEFAULT_WEIGHTS
 
@@ -144,14 +191,31 @@ def build_scoring_dataset(
     cost_config: str | None = None,
     source_outcome_run_id: str | None = None,
 ) -> dict[str, object]:
+    root = Path("data/processed/scoring_runs") / scoring_run_id
+    _write_status(root, {"status": "building", "scoring_run_id": scoring_run_id, "source_outcome_run_id": source_outcome_run_id})
+    try:
+        return _build_scoring_dataset_impl(input_path, scoring_run_id, weights_path, fee_snapshot_id, cost_config, source_outcome_run_id)
+    except Exception as exc:
+        _write_status(root, {"status": "failed", "scoring_run_id": scoring_run_id, "source_outcome_run_id": source_outcome_run_id, "failed_stage": "build_scoring_dataset", "error_type": type(exc).__name__, "error_summary": str(exc)[:500]})
+        raise
+
+
+def _build_scoring_dataset_impl(
+    input_path: Path,
+    scoring_run_id: str,
+    weights_path: str | None = None,
+    fee_snapshot_id: str | None = None,
+    cost_config: str | None = None,
+    source_outcome_run_id: str | None = None,
+) -> dict[str, object]:
     df = pl.read_parquet(input_path)
     if "category" not in df.columns:
-        df = df.with_columns(pl.lit("linear").alias("category"))
+        raise ValueError("expanded_scoring_input missing required category")
     if source_outcome_run_id is not None and "source_outcome_run_id" not in df.columns:
         df = df.with_columns(pl.lit(source_outcome_run_id).alias("source_outcome_run_id"))
     fees, meta = load_fee_rates(fee_snapshot_id)
-    df = df.join(fees, on=["category", "symbol"], how="left")
-    miss = sorted(set(df.filter(pl.col("maker_fee_rate").is_null())["symbol"].to_list()))
+    df, expanded_fee_join_audit = join_account_fees(df, fees, context="expanded_scoring_input")
+    miss = expanded_fee_join_audit["symbols_missing_fee_rates"]
     root = Path("data/processed/scoring_runs") / scoring_run_id
     root.mkdir(parents=True, exist_ok=True)
     coverage = {
@@ -166,6 +230,7 @@ def build_scoring_dataset(
         "fee_coverage_rate": 1 - len(miss) / max(df["symbol"].n_unique(), 1),
         "fee_coverage_ok": not miss,
     }
+    fee_join_context_audits = {"expanded_scoring_input": expanded_fee_join_audit}
     (root / "fee_coverage_audit.json").write_text(
         json.dumps(coverage, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -440,10 +505,15 @@ def build_scoring_dataset(
     grain_path = root / "event_horizon_grid.parquet"
     if grain_path.exists():
         cost_df = pl.read_parquet(grain_path)
+        required = {"category", "symbol", "range_action_event_id", "future_horizon_minutes", "grid_cell_number"}
+        missing_required = sorted(required - set(cost_df.columns))
+        if missing_required:
+            raise ValueError(f"event_horizon_grid missing required cost columns: {missing_required}")
         duplicate_cost_keys = _duplicate_key_count(cost_df, cost_keys)
         if duplicate_cost_keys:
             raise ValueError(f"duplicate event-horizon-grid cost keys: {duplicate_cost_keys}")
-        cost_df = cost_df.join(fees, on=["category", "symbol"], how="left")
+        cost_df, cost_fee_join_audit = join_account_fees(cost_df, fees, context="cost_summary_event_horizon_grid")
+        fee_join_context_audits["cost_summary_event_horizon_grid"] = cost_fee_join_audit
         for scen in scenario_objects(cfg):
             entry = (
                 pl.when(pl.lit(scen.entry_fee_source) == "maker")
@@ -471,8 +541,7 @@ def build_scoring_dataset(
                 ]
             )
     else:
-        cost_df = df.unique(cost_keys, keep="first")
-        duplicate_cost_keys = _duplicate_key_count(cost_df, cost_keys)
+        raise FileNotFoundError(f"required canonical cost grain not found: {grain_path}")
     sl_rows_removed = df.height - cost_df.height
     for scen in scenario_names:
         cost_rows.append(
@@ -519,6 +588,7 @@ def build_scoring_dataset(
         "cost_summary_group_count": cost_summary.height,
     }
     (root / "cost_summary_audit.json").write_text(json.dumps(cost_audit, indent=2, sort_keys=True), encoding="utf-8")
+    (root / "fee_join_context_audit.json").write_text(json.dumps(fee_join_context_audits, indent=2, sort_keys=True), encoding="utf-8")
     (rep / "cost_scenario_report.md").write_text(
         f"# Cost Scenario Report\n\nOne-cycle proxy diagnostics only; not event PnL.\n\ncost_summary_grain: event_horizon_grid\ncost_summary_source_rows: {cost_df.height}\nexpanded rows ignored for cost summary: {df.height}\nSL-dimension rows intentionally removed: {sl_rows_removed}\nactual duplicate event-horizon-grid keys: {duplicate_cost_keys}\n",
         encoding="utf-8",
@@ -527,6 +597,13 @@ def build_scoring_dataset(
         "# Scoring Null Policy\n\nIncomplete evidence is excluded from ranking: canonical v3 ranking scores are null when ex_post_score_eligible_bool=false. Conservative all-row diagnostics are not ranking scores.\n",
         encoding="utf-8",
     )
+    _write_status(root, {
+        "status": "complete",
+        "scoring_run_id": scoring_run_id,
+        "source_outcome_run_id": source_outcome_run_id,
+        "rows": df.height,
+        "completed_at_utc": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+    })
     return {
         "rows": df.height,
         "risk_budget_proven_bool": False,

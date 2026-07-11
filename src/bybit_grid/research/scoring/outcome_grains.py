@@ -17,6 +17,12 @@ GRAIN_KEYS = {
     ],
 }
 KEYS = GRAIN_KEYS
+REQUIRED_COLUMNS_BY_GRAIN = {
+    "event_horizon": ["range_action_event_id", "future_horizon_minutes", "symbol", "category"],
+    "event_horizon_sl": ["range_action_event_id", "future_horizon_minutes", "sl_atr_buffer", "symbol", "category"],
+    "event_horizon_grid": ["range_action_event_id", "future_horizon_minutes", "grid_cell_number", "symbol", "category"],
+    "expanded_scoring_input": ["range_action_event_id", "future_horizon_minutes", "grid_cell_number", "sl_atr_buffer", "symbol", "category"],
+}
 REQUIRED_KEYS = [
     *GRAIN_KEYS["expanded_scoring_input"],
     "outcome_id",
@@ -104,6 +110,42 @@ CONTRACT_COLUMNS_BY_GRAIN = {
     "expanded_scoring_input": ["*"],
 }
 
+
+
+def normalize_outcome_category(
+    df: pl.DataFrame,
+    *,
+    default_category: str = "linear",
+) -> tuple[pl.DataFrame, dict[str, object]]:
+    rows_before = df.height
+    present = "category" in df.columns
+    source_categories = (
+        sorted(str(x) for x in df["category"].drop_nulls().unique().to_list()) if present else []
+    )
+    if present:
+        out = df.with_columns(
+            pl.col("category").cast(pl.Utf8).str.strip_chars().str.to_lowercase().alias("category")
+        )
+        category_source = "source_column"
+    else:
+        out = df.with_columns(pl.lit(default_category).alias("category"))
+        category_source = "project_scope_default"
+    empty_count = out.filter(pl.col("category").is_null() | (pl.col("category") == "")).height
+    normalized_categories = sorted(out["category"].drop_nulls().unique().to_list())
+    ok = empty_count == 0 and normalized_categories == [default_category]
+    audit = {
+        "category_normalization_ok": ok,
+        "category_source": category_source,
+        "category_column_present_in_source": present,
+        "source_categories": source_categories,
+        "normalized_categories": normalized_categories,
+        "rows_before": rows_before,
+        "rows_after": out.height,
+        "default_category": default_category,
+    }
+    if not ok:
+        raise ValueError(json.dumps(audit, sort_keys=True))
+    return out, audit
 
 def canonical_outcome_files(outcome_run_id: str) -> list[Path]:
     root = Path("data/processed/outcome_runs") / outcome_run_id / "outcomes"
@@ -276,6 +318,8 @@ def cartesian_completeness_audit(df: pl.DataFrame) -> tuple[dict[str, object], p
 
 
 def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dict[str, object]]:
+    if "category" not in df.columns:
+        df, _ = normalize_outcome_category(df)
     missing = [c for c in REQUIRED_KEYS if c in df.columns and df[c].null_count() > 0]
     absent = [c for c in REQUIRED_KEYS if c not in df.columns]
     if missing or absent:
@@ -304,9 +348,28 @@ def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dic
             inv_frames.append(inv)
         grains[name] = unique_grain(df, keys, cols)
     dupes = {name: duplicate_count(grain, KEYS[name]) for name, grain in grains.items()}
+    actual_columns = {name: frame.columns for name, frame in grains.items()}
+    missing_required = {
+        name: [c for c in REQUIRED_COLUMNS_BY_GRAIN[name] if c not in frame.columns]
+        for name, frame in grains.items()
+    }
+    null_required = {
+        name: {c: int(frame[c].null_count()) for c in REQUIRED_COLUMNS_BY_GRAIN[name] if c in frame.columns}
+        for name, frame in grains.items()
+    }
+    category_present = {name: "category" in frame.columns for name, frame in grains.items()}
+    category_values = {
+        name: sorted(frame["category"].drop_nulls().unique().to_list()) if "category" in frame.columns else []
+        for name, frame in grains.items()
+    }
     cart, _ = cartesian_completeness_audit(df)
     bad_forbidden = {k: v for k, v in forbidden.items() if v}
-    contract_ok = not bad_forbidden and sum(inv_counts.values()) == 0
+    required_ok = (
+        not any(missing_required.values())
+        and all(all(v == 0 for v in counts.values()) for counts in null_required.values())
+        and all(vals == ["linear"] for vals in category_values.values())
+    )
+    contract_ok = not bad_forbidden and sum(inv_counts.values()) == 0 and required_ok
     if not contract_ok:
         raise ValueError(
             json.dumps(
@@ -317,6 +380,11 @@ def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dic
                     "whole_row_invariance_violation_count_by_grain": inv_counts,
                     "null_pattern_violation_count_by_grain": null_counts,
                     "synthetic_row_risk_detected_bool": sum(inv_counts.values()) > 0,
+                    "actual_columns_by_grain": actual_columns,
+                    "missing_required_columns_by_grain": missing_required,
+                    "null_required_column_counts_by_grain": null_required,
+                    "category_present_by_grain": category_present,
+                    "category_values_by_grain": category_values,
                 },
                 sort_keys=True,
             )
@@ -345,6 +413,12 @@ def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dic
         "null_pattern_violation_count_by_grain": null_counts,
         "synthetic_row_risk_detected_bool": sum(inv_counts.values()) > 0,
         "representative_row_selection_version": "whole_row_v1",
+        "required_columns_by_grain": REQUIRED_COLUMNS_BY_GRAIN,
+        "actual_columns_by_grain": actual_columns,
+        "missing_required_columns_by_grain": missing_required,
+        "null_required_column_counts_by_grain": null_required,
+        "category_present_by_grain": category_present,
+        "category_values_by_grain": category_values,
         "grain_contract_audit_ok": contract_ok,
     }
     return grains, audit
@@ -357,6 +431,7 @@ def write_outcome_grains(outcome_run_id: str, scoring_run_id: str) -> dict[str, 
         raise ValueError(json.dumps(source))
     root = Path("data/processed/scoring_runs") / scoring_run_id
     root.mkdir(parents=True, exist_ok=True)
+    df, category_audit = normalize_outcome_category(df)
     try:
         grains, audit = build_outcome_grains(df)
     except ValueError:
@@ -366,6 +441,7 @@ def write_outcome_grains(outcome_run_id: str, scoring_run_id: str) -> dict[str, 
         frame.write_parquet(root / f"{name}.parquet")
     for fn, obj in [
         ("outcome_source_audit.json", source),
+        ("outcome_category_normalization_audit.json", category_audit),
         ("outcome_grain_audit.json", audit),
         (
             "outcome_grain_contract_audit.json",
@@ -380,6 +456,12 @@ def write_outcome_grains(outcome_run_id: str, scoring_run_id: str) -> dict[str, 
                     "null_pattern_violation_count_by_grain",
                     "synthetic_row_risk_detected_bool",
                     "representative_row_selection_version",
+                    "required_columns_by_grain",
+                    "actual_columns_by_grain",
+                    "missing_required_columns_by_grain",
+                    "null_required_column_counts_by_grain",
+                    "category_present_by_grain",
+                    "category_values_by_grain",
                     "grain_contract_audit_ok",
                 ]
             },

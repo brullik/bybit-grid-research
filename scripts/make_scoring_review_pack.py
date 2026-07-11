@@ -12,10 +12,33 @@ from scripts.check_scoring_review_pack import REQUIRED, check_zip
 from scripts.report_cost_and_scoring import generate_cost_and_scoring_reports
 
 
+
+def _load_json(path: Path) -> dict[str, object]:
+    if not path.exists():
+        raise SystemExit(json.dumps({"review_pack_ok": False, "error": "missing_required_preflight", "path": str(path)}))
+    return json.loads(path.read_text())
+
+
+def _preflight_complete_scoring(scoring_run_id: str, data: Path, rep: Path) -> None:
+    status = _load_json(data / "scoring_run_status.json")
+    if status.get("status") != "complete" or status.get("scoring_run_id") != scoring_run_id:
+        raise SystemExit(json.dumps({"review_pack_ok": False, "error": "scoring_run_not_complete", "scoring_run_id": scoring_run_id, "status": status}, sort_keys=True))
+    cost = _load_json(data / "cost_summary_audit.json")
+    sem = _load_json(data / "scoring_semantics_audit.json")
+    if cost.get("cost_summary_audit_ok") is not True:
+        raise SystemExit(json.dumps({"review_pack_ok": False, "error": "cost_summary_audit_not_ok", "scoring_run_id": scoring_run_id}, sort_keys=True))
+    if sem.get("scoring_semantics_audit_ok") is not True:
+        raise SystemExit(json.dumps({"review_pack_ok": False, "error": "scoring_semantics_audit_not_ok", "scoring_run_id": scoring_run_id}, sort_keys=True))
+    required_cost = [data / "cost_summary_audit.json", rep / "cost_scenario_summary.parquet", rep / "cost_scenario_report.md", rep / "cost_model_audit.json"]
+    missing = [str(p) for p in required_cost if not p.exists()]
+    if missing:
+        raise SystemExit(json.dumps({"review_pack_ok": False, "error": "missing_cost_artifacts", "missing": missing, "scoring_run_id": scoring_run_id}, sort_keys=True))
+
 def make_pack(scoring_run_id: str) -> dict[str, object]:
     rep = Path("reports/scoring_runs") / scoring_run_id
     data = Path("data/processed/scoring_runs") / scoring_run_id
     rep.mkdir(parents=True, exist_ok=True)
+    _preflight_complete_scoring(scoring_run_id, data, rep)
     before = {p: p.read_bytes() for p in [rep/"cost_model_config_resolved.yml", rep/"cost_model_audit.json"] if p.exists()}
     generate_cost_and_scoring_reports(scoring_run_id)
     for p, b in before.items():
