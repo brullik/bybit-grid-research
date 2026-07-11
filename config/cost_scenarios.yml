@@ -1,0 +1,8 @@
+cost_model_version: cost_v1
+fee_snapshot_id: REQUIRED_FOR_ACCOUNT_ACTUAL
+fee_source: manual_scenario
+scenarios:
+  maker_maker: {entry_fee_source: maker, exit_fee_source: maker, sl_exit_fee_source: taker, slippage_bps_per_market_leg: 0}
+  maker_taker: {entry_fee_source: maker, exit_fee_source: taker, sl_exit_fee_source: taker, slippage_bps_per_market_leg: 0}
+  taker_taker: {entry_fee_source: taker, exit_fee_source: taker, sl_exit_fee_source: taker, slippage_bps_per_market_leg: 0}
+  stress_taker_plus_slippage: {entry_fee_source: taker, exit_fee_source: taker, sl_exit_fee_source: taker, slippage_bps_per_market_leg: 2}
