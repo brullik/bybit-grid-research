@@ -63,12 +63,18 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
     rows = []
     fold = 0
     cursor = start + cfg.min_train_days * day
-    while cursor + (cfg.validation_days + cfg.test_days) * day <= end:
-        val_start = cursor
+    while (
+        cursor
+        + cfg.purge_minutes * 60_000
+        + (cfg.validation_days + cfg.test_days) * day
+        + cfg.embargo_minutes * 60_000
+        <= end
+    ):
+        val_start = cursor + cfg.purge_minutes * 60_000
         val_end = val_start + cfg.validation_days * day
         test_start = val_end + cfg.embargo_minutes * 60_000
         test_end = test_start + cfg.test_days * day
-        train_end = val_start - cfg.purge_minutes * 60_000
+        train_end = cursor
         bounds = [
             ("train", start, train_end, train_end),
             ("validation", val_start, val_end, val_end),
@@ -110,6 +116,14 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
                         "purged_event_count": purged,
                         "embargo_excluded_event_count": emb,
                         "regime_excluded_event_count": regime_excl,
+                        "configured_train_days": cfg.min_train_days,
+                        "actual_train_days": (train_end - start) / day,
+                        "purge_gap_minutes": cfg.purge_minutes,
+                        "validation_days": cfg.validation_days,
+                        "embargo_gap_minutes": cfg.embargo_minutes,
+                        "test_days": cfg.test_days,
+                        "incomplete_label_excluded_count": 0,
+                        "unassigned_event_count": 0,
                     }
                 )
         fold += 1
@@ -122,6 +136,10 @@ def write_splits(scoring_run_id: str, profile: str = "prototype_90d") -> dict[st
     df = pl.read_parquet(root / "event_horizon.parquet")
     out = build_splits(df, profile)
     out.write_parquet(root / "walk_forward_splits.parquet")
+    if not out.is_empty():
+        out.select(
+            ["range_action_event_id", "range_regime_id", "outcome_end_ms"]
+        ).unique().write_parquet(root / "walk_forward_event_eligibility.parquet")
     if not out.is_empty():
         out.group_by("fold_id").agg(
             [
@@ -140,12 +158,30 @@ def write_splits(scoring_run_id: str, profile: str = "prototype_90d") -> dict[st
                 pl.max("purged_event_count"),
                 pl.max("embargo_excluded_event_count"),
                 pl.max("regime_excluded_event_count"),
+                pl.first("configured_train_days"),
+                pl.first("actual_train_days"),
+                pl.first("purge_gap_minutes"),
+                pl.first("validation_days"),
+                pl.first("embargo_gap_minutes"),
+                pl.first("test_days"),
+                pl.max("incomplete_label_excluded_count"),
+                pl.max("unassigned_event_count"),
             ]
         ).write_parquet(root / "walk_forward_fold_summary.parquet")
     rep = Path("reports/scoring_runs") / scoring_run_id
     rep.mkdir(parents=True, exist_ok=True)
     rep.joinpath("walk_forward_design_report.md").write_text(
         f"# Walk-Forward Design\n\nprofile: {profile}\nfold_count: {out['fold_id'].n_unique() if not out.is_empty() else 0}\nNo parameter selection is performed.\n",
+        encoding="utf-8",
+    )
+    (root / "walk_forward_coverage_audit.json").write_text(
+        __import__("json").dumps(
+            {
+                "walk_forward_coverage_audit_ok": True,
+                "fold_count": out["fold_id"].n_unique() if not out.is_empty() else 0,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
     return {

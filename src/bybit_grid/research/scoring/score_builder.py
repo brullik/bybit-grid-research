@@ -1,20 +1,49 @@
 from __future__ import annotations
 import json
-import shutil
 from pathlib import Path
 import polars as pl
-from bybit_grid.research.cost_model.cycle_costs import geometric_cycle_costs
-from bybit_grid.research.cost_model.models import FeeRate, load_cost_config, scenario_objects
+from bybit_grid.research.cost_model.models import load_cost_config, scenario_objects
 from bybit_grid.research.scoring.components import add_ex_post_components
 
 DEFAULT_WEIGHTS = {
-    "score_weights_version": "score_weights_v1_fixed",
+    "score_weights_version": "score_weights_v2_frozen",
     "weight_sets": {
-        "balanced": {"range": 0.4, "sl": 0.2, "data": 0.2, "turnover": 0.2},
-        "survival_heavy": {"range": 0.6, "sl": 0.2, "data": 0.1, "turnover": 0.1},
-        "quality_heavy": {"range": 0.3, "sl": 0.2, "data": 0.4, "turnover": 0.1},
+        "balanced_v2": {
+            "range": 0.25,
+            "quality": 0.25,
+            "sl": 0.20,
+            "turnover": 0.10,
+            "activity": 0.10,
+            "cost": 0.10,
+        },
+        "survival_heavy_v2": {
+            "range": 0.40,
+            "quality": 0.15,
+            "sl": 0.25,
+            "turnover": 0.05,
+            "activity": 0.05,
+            "cost": 0.10,
+        },
+        "quality_heavy_v2": {
+            "range": 0.15,
+            "quality": 0.45,
+            "sl": 0.15,
+            "turnover": 0.05,
+            "activity": 0.10,
+            "cost": 0.10,
+        },
+        "cost_heavy_v2": {
+            "range": 0.15,
+            "quality": 0.15,
+            "sl": 0.15,
+            "turnover": 0.05,
+            "activity": 0.15,
+            "cost": 0.35,
+        },
     },
 }
+
+COST_FORMULA_VERSION = "cost_formula_v2_asymmetric_slippage"
 
 
 def load_weights(path: str | Path | None = None):
@@ -56,6 +85,12 @@ def load_fee_rates(requested: str | None) -> tuple[pl.DataFrame, dict[str, objec
             pl.col("category").cast(pl.Utf8),
         ]
     )
+    if df.filter(
+        ~pl.col("maker_fee_rate").is_finite() | ~pl.col("taker_fee_rate").is_finite()
+    ).height:
+        raise ValueError("non-finite fee values")
+    if df["fee_source"].n_unique() > 1:
+        raise ValueError("mixed fee sources in one snapshot")
     dup = (
         df.group_by(["category", "symbol"])
         .agg(
@@ -135,68 +170,88 @@ def build_scoring_dataset(
             pl.lit(meta["fee_snapshot_id_resolved"]).alias("fee_snapshot_id"),
         ]
     )
+    scenario_names = []
     for scen in scenario_objects(cfg):
-        vals = []
-        for r in df.select(
+        scenario_names.append(scen.name)
+        entry = (
+            pl.when(pl.lit(scen.entry_fee_source) == "maker")
+            .then(pl.col("maker_fee_rate"))
+            .otherwise(pl.col("taker_fee_rate"))
+        )
+        exitf = (
+            pl.when(pl.lit(scen.exit_fee_source) == "maker")
+            .then(pl.col("maker_fee_rate"))
+            .otherwise(pl.col("taker_fee_rate"))
+        )
+        r = pl.col("grid_interval_ratio").cast(pl.Float64)
+        slip = pl.lit(scen.slippage_bps_per_market_leg / 10_000.0)
+        gross_long = r - 1
+        gross_short = (r - 1) / r
+        net_long = gross_long - (entry + exitf * r + slip + slip * r)
+        net_short = gross_short - (entry + exitf / r + slip + slip / r)
+        df = df.with_columns(
             [
-                "symbol",
-                "maker_fee_rate",
-                "taker_fee_rate",
-                "fee_snapshot_id",
-                "fee_source",
-                "grid_interval_ratio",
-            ]
-        ).iter_rows(named=True):
-            vals.append(
-                geometric_cycle_costs(
-                    float(r["grid_interval_ratio"]),
-                    FeeRate(
-                        r["symbol"],
-                        r["maker_fee_rate"],
-                        r["taker_fee_rate"],
-                        r["fee_snapshot_id"],
-                        r["fee_source"],
-                    ),
-                    scen,
-                )
-            )
-        cdf = pl.DataFrame(vals).select(
-            [
-                pl.col("net_cycle_return_long_bps").alias(
-                    f"cost_{scen.name}_net_cycle_return_long_bps_proxy"
-                ),
-                pl.col("net_cycle_return_short_bps").alias(
-                    f"cost_{scen.name}_net_cycle_return_short_bps_proxy"
-                ),
-                pl.col("fee_break_even_long_bool").alias(
-                    f"cost_{scen.name}_fee_break_even_long_bool"
-                ),
-                pl.col("fee_break_even_short_bool").alias(
-                    f"cost_{scen.name}_fee_break_even_short_bool"
-                ),
-                (pl.col("fee_break_even_long_bool") & pl.col("fee_break_even_short_bool")).alias(
+                (net_long * 10_000).alias(f"cost_{scen.name}_net_cycle_return_long_bps_proxy"),
+                (net_short * 10_000).alias(f"cost_{scen.name}_net_cycle_return_short_bps_proxy"),
+                (net_long > 0).alias(f"cost_{scen.name}_fee_break_even_long_bool"),
+                (net_short > 0).alias(f"cost_{scen.name}_fee_break_even_short_bool"),
+                ((net_long > 0) & (net_short > 0)).alias(
                     f"cost_{scen.name}_fee_break_even_both_bool"
                 ),
-                pl.col("fee_efficiency_ratio_long").alias(
-                    f"cost_{scen.name}_fee_efficiency_ratio_long"
-                ),
-                pl.col("fee_efficiency_ratio_short").alias(
-                    f"cost_{scen.name}_fee_efficiency_ratio_short"
-                ),
+                (net_long / gross_long).alias(f"cost_{scen.name}_fee_efficiency_ratio_long"),
+                (net_short / gross_short).alias(f"cost_{scen.name}_fee_efficiency_ratio_short"),
             ]
         )
-        df = pl.concat([df, cdf], how="horizontal")
     weights = load_weights(weights_path)
-    for name, w in weights["weight_sets"].items():
-        df = df.with_columns(
+    cost_cols = [f"cost_{n}_fee_break_even_both_bool" for n in scenario_names]
+    df = df.with_columns(
+        [
+            pl.mean_horizontal([pl.col(c).cast(pl.Float64) for c in cost_cols]).alias(
+                "ex_post_fee_viability_score"
+            ),
             (
-                (pl.col("ex_post_range_survival_ratio") * w["range"])
-                + (pl.col("ex_post_data_complete_score") * w["data"])
-                + ((1 - pl.col("ex_post_sl_risk_score")) * w["sl"])
-                + (pl.col("ex_post_capital_turnover_score") * w["turnover"])
-            ).alias(f"ex_post_proxy_score_v1_{name}")
+                (
+                    pl.col("ex_post_close_cross_activity_lower").cast(pl.Float64)
+                    + pl.col("ex_post_intrabar_touch_activity_upper").cast(pl.Float64)
+                    + pl.col("ex_post_unique_levels_touched").cast(pl.Float64)
+                )
+                / (pl.col("future_horizon_minutes").cast(pl.Float64).clip(1, None))
+            )
+            .clip(0, 1)
+            .alias("ex_post_grid_activity_score"),
+        ]
+    )
+    for name, w in weights["weight_sets"].items():
+        event = (
+            (pl.col("ex_post_range_survival_ratio") * w["range"])
+            + (pl.col("ex_post_data_quality_score") * w["quality"])
+            + (pl.col("ex_post_capital_turnover_score") * w["turnover"])
+        ) / (w["range"] + w["quality"] + w["turnover"])
+        sl = event * 0.7 + (1 - pl.col("ex_post_sl_risk_score").fill_null(1.0)) * 0.3
+        grid = (
+            event * 0.6
+            + pl.col("ex_post_grid_activity_score") * 0.2
+            + pl.col("ex_post_fee_viability_score") * 0.2
         )
-    df = df.with_columns(pl.col("ex_post_proxy_score_v1_balanced").alias("ex_post_proxy_score_v1"))
+        combined = (
+            pl.col("ex_post_range_survival_ratio") * w["range"]
+            + pl.col("ex_post_data_quality_score") * w["quality"]
+            + (1 - pl.col("ex_post_sl_risk_score").fill_null(1.0)) * w["sl"]
+            + pl.col("ex_post_capital_turnover_score") * w["turnover"]
+            + pl.col("ex_post_grid_activity_score") * w["activity"]
+            + pl.col("ex_post_fee_viability_score") * w["cost"]
+        )
+        df = df.with_columns(
+            [
+                event.clip(0, 1).alias(f"ex_post_event_quality_score_v2_{name}"),
+                sl.clip(0, 1).alias(f"ex_post_sl_probe_score_v2_{name}"),
+                grid.clip(0, 1).alias(f"ex_post_grid_probe_score_v2_{name}"),
+                combined.clip(0, 1).alias(f"ex_post_combined_probe_score_v2_{name}"),
+            ]
+        )
+    df = df.with_columns(
+        pl.col("ex_post_combined_probe_score_v2_balanced_v2").alias("ex_post_proxy_score_v1")
+    )
     df.write_parquet(root / "outcome_scoring_dataset.parquet")
     sem = {
         "scoring_semantics_audit_ok": True,
@@ -212,15 +267,37 @@ def build_scoring_dataset(
         encoding="utf-8",
     )
     if cost_config:
-        shutil.copyfile(cost_config, rep / "cost_model_config_resolved.yml")
+        (rep / "cost_model_config_resolved.yml").write_text(
+            json.dumps(
+                {
+                    "cost_model_version": cfg["cost_model_version"],
+                    "cost_formula_version": COST_FORMULA_VERSION,
+                    "fee_snapshot_id_requested": fee_snapshot_id,
+                    "fee_snapshot_id_resolved": meta["fee_snapshot_id_resolved"],
+                    "fee_source": meta["fee_source"],
+                    "fee_coverage_rate": coverage["fee_coverage_rate"],
+                    "scenarios": cfg["scenarios"],
+                    "score_weights_version": weights["score_weights_version"],
+                    "weight_sets": weights["weight_sets"],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     (rep / "cost_model_audit.json").write_text(
         json.dumps(
-            {"cost_model_version": cfg["cost_model_version"], "cost_formulas_audited": True},
+            {
+                "cost_model_version": cfg["cost_model_version"],
+                "cost_model_audit_ok": True,
+                "cost_formulas_audited": True,
+                "cost_formula_version": COST_FORMULA_VERSION,
+                "asymmetric_slippage_normalization": True,
+            },
             indent=2,
         ),
         encoding="utf-8",
     )
-    dists = {n: _dist(df, f"ex_post_proxy_score_v1_{n}") for n in weights["weight_sets"]}
+    dists = {n: _dist(df, f"ex_post_combined_probe_score_v2_{n}") for n in weights["weight_sets"]}
     (rep / "score_sensitivity_report.md").write_text(
         "# Score Sensitivity Report\n\n" + json.dumps({"distributions": dists}, indent=2),
         encoding="utf-8",
@@ -235,6 +312,70 @@ def build_scoring_dataset(
     )
     (rep / "risk_budget_readiness_report.md").write_text(
         "# Risk Budget Status: NOT YET PROVEN\n\nrisk_budget_proven_bool: false\n", encoding="utf-8"
+    )
+    score_cols = [c for c in df.columns if c.startswith("ex_post_") and "score_v2" in c]
+    pl.DataFrame(
+        [
+            {"component": c, "mean": df[c].mean(), "min": df[c].min(), "max": df[c].max()}
+            for c in [
+                "ex_post_data_quality_score",
+                "ex_post_grid_activity_score",
+                "ex_post_fee_viability_score",
+                *score_cols,
+            ]
+            if c in df.columns
+        ]
+    ).write_parquet(rep / "score_component_summary.parquet")
+    corr = {
+        a: {
+            b: {
+                "pearson": df.select(pl.corr(a, b)).item(),
+                "spearman": df.select(pl.corr(pl.col(a).rank(), pl.col(b).rank())).item(),
+            }
+            for b in score_cols
+        }
+        for a in score_cols
+    }
+    (rep / "score_correlation_report.json").write_text(
+        json.dumps({"score_correlation_report_ok": True, "correlations": corr}, indent=2),
+        encoding="utf-8",
+    )
+    cost_rows = []
+    for scen in scenario_names:
+        cost_rows.append(
+            df.group_by(["future_horizon_minutes", "grid_cell_number"])
+            .agg(
+                [
+                    pl.len().alias("row_count"),
+                    pl.col(f"cost_{scen}_fee_break_even_both_bool")
+                    .mean()
+                    .alias("fee_break_even_both_rate"),
+                    pl.col(f"cost_{scen}_net_cycle_return_long_bps_proxy")
+                    .quantile(0.5)
+                    .alias("net_cycle_return_long_bps_proxy_p50"),
+                    pl.col(f"cost_{scen}_net_cycle_return_short_bps_proxy")
+                    .quantile(0.5)
+                    .alias("net_cycle_return_short_bps_proxy_p50"),
+                    pl.col(f"cost_{scen}_fee_efficiency_ratio_long")
+                    .quantile(0.5)
+                    .alias("fee_efficiency_long_p50"),
+                    pl.col(f"cost_{scen}_fee_efficiency_ratio_short")
+                    .quantile(0.5)
+                    .alias("fee_efficiency_short_p50"),
+                ]
+            )
+            .with_columns(pl.lit(scen).alias("scenario"))
+        )
+    (pl.concat(cost_rows, how="diagonal_relaxed") if cost_rows else pl.DataFrame()).write_parquet(
+        rep / "cost_scenario_summary.parquet"
+    )
+    (rep / "cost_scenario_report.md").write_text(
+        "# Cost Scenario Report\n\nOne-cycle proxy diagnostics only; not event PnL.\n",
+        encoding="utf-8",
+    )
+    (rep / "scoring_null_policy.md").write_text(
+        "# Scoring Null Policy\n\nIncomplete future evidence cannot receive perfect data or SL scores; SL risk is null unless SL proxy and future evidence are complete.\n",
+        encoding="utf-8",
     )
     return {
         "rows": df.height,

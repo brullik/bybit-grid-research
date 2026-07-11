@@ -29,11 +29,13 @@ def geometric_cycle_costs(grid_interval_ratio: float, fee_rate: FeeRate, scenari
     slip = scenario.slippage_bps_per_market_leg / 10_000
 
     gross_long = grid_interval_ratio - 1
-    fee_long = entry_fee + exit_fee * grid_interval_ratio + (2 * slip)
+    slippage_long = slip + slip * grid_interval_ratio
+    fee_long = entry_fee + exit_fee * grid_interval_ratio + slippage_long
     net_long = gross_long - fee_long
 
     gross_short = (grid_interval_ratio - 1) / grid_interval_ratio
-    fee_short = entry_fee + (exit_fee / grid_interval_ratio) + (2 * slip)
+    slippage_short = slip + (slip / grid_interval_ratio)
+    fee_short = entry_fee + (exit_fee / grid_interval_ratio) + slippage_short
     net_short = gross_short - fee_short
 
     approx_fee_bps = (entry_fee + exit_fee + 2 * slip) * 10_000
@@ -42,6 +44,8 @@ def geometric_cycle_costs(grid_interval_ratio: float, fee_rate: FeeRate, scenari
         "grid_interval_ratio": grid_interval_ratio,
         "grid_interval_bps": interval_bps,
         "round_trip_fee_bps_approx": approx_fee_bps,
+        "slippage_long_bps_normalized": slippage_long * 10_000,
+        "slippage_short_bps_normalized": slippage_short * 10_000,
         "net_cycle_return_long_bps": net_long * 10_000,
         "net_cycle_return_short_bps": net_short * 10_000,
         "fee_break_even_long_bool": net_long > 0,
