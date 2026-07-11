@@ -101,19 +101,35 @@ class NeutralGridConfig:
             raise ValueError("grid_fill_liquidity_role must be LiquidityRole")
         if not isinstance(self.termination_liquidity_role, LiquidityRole):
             raise ValueError("termination_liquidity_role must be LiquidityRole")
-        for n in ("lower_price", "upper_price", "base_price", "quantity_per_grid_base", "leverage", "maker_fee_rate", "taker_fee_rate", "termination_slippage_bps"):
+        for n in (
+            "lower_price",
+            "upper_price",
+            "base_price",
+            "quantity_per_grid_base",
+            "leverage",
+            "maker_fee_rate",
+            "taker_fee_rate",
+            "termination_slippage_bps",
+        ):
             _finite_decimal(getattr(self, n), n)
         if not (ZERO < self.lower_price < self.base_price < self.upper_price):
             raise ValueError("requires 0 < lower_price < base_price < upper_price")
         if self.quantity_per_grid_base <= ZERO or self.leverage <= ZERO:
             raise ValueError("quantity_per_grid_base and leverage must be > 0")
-        if self.maker_fee_rate < ZERO or self.taker_fee_rate < ZERO or self.termination_slippage_bps < ZERO:
+        if (
+            self.maker_fee_rate < ZERO
+            or self.taker_fee_rate < ZERO
+            or self.termination_slippage_bps < ZERO
+        ):
             raise ValueError("fee rates and slippage must be non-negative")
         if self.termination_slippage_bps >= Decimal("10000"):
             raise ValueError("termination_slippage_bps must be < 10000")
         if self.lower_termination_price is not None:
             _finite_decimal(self.lower_termination_price, "lower_termination_price")
-            if self.lower_termination_price <= ZERO or self.lower_termination_price >= self.lower_price:
+            if (
+                self.lower_termination_price <= ZERO
+                or self.lower_termination_price >= self.lower_price
+            ):
                 raise ValueError("lower termination must be positive and below lower_price")
         if self.upper_termination_price is not None:
             _finite_decimal(self.upper_termination_price, "upper_termination_price")
@@ -130,8 +146,8 @@ class PriceEvent:
     def __post_init__(self) -> None:
         _non_bool_int(self.sequence_id, "sequence_id")
         _non_bool_int(self.time_ms, "time_ms")
-        if self.sequence_id < 0 or self.time_ms < 0:
-            raise ValueError("sequence_id and time_ms must be >= 0")
+        if self.sequence_id < 1 or self.time_ms < 0:
+            raise ValueError("sequence_id must be >= 1 and time_ms must be >= 0")
         _finite_decimal(self.price, "price")
         if self.price <= ZERO:
             raise ValueError("price must be positive")
@@ -147,8 +163,8 @@ class FundingEvent:
     def __post_init__(self) -> None:
         _non_bool_int(self.sequence_id, "sequence_id")
         _non_bool_int(self.time_ms, "time_ms")
-        if self.sequence_id < 0 or self.time_ms < 0:
-            raise ValueError("sequence_id and time_ms must be >= 0")
+        if self.sequence_id < 1 or self.time_ms < 0:
+            raise ValueError("sequence_id must be >= 1 and time_ms must be >= 0")
         _finite_decimal(self.mark_price, "mark_price")
         _finite_decimal(self.funding_rate, "funding_rate")
         if self.mark_price <= ZERO:
@@ -255,7 +271,11 @@ class SimulationResult:
         return abs(self.signed_position) * (self.average_entry - mark_price)
 
     def realized_net_pnl(self) -> Decimal:
-        return self.cumulative_realized_position_pnl_gross_usdt - self.cumulative_trading_fees_usdt + self.cumulative_funding_pnl_usdt
+        return (
+            self.cumulative_realized_position_pnl_gross_usdt
+            - self.cumulative_trading_fees_usdt
+            + self.cumulative_funding_pnl_usdt
+        )
 
     def total_pnl(self, mark_price: Decimal) -> Decimal:
         return self.realized_net_pnl() + self.unrealized_pnl(mark_price)
