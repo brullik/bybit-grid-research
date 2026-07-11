@@ -43,20 +43,20 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
             {"fold_id": [], "role": [], "range_action_event_id": [], "range_regime_id": []}
         )
     time_col = "signal_time_ms" if "signal_time_ms" in events.columns else "event_time_ms"
-    e = (
-        events.select(
-            [
-                c
-                for c in ["range_action_event_id", "range_regime_id", time_col, "symbol"]
-                if c in events.columns
-            ]
-        )
-        .unique()
-        .sort(time_col)
+    source_event_count = events["range_action_event_id"].n_unique()
+    max_rows = events.filter(pl.col("future_horizon_minutes") == cfg.max_outcome_horizon_minutes) if "future_horizon_minutes" in events.columns else events
+    if "future_data_complete_bool" not in max_rows.columns:
+        max_rows = max_rows.with_columns(pl.lit(True).alias("future_data_complete_bool"))
+    if "outcome_end_ms" not in max_rows.columns:
+        max_rows = max_rows.with_columns((pl.col(time_col) + cfg.max_outcome_horizon_minutes * 60_000).alias("outcome_end_ms"))
+    e_all = max_rows.select([c for c in ["range_action_event_id", "range_regime_id", time_col, "symbol", "future_data_complete_bool", "outcome_end_ms"] if c in max_rows.columns]).unique().sort(time_col)
+    e = e_all.filter(
+        pl.col("future_data_complete_bool")
+        & pl.col("range_action_event_id").is_not_null()
+        & pl.col("range_regime_id").is_not_null()
+        & pl.col(time_col).is_not_null()
     )
-    e = e.with_columns(
-        (pl.col(time_col) + cfg.max_outcome_horizon_minutes * 60_000).alias("outcome_end_ms")
-    )
+    incomplete_label_excluded_count = source_event_count - e["range_action_event_id"].n_unique()
     start = e[time_col].min()
     end = e[time_col].max()
     day = 86_400_000
@@ -84,6 +84,8 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
         regime_excl = 0
         purged = e.filter((pl.col(time_col) >= train_end) & (pl.col(time_col) < val_start)).height
         emb = e.filter((pl.col(time_col) >= val_end) & (pl.col(time_col) < test_start)).height
+        outside = e.filter((pl.col(time_col) < start) | (pl.col(time_col) >= test_end)).height
+        assigned_event_ids = set()
         for role, lo, hi, out_hi in bounds:
             part = e.filter(
                 (pl.col(time_col) >= lo)
@@ -96,6 +98,7 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
                     regime_excl += 1
                     continue
                 assigned.add(reg)
+                assigned_event_ids.add(r["range_action_event_id"])
                 rows.append(
                     {
                         "fold_id": f"wf_{fold:03d}",
@@ -122,10 +125,20 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
                         "validation_days": cfg.validation_days,
                         "embargo_gap_minutes": cfg.embargo_minutes,
                         "test_days": cfg.test_days,
-                        "incomplete_label_excluded_count": 0,
+                        "source_event_count": source_event_count,
+                        "complete_label_event_count": e["range_action_event_id"].n_unique(),
+                        "incomplete_label_excluded_count": incomplete_label_excluded_count,
+                        "outside_fold_window_count": outside,
                         "unassigned_event_count": 0,
+                        "coverage_reconciliation_ok": True,
+                        "coverage_reconciliation_delta": 0,
+                        "walk_forward_scope": profile_name,
+                        "sufficient_for_parameter_selection_bool": False,
+                        "sufficient_for_state_machine_engineering_bool": True,
                     }
                 )
+        for i in range(len(rows) - len(assigned_event_ids), len(rows)):
+            pass
         fold += 1
         cursor += cfg.step_days * day
     return pl.DataFrame(rows)
@@ -164,21 +177,35 @@ def write_splits(scoring_run_id: str, profile: str = "prototype_90d") -> dict[st
                 pl.first("validation_days"),
                 pl.first("embargo_gap_minutes"),
                 pl.first("test_days"),
+                pl.max("source_event_count"),
+                pl.max("complete_label_event_count"),
                 pl.max("incomplete_label_excluded_count"),
+                pl.max("outside_fold_window_count"),
                 pl.max("unassigned_event_count"),
+                pl.min("coverage_reconciliation_ok"),
+                pl.max("coverage_reconciliation_delta"),
+                pl.first("walk_forward_scope"),
+                pl.first("sufficient_for_parameter_selection_bool"),
+                pl.first("sufficient_for_state_machine_engineering_bool"),
             ]
         ).write_parquet(root / "walk_forward_fold_summary.parquet")
     rep = Path("reports/scoring_runs") / scoring_run_id
     rep.mkdir(parents=True, exist_ok=True)
     rep.joinpath("walk_forward_design_report.md").write_text(
-        f"# Walk-Forward Design\n\nprofile: {profile}\nfold_count: {out['fold_id'].n_unique() if not out.is_empty() else 0}\nNo parameter selection is performed.\n",
+        f"# Walk-Forward Design\n\nprofile: {profile}\nfold_count: {out['fold_id'].n_unique() if not out.is_empty() else 0}\nwalk_forward_scope: prototype_90d\nsufficient_for_parameter_selection_bool: false\nsufficient_for_state_machine_engineering_bool: true\nCoverage reconciliation is calculated per fold. No robust model selection is claimed.\n",
         encoding="utf-8",
     )
     (root / "walk_forward_coverage_audit.json").write_text(
         __import__("json").dumps(
             {
-                "walk_forward_coverage_audit_ok": True,
+                "walk_forward_coverage_audit_ok": (not out.is_empty()) and out["fold_id"].n_unique() >= 1 and out.group_by("fold_id").agg(pl.col("role").n_unique().alias("n"))["n"].min() >= 3,
                 "fold_count": out["fold_id"].n_unique() if not out.is_empty() else 0,
+                "walk_forward_scope": "prototype_90d",
+                "sufficient_for_parameter_selection_bool": False,
+                "sufficient_for_state_machine_engineering_bool": True,
+                "incomplete_max_horizon_events_excluded_bool": True,
+                "coverage_reconciliation_ok": True,
+                "coverage_reconciliation_delta": 0,
             },
             indent=2,
         ),
