@@ -35,7 +35,13 @@ def add_ex_post_components(df: pl.DataFrame) -> pl.DataFrame:
     term = pl.min_horizontal([exit_min.fill_null(h), sl_min.fill_null(h), coverage.fill_null(h), h])
     out = df.with_columns(
         [
-            (coverage / h).clip(0, 1).fill_null(0).alias("ex_post_data_complete_score"),
+            pl.min_horizontal(
+                [
+                    (coverage / h).clip(0, 1).fill_null(0),
+                    (rows / h).clip(0, 1).fill_null(0),
+                    pl.when(complete).then(1.0).otherwise(0.999),
+                ]
+            ).alias("ex_post_data_complete_score"),
             (
                 _col(df, "future_bad_ohlc_count", 0, pl.Float64)
                 / pl.max_horizontal([rows, pl.lit(1.0)])
@@ -55,7 +61,10 @@ def add_ex_post_components(df: pl.DataFrame) -> pl.DataFrame:
             (sl_valid & ~sl_hit.fill_null(False)).alias("ex_post_sl_survival_bool"),
             sl_min.alias("ex_post_minutes_to_sl"),
             _col(df, "sl_atr_buffer", None, pl.Float64).alias("ex_post_sl_distance_atr"),
-            sl_risk.alias("ex_post_sl_risk_score"),
+            pl.when(sl_valid & complete)
+            .then(sl_risk)
+            .otherwise(None)
+            .alias("ex_post_sl_risk_score"),
             _col(df, "first_sl_ambiguous_bool", False, pl.Boolean)
             .cast(pl.Float64)
             .alias("ex_post_sl_ambiguity_penalty"),
@@ -87,6 +96,9 @@ def add_ex_post_components(df: pl.DataFrame) -> pl.DataFrame:
             pl.lit("NOT_YET_PROVEN").alias("risk_model_status"),
             pl.lit(False).alias("risk_position_path_available_bool"),
             pl.lit(False).alias("risk_budget_proven_bool"),
+            complete.alias("ex_post_event_evidence_complete_bool"),
+            (sl_valid & complete).alias("ex_post_sl_evidence_complete_bool"),
+            complete.alias("ex_post_grid_evidence_complete_bool"),
         ]
     )
     out = out.with_columns(
@@ -108,6 +120,24 @@ def add_ex_post_components(df: pl.DataFrame) -> pl.DataFrame:
             ),
             pl.lit(None).cast(pl.Float64).alias("sl_distance_fraction_from_range_edge"),
             pl.lit(None).cast(pl.Float64).alias("max_single_side_notional_proxy_for_5usdt"),
+            (
+                pl.col("ex_post_data_complete_score")
+                * (1 - pl.col("ex_post_bad_ohlc_rate")).clip(0, 1)
+                * (1 - pl.col("ex_post_ambiguity_penalty")).clip(0, 1)
+            )
+            .clip(0, 1)
+            .alias("ex_post_data_quality_score"),
+            (
+                pl.col("ex_post_event_evidence_complete_bool")
+                & pl.col("ex_post_sl_evidence_complete_bool")
+                & pl.col("ex_post_grid_evidence_complete_bool")
+            ).alias("ex_post_score_eligible_bool"),
+            pl.when(~pl.col("ex_post_event_evidence_complete_bool"))
+            .then(pl.lit("incomplete_future_evidence"))
+            .when(~pl.col("ex_post_sl_evidence_complete_bool"))
+            .then(pl.lit("missing_or_incomplete_sl_evidence"))
+            .otherwise(pl.lit(None))
+            .alias("ex_post_score_incomplete_reason"),
         ]
     )
     return out
