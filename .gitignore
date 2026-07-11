@@ -13,3 +13,6 @@ __pycache__/
 *.log
 .DS_Store
 Thumbs.db
+/pm_review_pack_*.zip
+/bybit-grid-research-main.zip
+/OWNER_RUN_*.txt
