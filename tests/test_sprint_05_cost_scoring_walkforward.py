@@ -232,3 +232,103 @@ def test_walk_forward_boundary_and_cross_role_regime_counts_reconcile():
 def test_review_pack_requires_cost_audit_and_exclusion_summary():
     assert "cost_summary_audit.json" in REQUIRED
     assert "walk_forward_exclusion_reason_summary.parquet" in REQUIRED
+
+
+def test_category_normalization_defaults_source_outcomes_and_grains_include_category():
+    from bybit_grid.research.scoring.outcome_grains import normalize_outcome_category
+
+    df = pl.DataFrame(
+        {
+            "range_action_event_id": ["e1"],
+            "future_horizon_minutes": [60],
+            "grid_cell_number": [5],
+            "sl_atr_buffer": [1.0],
+            "outcome_id": ["o1"],
+            "outcome_match_key": ["m1"],
+            "symbol": ["BTCUSDT"],
+            "signal_time_ms": [1],
+        }
+    )
+    normalized, category_audit = normalize_outcome_category(df)
+    grains, audit = build_outcome_grains(normalized)
+    assert category_audit["category_normalization_ok"] is True
+    assert category_audit["category_source"] == "project_scope_default"
+    assert "category" in grains["event_horizon_grid"].columns
+    assert audit["category_present_by_grain"] == {
+        "event_horizon": True,
+        "event_horizon_sl": True,
+        "event_horizon_grid": True,
+        "expanded_scoring_input": True,
+    }
+    assert audit["category_values_by_grain"] == {
+        "event_horizon": ["linear"],
+        "event_horizon_sl": ["linear"],
+        "event_horizon_grid": ["linear"],
+        "expanded_scoring_input": ["linear"],
+    }
+
+
+def test_category_normalization_rejects_mixed_categories():
+    import pytest
+    from bybit_grid.research.scoring.outcome_grains import normalize_outcome_category
+
+    df = pl.DataFrame({"category": ["linear", "inverse"], "symbol": ["BTCUSDT", "BTCUSD"]})
+    with pytest.raises(ValueError):
+        normalize_outcome_category(df)
+
+
+def test_join_account_fees_success_and_failures():
+    import pytest
+    from bybit_grid.research.scoring.score_builder import join_account_fees
+
+    df = pl.DataFrame({"category": ["linear"], "symbol": ["BTCUSDT"], "x": [1]})
+    fees = pl.DataFrame(
+        {
+            "category": ["linear"],
+            "symbol": ["BTCUSDT"],
+            "maker_fee_rate": [0.0002],
+            "taker_fee_rate": [0.00055],
+            "fee_source": ["account_actual"],
+        }
+    )
+    joined, audit = join_account_fees(df, fees, context="unit")
+    assert joined["maker_fee_rate"].to_list() == [0.0002]
+    assert audit["fee_join_ok"] is True
+
+    with pytest.raises(ValueError):
+        join_account_fees(df.drop("category"), fees, context="missing")
+    with pytest.raises(ValueError):
+        join_account_fees(df.with_columns(pl.lit("inverse").alias("category")), fees, context="mixed")
+    with pytest.raises(ValueError):
+        join_account_fees(
+            df.with_columns(pl.lit("ETHUSDT").alias("symbol")), fees, context="coverage"
+        )
+
+
+def test_checker_missing_zip_returns_json_without_traceback(tmp_path: Path):
+    import json
+    import subprocess
+    import sys
+
+    missing = tmp_path / "missing.zip"
+    res = subprocess.run(
+        [
+            sys.executable,
+            "scripts/check_scoring_review_pack.py",
+            "--zip",
+            str(missing),
+            "--scoring-run-id",
+            "run_x",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert res.returncode != 0
+    payload = json.loads(res.stdout)
+    assert payload == {
+        "review_pack_ok": False,
+        "error": "zip_not_found",
+        "zip": str(missing),
+        "scoring_run_id": "run_x",
+    }
+    assert "Traceback" not in res.stderr
