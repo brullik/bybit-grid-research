@@ -29,6 +29,7 @@ FALSE_FLAGS = {
     "native_termination_mapping_proven_bool": False,
     "liquidation_modeled_bool": False,
     "ohlc_replay_supported_bool": False,
+    "event_path_completeness_proven_bool": False,
     "risk_budget_proven_bool": False,
     "parameter_selection_performed_bool": False,
     "profitability_claims_present_bool": False,
@@ -42,10 +43,7 @@ class NeutralGridReferenceEngine:
         geom = geometric_grid_levels_decimal(
             config.lower_price, config.upper_price, config.grid_cell_number
         )
-        self.levels = tuple(
-            config.base_price if abs(x - config.base_price) <= Decimal("3") else x
-            for x in geom.levels
-        )
+        self.levels = geom.levels
         self.orders: dict[int, GridOrder] = {}
         self.all_orders: list[GridOrder] = []
         self.ledger: list[LedgerEntry] = []
@@ -134,6 +132,8 @@ class NeutralGridReferenceEngine:
         self._last_time = time_ms
 
     def process(self, e: PriceEvent | FundingEvent) -> None:
+        if not isinstance(e, PriceEvent | FundingEvent):
+            raise TypeError("process accepts only PriceEvent or FundingEvent")
         self._guard_event_order(e.sequence_id, e.time_ms)
         self._accept_event_order(e.sequence_id, e.time_ms)
         if isinstance(e, FundingEvent):

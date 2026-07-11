@@ -22,12 +22,15 @@ D = Decimal
 
 
 def cfg(**kw):
+    lower = D("80")
+    upper = D("125")
+    base_price = __import__("bybit_grid.backtest.neutral_grid", fromlist=["geometric_grid_levels_decimal"]).geometric_grid_levels_decimal(lower, upper, 4).levels[2]
     base = dict(
         category="linear",
         symbol="BTCUSDT",
-        lower_price=D("80"),
-        upper_price=D("120"),
-        base_price=D("100"),
+        lower_price=lower,
+        upper_price=upper,
+        base_price=base_price,
         grid_cell_number=4,
         quantity_per_grid_base=D("1"),
         quantity_source=QuantitySource.synthetic_explicit,
@@ -47,7 +50,7 @@ def cfg(**kw):
 def engine_with_cycle():
     e = NeutralGridReferenceEngine(cfg())
     e.process(PriceEvent(1, 1, e.levels[1]))
-    e.process(PriceEvent(2, 2, D("100")))
+    e.process(PriceEvent(2, 2, e.levels[2]))
     return e
 
 
