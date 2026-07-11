@@ -17,3 +17,29 @@ Lower and upper termination prices are abstract risk-termination boundaries. On 
 Leverage affects margin and liquidation mechanics, but for a fixed linear-contract quantity it does not multiply raw PnL or trading fees: PnL is quantity times price difference and fee is quantity times fill price times fee rate.
 
 No Sprint 06.1A result is a profitability claim because it uses synthetic explicit events, no historical parameter selection, no OHLC replay, no native calibration, no liquidation model, and all proof/readiness flags remain false.
+
+## Sprint 06.1A.1 hardening contract additions
+
+### Strict input types
+All reference-core runtime inputs use explicit validation in addition to type annotations. Decimal accounting inputs must be finite `Decimal` instances, never `int`, `float`, `str`, or `bool`. Sequence and time fields must be non-boolean integers greater than or equal to zero. Quantity source and liquidity roles must be their declared enums; plain strings are rejected rather than coerced.
+
+### Result snapshot detachment
+`SimulationResult` is a detached read snapshot. Active-order, all-order, ledger, completed-cycle, initialization-audit, and proof-flag containers returned to callers must not expose engine-owned mutable containers by reference. External mutation attempts must not mutate the engine or any later result snapshot.
+
+### Independent ledger replay audit
+The audit replays ledger rows from canonical zero accounting state instead of trusting cached result totals. It independently reconstructs signed position, weighted average entry, fill position effect, realized gross position PnL, trading fees, funding PnL, cumulative fields after every event, final average entry, and total-PnL identity. The `total_pnl_identity_recomputed_bool` flag is true only when the independent replay and identity checks pass.
+
+### Funding-rate provenance in ledger
+Funding ledger rows carry the source `funding_rate` used to compute funding PnL. The audit uses this explicit provenance and the pre-event position and mark price to recompute funding exactly; it does not infer the rate from cached funding amounts.
+
+### Cycle reconciliation
+Completed grid cycles are independently reconciled to their opening and closing grid-fill ledger rows. Cycle IDs and fill IDs must be unique, open and close fills must be opposite adjacent grid fills in ledger order with equal quantity, and gross/net/fee fields must recompute from ledger prices, quantities, and fees.
+
+### Termination slippage diagnostic
+Termination slippage cost is a diagnostic reconciliation field. It is not subtracted a second time from total PnL because adverse termination execution price already embeds the slippage effect in realized position PnL.
+
+### Post-termination rejection
+Both normal `process()` events and explicit `terminate_now()` events are rejected after termination. Rejected post-termination events must not mutate accepted sequence/time state, ledger rows, order state, position state, or termination summary, apart from the optional rejected-attempt counter.
+
+### Proof-flag audit
+Audit guardrails require all native-equivalence, native quantity mapping, native termination mapping, liquidation, OHLC replay, risk-budget, parameter-selection, profitability-claim, and live-execution readiness flags to remain false. The two-sided termination flag must exactly reflect whether both lower and upper termination prices are configured.

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
+from types import MappingProxyType
+from typing import Mapping
 
 ZERO = Decimal("0")
 
@@ -57,8 +59,13 @@ class QuantitySource(Enum):
 
 
 def _finite_decimal(value: Decimal, name: str) -> None:
-    if not isinstance(value, Decimal) or not value.is_finite():
+    if not isinstance(value, Decimal) or isinstance(value, bool) or not value.is_finite():
         raise ValueError(f"{name} must be a finite Decimal")
+
+
+def _non_bool_int(value: int, name: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{name} must be an int, not bool")
 
 
 @dataclass(frozen=True)
@@ -81,32 +88,26 @@ class NeutralGridConfig:
     upper_termination_price: Decimal | None
 
     def __post_init__(self) -> None:
-        if self.category != "linear":
-            raise ValueError("category must be linear")
-        if not self.symbol:
-            raise ValueError("symbol must be non-empty")
-        for n in (
-            "lower_price",
-            "upper_price",
-            "base_price",
-            "quantity_per_grid_base",
-            "leverage",
-            "maker_fee_rate",
-            "taker_fee_rate",
-            "termination_slippage_bps",
-        ):
+        if type(self.category) is not str or self.category != "linear":
+            raise ValueError("category must be exactly str 'linear'")
+        if type(self.symbol) is not str or self.symbol.strip() == "":
+            raise ValueError("symbol must be a non-empty str")
+        _non_bool_int(self.grid_cell_number, "grid_cell_number")
+        if self.grid_cell_number < 2:
+            raise ValueError("grid_cell_number must be >= 2")
+        if not isinstance(self.quantity_source, QuantitySource):
+            raise ValueError("quantity_source must be QuantitySource")
+        if not isinstance(self.grid_fill_liquidity_role, LiquidityRole):
+            raise ValueError("grid_fill_liquidity_role must be LiquidityRole")
+        if not isinstance(self.termination_liquidity_role, LiquidityRole):
+            raise ValueError("termination_liquidity_role must be LiquidityRole")
+        for n in ("lower_price", "upper_price", "base_price", "quantity_per_grid_base", "leverage", "maker_fee_rate", "taker_fee_rate", "termination_slippage_bps"):
             _finite_decimal(getattr(self, n), n)
         if not (ZERO < self.lower_price < self.base_price < self.upper_price):
             raise ValueError("requires 0 < lower_price < base_price < upper_price")
-        if self.grid_cell_number < 2:
-            raise ValueError("grid_cell_number must be >= 2")
         if self.quantity_per_grid_base <= ZERO or self.leverage <= ZERO:
             raise ValueError("quantity_per_grid_base and leverage must be > 0")
-        if (
-            self.maker_fee_rate < ZERO
-            or self.taker_fee_rate < ZERO
-            or self.termination_slippage_bps < ZERO
-        ):
+        if self.maker_fee_rate < ZERO or self.taker_fee_rate < ZERO or self.termination_slippage_bps < ZERO:
             raise ValueError("fee rates and slippage must be non-negative")
         if self.lower_termination_price is not None:
             _finite_decimal(self.lower_termination_price, "lower_termination_price")
@@ -125,6 +126,10 @@ class PriceEvent:
     price: Decimal
 
     def __post_init__(self) -> None:
+        _non_bool_int(self.sequence_id, "sequence_id")
+        _non_bool_int(self.time_ms, "time_ms")
+        if self.sequence_id < 0 or self.time_ms < 0:
+            raise ValueError("sequence_id and time_ms must be >= 0")
         _finite_decimal(self.price, "price")
         if self.price <= ZERO:
             raise ValueError("price must be positive")
@@ -138,6 +143,10 @@ class FundingEvent:
     funding_rate: Decimal
 
     def __post_init__(self) -> None:
+        _non_bool_int(self.sequence_id, "sequence_id")
+        _non_bool_int(self.time_ms, "time_ms")
+        if self.sequence_id < 0 or self.time_ms < 0:
+            raise ValueError("sequence_id and time_ms must be >= 0")
         _finite_decimal(self.mark_price, "mark_price")
         _finite_decimal(self.funding_rate, "funding_rate")
         if self.mark_price <= ZERO:
@@ -183,6 +192,7 @@ class LedgerEntry:
     cumulative_completed_grid_cycle_gross_usdt: Decimal
     cumulative_trading_fees_usdt: Decimal
     cumulative_funding_pnl_usdt: Decimal
+    funding_rate: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -214,10 +224,10 @@ class TerminationSummary:
 class SimulationResult:
     config: NeutralGridConfig
     levels: tuple[Decimal, ...]
-    active_orders: dict[int, GridOrder]
-    all_orders: list[GridOrder]
-    ledger: list[LedgerEntry]
-    completed_cycles: list[CompletedGridCycle]
+    active_orders: Mapping[int, GridOrder]
+    all_orders: tuple[GridOrder, ...]
+    ledger: tuple[LedgerEntry, ...]
+    completed_cycles: tuple[CompletedGridCycle, ...]
     signed_position: Decimal
     average_entry: Decimal | None
     cumulative_realized_position_pnl_gross_usdt: Decimal
@@ -227,13 +237,15 @@ class SimulationResult:
     last_price: Decimal
     terminated_bool: bool
     termination: TerminationSummary
-    initialization_audit: dict[str, bool]
-    proof_flags: dict[str, bool]
+    initialization_audit: Mapping[str, bool]
+    proof_flags: Mapping[str, bool]
     events_rejected_after_termination_count: int = 0
     geometry_rounding_applied_bool: bool = False
 
     def unrealized_pnl(self, mark_price: Decimal) -> Decimal:
         _finite_decimal(mark_price, "mark_price")
+        if mark_price <= ZERO:
+            raise ValueError("mark_price must be positive")
         if self.signed_position == ZERO or self.average_entry is None:
             return ZERO
         if self.signed_position > ZERO:
@@ -241,11 +253,11 @@ class SimulationResult:
         return abs(self.signed_position) * (self.average_entry - mark_price)
 
     def realized_net_pnl(self) -> Decimal:
-        return (
-            self.cumulative_realized_position_pnl_gross_usdt
-            - self.cumulative_trading_fees_usdt
-            + self.cumulative_funding_pnl_usdt
-        )
+        return self.cumulative_realized_position_pnl_gross_usdt - self.cumulative_trading_fees_usdt + self.cumulative_funding_pnl_usdt
 
     def total_pnl(self, mark_price: Decimal) -> Decimal:
         return self.realized_net_pnl() + self.unrealized_pnl(mark_price)
+
+
+def readonly_bool_map(values: Mapping[str, bool]) -> Mapping[str, bool]:
+    return MappingProxyType(dict(values))
