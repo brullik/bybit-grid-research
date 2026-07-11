@@ -24,19 +24,19 @@ def geometric_cycle_costs(grid_interval_ratio: float, fee_rate: FeeRate, scenari
     """
     if grid_interval_ratio <= 1:
         raise ValueError("grid_interval_ratio must be greater than 1")
-    buy_fee = _select_fee(fee_rate, scenario.entry_fee_source)
-    sell_fee = _select_fee(fee_rate, scenario.exit_fee_source)
+    entry_fee = _select_fee(fee_rate, scenario.entry_fee_source)
+    exit_fee = _select_fee(fee_rate, scenario.exit_fee_source)
     slip = scenario.slippage_bps_per_market_leg / 10_000
 
     gross_long = grid_interval_ratio - 1
-    fee_long = buy_fee + sell_fee * grid_interval_ratio + (2 * slip)
+    fee_long = entry_fee + exit_fee * grid_interval_ratio + (2 * slip)
     net_long = gross_long - fee_long
 
     gross_short = (grid_interval_ratio - 1) / grid_interval_ratio
-    fee_short = sell_fee + (buy_fee / grid_interval_ratio) + (2 * slip)
+    fee_short = entry_fee + (exit_fee / grid_interval_ratio) + (2 * slip)
     net_short = gross_short - fee_short
 
-    approx_fee_bps = (buy_fee + sell_fee + 2 * slip) * 10_000
+    approx_fee_bps = (entry_fee + exit_fee + 2 * slip) * 10_000
     interval_bps = (grid_interval_ratio - 1) * 10_000
     return {
         "grid_interval_ratio": grid_interval_ratio,
