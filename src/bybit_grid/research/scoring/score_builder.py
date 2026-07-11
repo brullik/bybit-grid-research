@@ -194,7 +194,26 @@ def build_scoring_dataset(
     root = Path("data/processed/scoring_runs") / scoring_run_id
     _write_status(root, {"status": "building", "scoring_run_id": scoring_run_id, "source_outcome_run_id": source_outcome_run_id})
     try:
-        return _build_scoring_dataset_impl(input_path, scoring_run_id, weights_path, fee_snapshot_id, cost_config, source_outcome_run_id)
+        result = _build_scoring_dataset_impl(
+            input_path, scoring_run_id, weights_path, fee_snapshot_id, cost_config, source_outcome_run_id
+        )
+        required_artifacts = [
+            root / "outcome_scoring_dataset.parquet",
+            root / "fee_coverage_audit.json",
+            root / "scoring_semantics_audit.json",
+            root / "cost_summary_audit.json",
+            root / "fee_join_context_audit.json",
+        ]
+        missing = [str(path) for path in required_artifacts if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"required scoring artifacts missing before completion: {missing}")
+        _write_status(root, {
+            "status": "complete",
+            "scoring_run_id": scoring_run_id,
+            "source_outcome_run_id": source_outcome_run_id,
+            "completed_at_utc": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+        })
+        return result
     except Exception as exc:
         _write_status(root, {"status": "failed", "scoring_run_id": scoring_run_id, "source_outcome_run_id": source_outcome_run_id, "failed_stage": "build_scoring_dataset", "error_type": type(exc).__name__, "error_summary": str(exc)[:500]})
         raise
@@ -597,13 +616,6 @@ def _build_scoring_dataset_impl(
         "# Scoring Null Policy\n\nIncomplete evidence is excluded from ranking: canonical v3 ranking scores are null when ex_post_score_eligible_bool=false. Conservative all-row diagnostics are not ranking scores.\n",
         encoding="utf-8",
     )
-    _write_status(root, {
-        "status": "complete",
-        "scoring_run_id": scoring_run_id,
-        "source_outcome_run_id": source_outcome_run_id,
-        "rows": df.height,
-        "completed_at_utc": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
-    })
     return {
         "rows": df.height,
         "risk_budget_proven_bool": False,

@@ -35,6 +35,7 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
             "cost_model_audit_ok": True,
             "fee_snapshot_id_resolved": "snap",
             "fee_source": "account_actual",
+            "cost_formula_version": "cost_formula_v2_asymmetric_slippage",
             "risk_budget_proven_bool": False,
         },
         "cost_summary_audit.json": {
@@ -44,8 +45,12 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
             "cost_summary_dimension_multiplication_detected_bool": False,
             "cost_summary_source_rows": 1,
         },
-        "scoring_run_status.json": {"status": "complete", "scoring_run_id": run_id},
-        "outcome_source_audit.json": {"source_audit_ok": True},
+        "scoring_run_status.json": {
+            "status": "complete",
+            "scoring_run_id": run_id,
+            "source_outcome_run_id": "outcome_x",
+        },
+        "outcome_source_audit.json": {"source_audit_ok": True, "source_outcome_run_id": "outcome_x"},
         "outcome_grain_audit.json": {"grain_audit_ok": True, "rows": {"expanded_scoring_input": 2}},
         "outcome_cartesian_completeness_audit.json": {"cartesian_completeness_ok": True},
         "outcome_grain_contract_audit.json": {
@@ -59,6 +64,7 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
         "scoring_semantics_audit.json": {
             "scoring_semantics_audit_ok": True,
             "canonical_score_version": "v3",
+            "source_outcome_run_id": "outcome_x",
             "risk_budget_proven_bool": False,
         },
         "walk_forward_coverage_audit.json": {
@@ -145,6 +151,12 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
         "parameter_selection_authorized_bool": False,
         "live_authorized_bool": False,
         "scoring_run_id": run_id,
+        "source_outcome_run_id": "outcome_x",
+        "fee_snapshot_id_resolved": "snap",
+        "cost_formula_version": "cost_formula_v2_asymmetric_slippage",
+        "grain_contract_version": "grain_contract_v3_whole_row",
+        "canonical_score_version": "v3",
+        "risk_budget_proven_bool": False,
         "members": sorted(REQUIRED),
         "sha256": sha,
     }
@@ -154,6 +166,45 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
         for name in sorted(REQUIRED):
             z.write(root / name, name)
     return zpath
+
+
+def _mutate_manifest(zpath: Path, tmp_path: Path, field: str, value: object) -> Path:
+    tampered = tmp_path / f"tampered_{field}.zip"
+    with zipfile.ZipFile(zpath) as src, zipfile.ZipFile(tampered, "w") as dst:
+        manifest = json.loads(src.read("review_pack_manifest.json"))
+        manifest[field] = value
+        for name in src.namelist():
+            if name == "review_pack_manifest.json":
+                dst.writestr(name, json.dumps(manifest, sort_keys=True).encode())
+            else:
+                dst.writestr(name, src.read(name))
+    return tampered
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("risk_budget_proven_bool", True, "manifest_risk_budget_proven_bool"),
+        ("canonical_score_version", "v999", "manifest_canonical_score_version"),
+        ("grain_contract_version", "wrong", "manifest_grain_contract_version"),
+        ("source_outcome_run_id", "other", "manifest_source_outcome_run_id"),
+        ("fee_snapshot_id_resolved", "other", "manifest_fee_snapshot_id_resolved"),
+        ("cost_formula_version", "other", "manifest_cost_formula_version"),
+        ("parameter_selection_authorized_bool", True, "parameter_selection_authorized_bool"),
+        ("live_authorized_bool", True, "live_authorized_bool"),
+    ],
+)
+def test_checker_rejects_self_excluded_manifest_tampering(
+    tmp_path: Path, field: str, value: object, error: str
+):
+    zpath = _valid_pack(tmp_path)
+    tampered = _mutate_manifest(zpath, tmp_path, field, value)
+
+    res = check_zip(str(tampered), "run_x")
+
+    assert res["review_pack_ok"] is False
+    assert error in res["consistency_errors"]
+    assert res["hash_mismatches"] == []
 
 
 def test_checker_requires_and_validates_new_audits_and_manifest_hashes(tmp_path: Path):
@@ -231,3 +282,119 @@ def test_no_live_create_close_order_telegram_additions():
     from bybit_grid.common.source_safety_audit import audit_source_tree
 
     assert audit_source_tree(Path.cwd()).ok
+
+
+
+def test_make_pack_refuses_missing_fee_join_when_category_audit_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts.make_scoring_review_pack import make_pack
+
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data/processed/scoring_runs/run_x"
+    data.mkdir(parents=True)
+    (data / "scoring_run_status.json").write_text(
+        json.dumps({"status": "complete", "scoring_run_id": "run_x"})
+    )
+    (data / "cost_summary_audit.json").write_text(json.dumps({"cost_summary_audit_ok": True}))
+    (data / "scoring_semantics_audit.json").write_text(
+        json.dumps({"scoring_semantics_audit_ok": True})
+    )
+    (data / "outcome_category_normalization_audit.json").write_text(
+        json.dumps({"category_normalization_ok": True})
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        make_pack("run_x")
+
+    payload = json.loads(str(exc.value))
+    assert payload["error"] == "missing_required_preflight"
+    assert payload["path"].endswith("fee_join_context_audit.json")
+
+
+def test_make_pack_refuses_missing_category_audit_when_fee_join_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from scripts.make_scoring_review_pack import make_pack
+
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data/processed/scoring_runs/run_x"
+    data.mkdir(parents=True)
+    (data / "scoring_run_status.json").write_text(
+        json.dumps({"status": "complete", "scoring_run_id": "run_x"})
+    )
+    (data / "cost_summary_audit.json").write_text(json.dumps({"cost_summary_audit_ok": True}))
+    (data / "scoring_semantics_audit.json").write_text(
+        json.dumps({"scoring_semantics_audit_ok": True})
+    )
+    (data / "fee_join_context_audit.json").write_text(
+        json.dumps(
+            {
+                "expanded_scoring_input": {"fee_join_ok": True},
+                "cost_summary_event_horizon_grid": {"fee_join_ok": True},
+            }
+        )
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        make_pack("run_x")
+
+    payload = json.loads(str(exc.value))
+    assert payload["error"] == "missing_required_preflight"
+    assert payload["path"].endswith("outcome_category_normalization_audit.json")
+
+
+def test_build_scoring_dataset_writes_complete_only_after_required_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import bybit_grid.research.scoring.score_builder as sb
+
+    monkeypatch.chdir(tmp_path)
+
+    def controlled_impl(*args, **kwargs):
+        root = Path("data/processed/scoring_runs/run_ok")
+        status = json.loads((root / "scoring_run_status.json").read_text())
+        assert status["status"] == "building"
+        assert not (root / "outcome_scoring_dataset.parquet").exists()
+        pl.DataFrame({"x": [1]}).write_parquet(root / "outcome_scoring_dataset.parquet")
+        for name in [
+            "fee_coverage_audit.json",
+            "scoring_semantics_audit.json",
+            "cost_summary_audit.json",
+            "fee_join_context_audit.json",
+        ]:
+            (root / name).write_text(json.dumps({"ok": True}))
+        return {"rows": 1, "risk_budget_proven_bool": False}
+
+    monkeypatch.setattr(sb, "_build_scoring_dataset_impl", controlled_impl)
+
+    result = sb.build_scoring_dataset(Path("in.parquet"), "run_ok")
+
+    status = json.loads(Path("data/processed/scoring_runs/run_ok/scoring_run_status.json").read_text())
+    assert result["rows"] == 1
+    assert status["status"] == "complete"
+    assert status["scoring_run_id"] == "run_ok"
+
+
+def test_build_scoring_dataset_failed_status_never_remains_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import bybit_grid.research.scoring.score_builder as sb
+
+    monkeypatch.chdir(tmp_path)
+
+    def writes_complete_then_boom(*args, **kwargs):
+        root = Path("data/processed/scoring_runs/run_fail")
+        sb._write_status(root, {"status": "complete", "scoring_run_id": "run_fail"})
+        raise RuntimeError("deliberate")
+
+    monkeypatch.setattr(sb, "_build_scoring_dataset_impl", writes_complete_then_boom)
+
+    with pytest.raises(RuntimeError):
+        sb.build_scoring_dataset(Path("in.parquet"), "run_fail")
+
+    status = json.loads(
+        Path("data/processed/scoring_runs/run_fail/scoring_run_status.json").read_text()
+    )
+    assert status["status"] == "failed"
+    assert status["error_summary"] == "deliberate"
