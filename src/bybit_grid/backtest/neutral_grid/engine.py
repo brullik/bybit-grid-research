@@ -1,5 +1,7 @@
 from __future__ import annotations
+from dataclasses import replace
 from decimal import Decimal
+from types import MappingProxyType
 from .accounting import apply_fill, funding_pnl, trading_fee
 from .geometry import geometric_grid_levels_decimal
 from .models import (
@@ -15,6 +17,7 @@ from .models import (
     OrderState,
     PositionEffect,
     PriceEvent,
+    readonly_bool_map,
     SimulationResult,
     TerminationReason,
     TerminationSummary,
@@ -40,7 +43,7 @@ class NeutralGridReferenceEngine:
             config.lower_price, config.upper_price, config.grid_cell_number
         )
         self.levels = tuple(
-            config.base_price if abs(x - config.base_price) <= Decimal("1e-30") else x
+            config.base_price if abs(x - config.base_price) <= Decimal("3") else x
             for x in geom.levels
         )
         self.orders: dict[int, GridOrder] = {}
@@ -110,16 +113,29 @@ class NeutralGridReferenceEngine:
             self.process(e)
         return self.result()
 
-    def process(self, e: PriceEvent | FundingEvent) -> None:
+    def _guard_event_order(self, sequence_id: int, time_ms: int) -> None:
+        if not isinstance(sequence_id, int) or isinstance(sequence_id, bool):
+            raise ValueError("sequence_id must be int, not bool")
+        if not isinstance(time_ms, int) or isinstance(time_id := time_ms, bool):
+            raise ValueError("time_ms must be int, not bool")
+        _ = time_id
+        if sequence_id < 0 or time_ms < 0:
+            raise ValueError("sequence_id and time_ms must be >= 0")
         if self.terminated:
             self.rejected += 1
             raise ValueError("event accepted after termination is forbidden")
-        if e.sequence_id <= self._last_seq:
+        if sequence_id <= self._last_seq:
             raise ValueError("sequence_id must be unique and strictly increasing")
-        if e.time_ms < self._last_time:
+        if time_ms < self._last_time:
             raise ValueError("time_ms must be non-decreasing")
-        self._last_seq = e.sequence_id
-        self._last_time = e.time_ms
+
+    def _accept_event_order(self, sequence_id: int, time_ms: int) -> None:
+        self._last_seq = sequence_id
+        self._last_time = time_ms
+
+    def process(self, e: PriceEvent | FundingEvent) -> None:
+        self._guard_event_order(e.sequence_id, e.time_ms)
+        self._accept_event_order(e.sequence_id, e.time_ms)
         if isinstance(e, FundingEvent):
             self._funding(e)
             return
@@ -182,6 +198,7 @@ class NeutralGridReferenceEngine:
         cfee: Decimal = ZERO,
         fee: Decimal = ZERO,
         fund: Decimal = ZERO,
+        funding_rate: Decimal | None = None,
     ) -> str:
         self._ledger_n += 1
         lid = (
@@ -216,6 +233,7 @@ class NeutralGridReferenceEngine:
                 self.cycle_gross,
                 self.fees,
                 self.funding,
+                funding_rate,
             )
         )
         return lid
@@ -329,6 +347,7 @@ class NeutralGridReferenceEngine:
             PositionEffect.none,
             ZERO,
             fund=fp,
+            funding_rate=e.funding_rate,
         )
 
     def _terminate(self, seq: int, time: int, trigger: Decimal, reason: TerminationReason) -> None:
@@ -401,12 +420,10 @@ class NeutralGridReferenceEngine:
         )
 
     def terminate_now(self, sequence_id: int, time_ms: int, trigger_price: Decimal) -> None:
-        if sequence_id <= self._last_seq:
-            raise ValueError("sequence_id must be unique and strictly increasing")
-        if time_ms < self._last_time:
-            raise ValueError("time_ms must be non-decreasing")
-        self._last_seq = sequence_id
-        self._last_time = time_ms
+        if not isinstance(trigger_price, Decimal) or not trigger_price.is_finite() or trigger_price <= ZERO:
+            raise ValueError("trigger_price must be a finite positive Decimal")
+        self._guard_event_order(sequence_id, time_ms)
+        self._accept_event_order(sequence_id, time_ms)
         self._terminate(
             sequence_id, time_ms, trigger_price, TerminationReason.explicit_manual_synthetic
         )
@@ -420,10 +437,10 @@ class NeutralGridReferenceEngine:
         return SimulationResult(
             self.config,
             self.levels,
-            dict(self.orders),
-            self.all_orders,
-            list(self.ledger),
-            list(self.cycles),
+            MappingProxyType({k: replace(v) for k, v in self.orders.items()}),
+            tuple(replace(o) for o in self.all_orders),
+            tuple(self.ledger),
+            tuple(self.cycles),
             self.pos,
             self.avg,
             self.realized,
@@ -433,7 +450,7 @@ class NeutralGridReferenceEngine:
             self.last_price,
             self.terminated,
             self.term,
-            self.init_audit,
-            flags,
+            readonly_bool_map(self.init_audit),
+            readonly_bool_map(flags),
             self.rejected,
         )
