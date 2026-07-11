@@ -22,6 +22,9 @@ BASE = [
     "outcome_quality_summary.parquet",
     "outcome_perf.json",
     "outcome_semantic_audit.json",
+    "outcome_input_hygiene.json",
+    "outcome_input_hygiene_by_symbol.parquet",
+    "outcome_core_equivalence_report.json",
 ]
 
 
@@ -47,6 +50,9 @@ def main() -> None:
     summary_dir = Path("data/processed/outcome_runs") / rid / "summary"
     report_dir = Path("reports/outcome_runs") / rid
     run_kind = args.run_kind or infer_run_kind(rid, summary_dir)
+    eq_path = summary_dir / "outcome_core_equivalence_report.json"
+    if not eq_path.exists() and Path("outcome_core_equivalence_report.json").exists():
+        eq_path.write_text(Path("outcome_core_equivalence_report.json").read_text())
     required = list(BASE) + (
         ["outcome_grid_serialization_repair_report.json"] if run_kind == "repair" else []
     )
@@ -64,6 +70,8 @@ def main() -> None:
         "members": sorted(required + ["review_pack_manifest.json"]),
         "outcome_rows_total": int(perf.get("outcome_rows_total", 0)),
         "semantic_audit_ok": bool(audit.get("semantic_audit_ok")),
+        "input_hygiene_ok": json.loads((summary_dir / "outcome_input_hygiene.json").read_text()).get("input_hygiene_ok"),
+        "equivalence_ok": json.loads((summary_dir / "outcome_core_equivalence_report.json").read_text()).get("equivalence_ok"),
         "created_at_utc": datetime.now(UTC).isoformat(),
     }
     manifest_path = summary_dir / "review_pack_manifest.json"

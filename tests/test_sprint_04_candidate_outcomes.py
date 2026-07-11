@@ -120,6 +120,9 @@ def _write_minimal_review_pack(path: Path, perf: dict) -> None:
         z.writestr("outcome_perf.json", json.dumps(perf))
         z.writestr("outcome_semantic_audit.md", "# audit\n")
         z.writestr("outcome_semantic_audit.json", json.dumps({"semantic_audit_ok": True, "outcome_semantics_version": "v4_native_grid_geometry", "checks": {"grid_count_rows_failed": 0}}))
+        z.writestr("outcome_input_hygiene.json", json.dumps({"input_hygiene_ok": True}))
+        z.writestr("outcome_input_hygiene_by_symbol.parquet", b"placeholder")
+        z.writestr("outcome_core_equivalence_report.json", json.dumps({"equivalence_ok": True}))
         z.writestr("outcome_grid_serialization_repair_report.json", json.dumps({"non_grid_drift_count": 0, "semantic_audit_ok": True}))
 
 
