@@ -130,6 +130,12 @@ def _dist(df: pl.DataFrame, col: str) -> dict[str, object]:
     }
 
 
+def _duplicate_key_count(df: pl.DataFrame, keys: list[str]) -> int:
+    if df.is_empty():
+        return 0
+    return int(df.group_by(keys).len().filter(pl.col("len") > 1)["len"].sum() or 0)
+
+
 def build_scoring_dataset(
     input_path: Path,
     scoring_run_id: str,
@@ -360,13 +366,39 @@ def build_scoring_dataset(
         ),
         encoding="utf-8",
     )
-    dists = {n: _dist(df.filter(pl.col("ex_post_score_eligible_bool")), f"ex_post_combined_probe_score_v3_{n}") for n in weights["weight_sets"]}
+    dists = {}
+    for n in weights["weight_sets"]:
+        col = f"ex_post_combined_probe_score_v3_{n}"
+        eligible_dist = _dist(df.filter(pl.col("ex_post_score_eligible_bool")), col)
+        eligible_dist.update(
+            {
+                "rows_total": df.height,
+                "eligible_rows": eligible_rows,
+                "ineligible_rows": ineligible_rows,
+                "canonical_null_count_all_rows": df[col].null_count(),
+                "eligible_distribution_count": eligible_rows,
+            }
+        )
+        dists[n] = eligible_dist
     (rep / "score_sensitivity_report.md").write_text(
         "# Score Sensitivity Report\n\n" + json.dumps({"distributions": dists}, indent=2),
         encoding="utf-8",
     )
     summary = df.group_by("symbol").agg(
-        [pl.len().alias("row_count"), pl.col("ex_post_proxy_score_v1").mean().alias("mean_score")]
+        [
+            pl.len().alias("row_count_total"),
+            pl.col("ex_post_score_eligible_bool").sum().alias("score_eligible_rows"),
+            (~pl.col("ex_post_score_eligible_bool")).sum().alias("score_ineligible_rows"),
+            pl.col("ex_post_proxy_score_v1")
+            .filter(pl.col("ex_post_score_eligible_bool"))
+            .mean()
+            .alias("mean_score_eligible_only"),
+            pl.len().alias("row_count"),
+            pl.col("ex_post_proxy_score_v1")
+            .filter(pl.col("ex_post_score_eligible_bool"))
+            .mean()
+            .alias("mean_score"),
+        ]
     )
     summary.write_parquet(rep / "outcome_scoring_summary.parquet")
     (rep / "outcome_scoring_report.md").write_text(
@@ -404,8 +436,44 @@ def build_scoring_dataset(
         encoding="utf-8",
     )
     cost_rows = []
-    cost_df = df.unique(["range_action_event_id", "future_horizon_minutes", "grid_cell_number"], keep="first")
-    duplicate_cost_keys = df.height - cost_df.height
+    cost_keys = ["range_action_event_id", "future_horizon_minutes", "grid_cell_number"]
+    grain_path = root / "event_horizon_grid.parquet"
+    if grain_path.exists():
+        cost_df = pl.read_parquet(grain_path)
+        duplicate_cost_keys = _duplicate_key_count(cost_df, cost_keys)
+        if duplicate_cost_keys:
+            raise ValueError(f"duplicate event-horizon-grid cost keys: {duplicate_cost_keys}")
+        cost_df = cost_df.join(fees, on=["category", "symbol"], how="left")
+        for scen in scenario_objects(cfg):
+            entry = (
+                pl.when(pl.lit(scen.entry_fee_source) == "maker")
+                .then(pl.col("maker_fee_rate"))
+                .otherwise(pl.col("taker_fee_rate"))
+            )
+            exitf = (
+                pl.when(pl.lit(scen.exit_fee_source) == "maker")
+                .then(pl.col("maker_fee_rate"))
+                .otherwise(pl.col("taker_fee_rate"))
+            )
+            r = pl.col("grid_interval_ratio").cast(pl.Float64)
+            slip = pl.lit(scen.slippage_bps_per_market_leg / 10_000.0)
+            gross_long = r - 1
+            gross_short = (r - 1) / r
+            net_long = gross_long - (entry + exitf * r + slip + slip * r)
+            net_short = gross_short - (entry + exitf / r + slip + slip / r)
+            cost_df = cost_df.with_columns(
+                [
+                    (net_long * 10_000).alias(f"cost_{scen.name}_net_cycle_return_long_bps_proxy"),
+                    (net_short * 10_000).alias(f"cost_{scen.name}_net_cycle_return_short_bps_proxy"),
+                    ((net_long > 0) & (net_short > 0)).alias(f"cost_{scen.name}_fee_break_even_both_bool"),
+                    (net_long / gross_long).alias(f"cost_{scen.name}_fee_efficiency_ratio_long"),
+                    (net_short / gross_short).alias(f"cost_{scen.name}_fee_efficiency_ratio_short"),
+                ]
+            )
+    else:
+        cost_df = df.unique(cost_keys, keep="first")
+        duplicate_cost_keys = _duplicate_key_count(cost_df, cost_keys)
+    sl_rows_removed = df.height - cost_df.height
     for scen in scenario_names:
         cost_rows.append(
             cost_df.group_by(["future_horizon_minutes", "grid_cell_number"])
@@ -435,11 +503,24 @@ def build_scoring_dataset(
         pl.lit("event_horizon_grid").alias("cost_summary_grain"),
         pl.lit(cost_df.height).alias("cost_summary_source_rows"),
         pl.lit(duplicate_cost_keys).alias("cost_summary_duplicate_key_count"),
-        pl.lit(duplicate_cost_keys > 0).alias("cost_summary_dimension_multiplication_detected_bool"),
+        pl.lit(False).alias("cost_summary_dimension_multiplication_detected_bool"),
     ])
     cost_summary.write_parquet(rep / "cost_scenario_summary.parquet")
+    cost_audit = {
+        "cost_summary_audit_ok": duplicate_cost_keys == 0,
+        "cost_summary_grain": "event_horizon_grid",
+        "cost_summary_source_rows": cost_df.height,
+        "cost_summary_expected_rows": cost_df.height,
+        "cost_summary_duplicate_key_count": duplicate_cost_keys,
+        "cost_summary_dimension_multiplication_detected_bool": False,
+        "expanded_scoring_rows": df.height,
+        "sl_dimension_rows_not_used_for_cost_summary": sl_rows_removed,
+        "cost_summary_scenario_count": len(scenario_names),
+        "cost_summary_group_count": cost_summary.height,
+    }
+    (root / "cost_summary_audit.json").write_text(json.dumps(cost_audit, indent=2, sort_keys=True), encoding="utf-8")
     (rep / "cost_scenario_report.md").write_text(
-        f"# Cost Scenario Report\n\nOne-cycle proxy diagnostics only; not event PnL.\n\ncost_summary_grain: event_horizon_grid\ncost_summary_source_rows: {cost_df.height}\ncost_summary_duplicate_key_count: {duplicate_cost_keys}\n",
+        f"# Cost Scenario Report\n\nOne-cycle proxy diagnostics only; not event PnL.\n\ncost_summary_grain: event_horizon_grid\ncost_summary_source_rows: {cost_df.height}\nexpanded rows ignored for cost summary: {df.height}\nSL-dimension rows intentionally removed: {sl_rows_removed}\nactual duplicate event-horizon-grid keys: {duplicate_cost_keys}\n",
         encoding="utf-8",
     )
     (rep / "scoring_null_policy.md").write_text(

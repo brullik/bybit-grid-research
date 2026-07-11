@@ -39,9 +39,11 @@ class SplitProfile:
 def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> pl.DataFrame:
     cfg = SplitProfile(**PROFILES[profile_name])
     if events.is_empty():
-        return pl.DataFrame(
+        out = pl.DataFrame(
             {"fold_id": [], "role": [], "range_action_event_id": [], "range_regime_id": []}
         )
+        out.attrs = {"fold_summary": [], "reason_summary": []}
+        return out
     time_col = "signal_time_ms" if "signal_time_ms" in events.columns else "event_time_ms"
     source_event_count = events["range_action_event_id"].n_unique()
     max_rows = events.filter(pl.col("future_horizon_minutes") == cfg.max_outcome_horizon_minutes) if "future_horizon_minutes" in events.columns else events
@@ -61,6 +63,8 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
     end = e[time_col].max()
     day = 86_400_000
     rows = []
+    summary_rows = []
+    reason_rows = []
     fold = 0
     cursor = start + cfg.min_train_days * day
     while (
@@ -80,31 +84,49 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
             ("validation", val_start, val_end, val_end),
             ("test", test_start, test_end, test_end),
         ]
-        assigned = set()
-        regime_excl = 0
-        purged = e.filter((pl.col(time_col) >= train_end) & (pl.col(time_col) < val_start)).height
-        emb = e.filter((pl.col(time_col) >= val_end) & (pl.col(time_col) < test_start)).height
-        outside = e.filter((pl.col(time_col) < start) | (pl.col(time_col) >= test_end)).height
-        assigned_event_ids = set()
-        for role, lo, hi, out_hi in bounds:
-            part = e.filter(
-                (pl.col(time_col) >= lo)
-                & (pl.col(time_col) < hi)
-                & (pl.col("outcome_end_ms") <= out_hi)
-            )
-            for r in part.iter_rows(named=True):
-                reg = r.get("range_regime_id")
-                if reg in assigned:
-                    regime_excl += 1
-                    continue
-                assigned.add(reg)
-                assigned_event_ids.add(r["range_action_event_id"])
+        categories = {r["range_action_event_id"]: "incomplete_max_horizon" for r in e_all.filter(~pl.col("future_data_complete_bool")).iter_rows(named=True)}
+        tentative: list[dict[str, object]] = []
+        boundary_counts = {"train": 0, "validation": 0, "test": 0}
+        for r in e.iter_rows(named=True):
+            t = r[time_col]
+            eid = r["range_action_event_id"]
+            role = None
+            role_end = None
+            if t < start or t >= test_end:
+                categories[eid] = "outside_fold_window"
+            elif train_end <= t < val_start:
+                categories[eid] = "purge_gap"
+            elif val_end <= t < test_start:
+                categories[eid] = "embargo_gap"
+            else:
+                for b_role, lo, hi, out_hi in bounds:
+                    if lo <= t < hi:
+                        role = b_role
+                        role_end = out_hi
+                        break
+                if role is None:
+                    categories[eid] = "unassigned"
+                elif r["outcome_end_ms"] > role_end:
+                    categories[eid] = f"{role}_horizon_boundary"
+                    boundary_counts[role] += 1
+                else:
+                    tentative.append({**r, "role": role})
+        regime_roles: dict[object, set[str]] = {}
+        for r in tentative:
+            regime_roles.setdefault(r["range_regime_id"], set()).add(str(r["role"]))
+        cross_regimes = {reg for reg, roles in regime_roles.items() if len(roles) > 1}
+        for r in tentative:
+            eid = r["range_action_event_id"]
+            if r["range_regime_id"] in cross_regimes:
+                categories[eid] = "cross_role_regime_excluded"
+            else:
+                categories[eid] = f"{r['role']}_assigned"
                 rows.append(
                     {
                         "fold_id": f"wf_{fold:03d}",
-                        "role": role,
-                        "range_action_event_id": r["range_action_event_id"],
-                        "range_regime_id": reg,
+                        "role": r["role"],
+                        "range_action_event_id": eid,
+                        "range_regime_id": r["range_regime_id"],
                         "signal_time_ms": r[time_col],
                         "outcome_end_ms": r["outcome_end_ms"],
                         "symbol": r.get("symbol"),
@@ -116,9 +138,9 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
                         "test_end_ms": test_end,
                         "purge_minutes": cfg.purge_minutes,
                         "embargo_minutes": cfg.embargo_minutes,
-                        "purged_event_count": purged,
-                        "embargo_excluded_event_count": emb,
-                        "regime_excluded_event_count": regime_excl,
+                        "purged_event_count": 0,
+                        "embargo_excluded_event_count": 0,
+                        "regime_excluded_event_count": 0,
                         "configured_train_days": cfg.min_train_days,
                         "actual_train_days": (train_end - start) / day,
                         "purge_gap_minutes": cfg.purge_minutes,
@@ -128,7 +150,7 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
                         "source_event_count": source_event_count,
                         "complete_label_event_count": e["range_action_event_id"].n_unique(),
                         "incomplete_label_excluded_count": incomplete_label_excluded_count,
-                        "outside_fold_window_count": outside,
+                        "outside_fold_window_count": 0,
                         "unassigned_event_count": 0,
                         "coverage_reconciliation_ok": True,
                         "coverage_reconciliation_delta": 0,
@@ -137,11 +159,62 @@ def build_splits(events: pl.DataFrame, profile_name: str = "prototype_90d") -> p
                         "sufficient_for_state_machine_engineering_bool": True,
                     }
                 )
-        for i in range(len(rows) - len(assigned_event_ids), len(rows)):
-            pass
+        for r in e.iter_rows(named=True):
+            categories.setdefault(r["range_action_event_id"], "unassigned")
+        counts = {name: sum(1 for c in categories.values() if c == name) for name in [
+            "incomplete_max_horizon", "outside_fold_window", "purge_gap", "embargo_gap",
+            "train_horizon_boundary", "validation_horizon_boundary", "test_horizon_boundary",
+            "cross_role_regime_excluded", "train_assigned", "validation_assigned", "test_assigned", "unassigned"
+        ]}
+        rhs = sum(counts.values())
+        delta = rhs - source_event_count
+        ok = delta == 0 and counts["unassigned"] == 0
+        fold_id = f"wf_{fold:03d}"
+        for reason, count in counts.items():
+            reason_rows.append({"fold_id": fold_id, "exclusion_or_assignment_reason": reason, "event_count": count})
+        summary_rows.append({
+            "fold_id": fold_id,
+            "train_events": counts["train_assigned"],
+            "validation_events": counts["validation_assigned"],
+            "test_events": counts["test_assigned"],
+            "train_start_ms": start,
+            "train_end_ms": train_end,
+            "validation_start_ms": val_start,
+            "validation_end_ms": val_end,
+            "test_start_ms": test_start,
+            "test_end_ms": test_end,
+            "purged_event_count": counts["purge_gap"],
+            "purge_gap_event_count": counts["purge_gap"],
+            "embargo_excluded_event_count": counts["embargo_gap"],
+            "embargo_gap_event_count": counts["embargo_gap"],
+            "regime_excluded_event_count": counts["cross_role_regime_excluded"],
+            "cross_role_regime_excluded_event_count": counts["cross_role_regime_excluded"],
+            "train_horizon_boundary_excluded_count": counts["train_horizon_boundary"],
+            "validation_horizon_boundary_excluded_count": counts["validation_horizon_boundary"],
+            "test_horizon_boundary_excluded_count": counts["test_horizon_boundary"],
+            "configured_train_days": cfg.min_train_days,
+            "actual_train_days": (train_end - start) / day,
+            "purge_gap_minutes": cfg.purge_minutes,
+            "validation_days": cfg.validation_days,
+            "embargo_gap_minutes": cfg.embargo_minutes,
+            "test_days": cfg.test_days,
+            "source_event_count": source_event_count,
+            "complete_label_event_count": e["range_action_event_id"].n_unique(),
+            "incomplete_label_excluded_count": incomplete_label_excluded_count,
+            "incomplete_max_horizon_count": counts["incomplete_max_horizon"],
+            "outside_fold_window_count": counts["outside_fold_window"],
+            "unassigned_event_count": counts["unassigned"],
+            "coverage_reconciliation_ok": ok,
+            "coverage_reconciliation_delta": delta,
+            "walk_forward_scope": profile_name,
+            "sufficient_for_parameter_selection_bool": False,
+            "sufficient_for_state_machine_engineering_bool": True,
+        })
         fold += 1
         cursor += cfg.step_days * day
-    return pl.DataFrame(rows)
+    out = pl.DataFrame(rows)
+    out.attrs = {"fold_summary": summary_rows, "reason_summary": reason_rows}
+    return out
 
 
 def write_splits(scoring_run_id: str, profile: str = "prototype_90d") -> dict[str, object]:
@@ -153,59 +226,30 @@ def write_splits(scoring_run_id: str, profile: str = "prototype_90d") -> dict[st
         out.select(
             ["range_action_event_id", "range_regime_id", "outcome_end_ms"]
         ).unique().write_parquet(root / "walk_forward_event_eligibility.parquet")
-    if not out.is_empty():
-        out.group_by("fold_id").agg(
-            [
-                pl.col("role").filter(pl.col("role") == "train").count().alias("train_events"),
-                pl.col("role")
-                .filter(pl.col("role") == "validation")
-                .count()
-                .alias("validation_events"),
-                pl.col("role").filter(pl.col("role") == "test").count().alias("test_events"),
-                pl.first("train_start_ms"),
-                pl.first("train_end_ms"),
-                pl.first("validation_start_ms"),
-                pl.first("validation_end_ms"),
-                pl.first("test_start_ms"),
-                pl.first("test_end_ms"),
-                pl.max("purged_event_count"),
-                pl.max("embargo_excluded_event_count"),
-                pl.max("regime_excluded_event_count"),
-                pl.first("configured_train_days"),
-                pl.first("actual_train_days"),
-                pl.first("purge_gap_minutes"),
-                pl.first("validation_days"),
-                pl.first("embargo_gap_minutes"),
-                pl.first("test_days"),
-                pl.max("source_event_count"),
-                pl.max("complete_label_event_count"),
-                pl.max("incomplete_label_excluded_count"),
-                pl.max("outside_fold_window_count"),
-                pl.max("unassigned_event_count"),
-                pl.min("coverage_reconciliation_ok"),
-                pl.max("coverage_reconciliation_delta"),
-                pl.first("walk_forward_scope"),
-                pl.first("sufficient_for_parameter_selection_bool"),
-                pl.first("sufficient_for_state_machine_engineering_bool"),
-            ]
-        ).write_parquet(root / "walk_forward_fold_summary.parquet")
+    fold_summary = pl.DataFrame(out.attrs.get("fold_summary", []))
+    reason_summary = pl.DataFrame(out.attrs.get("reason_summary", []))
+    if not fold_summary.is_empty():
+        fold_summary.write_parquet(root / "walk_forward_fold_summary.parquet")
+        reason_summary.write_parquet(root / "walk_forward_exclusion_reason_summary.parquet")
     rep = Path("reports/scoring_runs") / scoring_run_id
     rep.mkdir(parents=True, exist_ok=True)
     rep.joinpath("walk_forward_design_report.md").write_text(
-        f"# Walk-Forward Design\n\nprofile: {profile}\nfold_count: {out['fold_id'].n_unique() if not out.is_empty() else 0}\nwalk_forward_scope: prototype_90d\nsufficient_for_parameter_selection_bool: false\nsufficient_for_state_machine_engineering_bool: true\nCoverage reconciliation is calculated per fold. No robust model selection is claimed.\n",
+        f"# Walk-Forward Design\n\nprofile: {profile}\nfold_count: {fold_summary.height}\nwalk_forward_scope: prototype_90d\nsufficient_for_parameter_selection_bool: false\nsufficient_for_state_machine_engineering_bool: true\nCoverage reconciliation is calculated per fold from disjoint event categories, including horizon-boundary and cross-role regime exclusions. No robust model selection is claimed.\n",
         encoding="utf-8",
     )
     (root / "walk_forward_coverage_audit.json").write_text(
         __import__("json").dumps(
             {
-                "walk_forward_coverage_audit_ok": (not out.is_empty()) and out["fold_id"].n_unique() >= 1 and out.group_by("fold_id").agg(pl.col("role").n_unique().alias("n"))["n"].min() >= 3,
-                "fold_count": out["fold_id"].n_unique() if not out.is_empty() else 0,
+                "walk_forward_coverage_audit_ok": (not fold_summary.is_empty()) and bool(fold_summary["coverage_reconciliation_ok"].all()),
+                "fold_count": fold_summary.height,
                 "walk_forward_scope": "prototype_90d",
                 "sufficient_for_parameter_selection_bool": False,
                 "sufficient_for_state_machine_engineering_bool": True,
                 "incomplete_max_horizon_events_excluded_bool": True,
-                "coverage_reconciliation_ok": True,
-                "coverage_reconciliation_delta": 0,
+                "coverage_reconciliation_ok": (not fold_summary.is_empty()) and bool(fold_summary["coverage_reconciliation_ok"].all()),
+                "coverage_reconciliation_delta": int(fold_summary["coverage_reconciliation_delta"].sum()) if not fold_summary.is_empty() else None,
+                "unassigned_event_count": int(fold_summary["unassigned_event_count"].sum()) if not fold_summary.is_empty() else None,
+                "folds": fold_summary.to_dicts() if not fold_summary.is_empty() else [],
             },
             indent=2,
         ),
