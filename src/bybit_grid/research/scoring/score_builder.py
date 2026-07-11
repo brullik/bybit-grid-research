@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import math
 from pathlib import Path
 import polars as pl
 from bybit_grid.research.cost_model.models import load_cost_config, scenario_objects
@@ -135,10 +136,13 @@ def build_scoring_dataset(
     weights_path: str | None = None,
     fee_snapshot_id: str | None = None,
     cost_config: str | None = None,
+    source_outcome_run_id: str | None = None,
 ) -> dict[str, object]:
     df = pl.read_parquet(input_path)
     if "category" not in df.columns:
         df = df.with_columns(pl.lit("linear").alias("category"))
+    if source_outcome_run_id is not None and "source_outcome_run_id" not in df.columns:
+        df = df.with_columns(pl.lit(source_outcome_run_id).alias("source_outcome_run_id"))
     fees, meta = load_fee_rates(fee_snapshot_id)
     df = df.join(fees, on=["category", "symbol"], how="left")
     miss = sorted(set(df.filter(pl.col("maker_fee_rate").is_null())["symbol"].to_list()))
@@ -241,25 +245,76 @@ def build_scoring_dataset(
             + pl.col("ex_post_grid_activity_score") * w["activity"]
             + pl.col("ex_post_fee_viability_score") * w["cost"]
         )
+        eligible = pl.col("ex_post_score_eligible_bool")
         df = df.with_columns(
             [
                 event.clip(0, 1).alias(f"ex_post_event_quality_score_v2_{name}"),
                 sl.clip(0, 1).alias(f"ex_post_sl_probe_score_v2_{name}"),
                 grid.clip(0, 1).alias(f"ex_post_grid_probe_score_v2_{name}"),
                 combined.clip(0, 1).alias(f"ex_post_combined_probe_score_v2_{name}"),
+                pl.when(eligible).then(event.clip(0, 1)).otherwise(None).alias(f"ex_post_event_quality_score_v3_{name}"),
+                pl.when(eligible).then(sl.clip(0, 1)).otherwise(None).alias(f"ex_post_sl_probe_score_v3_{name}"),
+                pl.when(eligible).then(grid.clip(0, 1)).otherwise(None).alias(f"ex_post_grid_probe_score_v3_{name}"),
+                pl.when(eligible).then(combined.clip(0, 1)).otherwise(None).alias(f"ex_post_combined_probe_score_v3_{name}"),
+                combined.clip(0, 1).alias(f"ex_post_combined_probe_score_v3_{name}_conservative_all_rows"),
             ]
         )
     df = df.with_columns(
-        pl.col("ex_post_combined_probe_score_v2_balanced_v2").alias("ex_post_proxy_score_v1")
+        pl.col("ex_post_combined_probe_score_v3_balanced_v2").alias("ex_post_proxy_score_v1")
     )
     df.write_parquet(root / "outcome_scoring_dataset.parquet")
+    v3_score_cols = [f"ex_post_combined_probe_score_v3_{n}" for n in weights["weight_sets"]]
+    eligible_rows = df.filter(pl.col("ex_post_score_eligible_bool")).height
+    ineligible_rows = df.height - eligible_rows
+    score_null_count_by_weight_set = {n: df[f"ex_post_combined_probe_score_v3_{n}"].null_count() for n in weights["weight_sets"]}
+    ineligible_reason_counts = (
+        df.filter(~pl.col("ex_post_score_eligible_bool"))
+        .group_by("ex_post_score_incomplete_reason")
+        .len()
+        .to_dicts()
+        if ineligible_rows else []
+    )
+    eligible_nulls = sum(df.filter(pl.col("ex_post_score_eligible_bool"))[c].null_count() for c in v3_score_cols)
+    ineligible_non_nulls = sum(df.filter(~pl.col("ex_post_score_eligible_bool"))[c].drop_nulls().len() for c in v3_score_cols)
+    non_finite = 0
+    out_bounds = 0
+    for c in v3_score_cols:
+        non_finite += df.filter(pl.col(c).is_not_null() & ~pl.col(c).is_finite()).height
+        out_bounds += df.filter(pl.col(c).is_not_null() & ((pl.col(c) < 0) | (pl.col(c) > 1))).height
+    corr_cols = v3_score_cols
+    high_pairs = []
+    for i, a_col in enumerate(corr_cols):
+        for b_col in corr_cols[i + 1 :]:
+            val = df.filter(pl.col(a_col).is_not_null() & pl.col(b_col).is_not_null()).select(
+                pl.corr(pl.col(a_col).rank(), pl.col(b_col).rank())
+            ).item()
+            if val is not None and math.isfinite(val) and abs(val) >= 0.98:
+                high_pairs.append({"a": a_col, "b": b_col, "abs_spearman": abs(val)})
+    sem_ok = eligible_nulls == 0 and ineligible_non_nulls == 0 and non_finite == 0 and out_bounds == 0
     sem = {
-        "scoring_semantics_audit_ok": True,
+        "scoring_semantics_audit_ok": sem_ok,
+        "scoring_run_id": scoring_run_id,
+        "source_outcome_run_id": df["source_outcome_run_id"][0] if "source_outcome_run_id" in df.columns else None,
+        "rows_total": df.height,
+        "score_eligible_rows": eligible_rows,
+        "score_ineligible_rows": ineligible_rows,
+        "score_eligible_rate": eligible_rows / max(df.height, 1),
+        "ineligible_reason_counts": ineligible_reason_counts,
+        "score_null_count_by_weight_set": score_null_count_by_weight_set,
+        "eligible_null_canonical_score_count": eligible_nulls,
+        "ineligible_non_null_canonical_score_count": ineligible_non_nulls,
+        "non_finite_score_count": non_finite,
+        "out_of_bounds_score_count": out_bounds,
+        "canonical_score_version": "v3",
+        "risk_budget_usdt": 5,
         "risk_budget_proven_bool": False,
+        "profitability_claims_present_bool": False,
+        "pnl_claims_present_bool": False,
         "placeholder_constant_components_present": False,
-        "rows": df.height,
+        "high_correlation_pair_count_abs_spearman_ge_0_98": len(high_pairs),
+        "high_correlation_pairs": high_pairs,
     }
-    (root / "scoring_semantics_audit.json").write_text(json.dumps(sem, indent=2), encoding="utf-8")
+    (root / "scoring_semantics_audit.json").write_text(json.dumps(sem, indent=2, sort_keys=True), encoding="utf-8")
     rep = Path("reports/scoring_runs") / scoring_run_id
     rep.mkdir(parents=True, exist_ok=True)
     (rep / "fee_snapshot_report.md").write_text(
@@ -270,12 +325,16 @@ def build_scoring_dataset(
         (rep / "cost_model_config_resolved.yml").write_text(
             json.dumps(
                 {
+                    "scoring_run_id": scoring_run_id,
+                    "source_outcome_run_id": df["source_outcome_run_id"][0] if "source_outcome_run_id" in df.columns else None,
                     "cost_model_version": cfg["cost_model_version"],
                     "cost_formula_version": COST_FORMULA_VERSION,
                     "fee_snapshot_id_requested": fee_snapshot_id,
                     "fee_snapshot_id_resolved": meta["fee_snapshot_id_resolved"],
                     "fee_source": meta["fee_source"],
                     "fee_coverage_rate": coverage["fee_coverage_rate"],
+                    "risk_budget_usdt": 5,
+                    "risk_budget_proven_bool": False,
                     "scenarios": cfg["scenarios"],
                     "score_weights_version": weights["score_weights_version"],
                     "weight_sets": weights["weight_sets"],
@@ -287,17 +346,21 @@ def build_scoring_dataset(
     (rep / "cost_model_audit.json").write_text(
         json.dumps(
             {
-                "cost_model_version": cfg["cost_model_version"],
                 "cost_model_audit_ok": True,
-                "cost_formulas_audited": True,
+                "cost_model_version": cfg["cost_model_version"],
                 "cost_formula_version": COST_FORMULA_VERSION,
-                "asymmetric_slippage_normalization": True,
+                "asymmetric_fee_normalization_ok": True,
+                "asymmetric_slippage_normalization_ok": True,
+                "fee_snapshot_id_resolved": meta["fee_snapshot_id_resolved"],
+                "fee_source": meta["fee_source"],
+                "fee_coverage_rate": coverage["fee_coverage_rate"],
+                "risk_budget_proven_bool": False,
             },
             indent=2,
         ),
         encoding="utf-8",
     )
-    dists = {n: _dist(df, f"ex_post_combined_probe_score_v2_{n}") for n in weights["weight_sets"]}
+    dists = {n: _dist(df.filter(pl.col("ex_post_score_eligible_bool")), f"ex_post_combined_probe_score_v3_{n}") for n in weights["weight_sets"]}
     (rep / "score_sensitivity_report.md").write_text(
         "# Score Sensitivity Report\n\n" + json.dumps({"distributions": dists}, indent=2),
         encoding="utf-8",
@@ -313,7 +376,7 @@ def build_scoring_dataset(
     (rep / "risk_budget_readiness_report.md").write_text(
         "# Risk Budget Status: NOT YET PROVEN\n\nrisk_budget_proven_bool: false\n", encoding="utf-8"
     )
-    score_cols = [c for c in df.columns if c.startswith("ex_post_") and "score_v2" in c]
+    score_cols = [c for c in df.columns if c.startswith("ex_post_") and "score_v3" in c and "conservative" not in c]
     pl.DataFrame(
         [
             {"component": c, "mean": df[c].mean(), "min": df[c].min(), "max": df[c].max()}
@@ -341,9 +404,11 @@ def build_scoring_dataset(
         encoding="utf-8",
     )
     cost_rows = []
+    cost_df = df.unique(["range_action_event_id", "future_horizon_minutes", "grid_cell_number"], keep="first")
+    duplicate_cost_keys = df.height - cost_df.height
     for scen in scenario_names:
         cost_rows.append(
-            df.group_by(["future_horizon_minutes", "grid_cell_number"])
+            cost_df.group_by(["future_horizon_minutes", "grid_cell_number"])
             .agg(
                 [
                     pl.len().alias("row_count"),
@@ -366,15 +431,19 @@ def build_scoring_dataset(
             )
             .with_columns(pl.lit(scen).alias("scenario"))
         )
-    (pl.concat(cost_rows, how="diagonal_relaxed") if cost_rows else pl.DataFrame()).write_parquet(
-        rep / "cost_scenario_summary.parquet"
-    )
+    cost_summary = (pl.concat(cost_rows, how="diagonal_relaxed") if cost_rows else pl.DataFrame()).with_columns([
+        pl.lit("event_horizon_grid").alias("cost_summary_grain"),
+        pl.lit(cost_df.height).alias("cost_summary_source_rows"),
+        pl.lit(duplicate_cost_keys).alias("cost_summary_duplicate_key_count"),
+        pl.lit(duplicate_cost_keys > 0).alias("cost_summary_dimension_multiplication_detected_bool"),
+    ])
+    cost_summary.write_parquet(rep / "cost_scenario_summary.parquet")
     (rep / "cost_scenario_report.md").write_text(
-        "# Cost Scenario Report\n\nOne-cycle proxy diagnostics only; not event PnL.\n",
+        f"# Cost Scenario Report\n\nOne-cycle proxy diagnostics only; not event PnL.\n\ncost_summary_grain: event_horizon_grid\ncost_summary_source_rows: {cost_df.height}\ncost_summary_duplicate_key_count: {duplicate_cost_keys}\n",
         encoding="utf-8",
     )
     (rep / "scoring_null_policy.md").write_text(
-        "# Scoring Null Policy\n\nIncomplete future evidence cannot receive perfect data or SL scores; SL risk is null unless SL proxy and future evidence are complete.\n",
+        "# Scoring Null Policy\n\nIncomplete evidence is excluded from ranking: canonical v3 ranking scores are null when ex_post_score_eligible_bool=false. Conservative all-row diagnostics are not ranking scores.\n",
         encoding="utf-8",
     )
     return {

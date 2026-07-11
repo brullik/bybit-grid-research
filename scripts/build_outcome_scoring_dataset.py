@@ -15,4 +15,4 @@ p.add_argument("--cost-config")
 p.add_argument("--fast-max", action="store_true")
 a = p.parse_args()
 inp = Path("data/processed/scoring_runs") / a.scoring_run_id / "expanded_scoring_input.parquet"
-print(json.dumps(build_scoring_dataset(inp, a.scoring_run_id, fee_snapshot_id=a.fee_snapshot_id, cost_config=a.cost_config), sort_keys=True))
+print(json.dumps(build_scoring_dataset(inp, a.scoring_run_id, fee_snapshot_id=a.fee_snapshot_id, cost_config=a.cost_config, source_outcome_run_id=a.outcome_run_id), sort_keys=True))

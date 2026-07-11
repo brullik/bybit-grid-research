@@ -142,3 +142,61 @@ def test_review_pack_allowlist(tmp_path: Path):
         capture_output=True,
     )
     assert res.returncode != 0
+
+
+def test_whole_row_grain_invariance_catches_split_null_patterns():
+    base = {
+        "range_action_event_id": ["e1", "e1"],
+        "future_horizon_minutes": [60, 60],
+        "grid_cell_number": [5, 5],
+        "sl_atr_buffer": [1.0, 1.0],
+        "outcome_id": ["o1", "o2"],
+        "outcome_match_key": ["m1", "m2"],
+        "symbol": ["BTCUSDT", "BTCUSDT"],
+        "signal_time_ms": [1, 1],
+        "funding_rate_sum": [0.1, None],
+        "funding_rate_mean": [None, 0.2],
+    }
+    import pytest
+
+    with pytest.raises(ValueError):
+        build_outcome_grains(pl.DataFrame(base))
+
+
+def test_whole_row_grain_invariance_allows_identical_null_rows():
+    df = pl.DataFrame(
+        {
+            "range_action_event_id": ["e1", "e1"],
+            "future_horizon_minutes": [60, 60],
+            "grid_cell_number": [5, 5],
+            "sl_atr_buffer": [1.0, 1.0],
+            "outcome_id": ["o1", "o2"],
+            "outcome_match_key": ["m1", "m2"],
+            "symbol": ["BTCUSDT", "BTCUSDT"],
+            "signal_time_ms": [1, 1],
+            "funding_rate_sum": [None, None],
+        }
+    )
+    _, audit = build_outcome_grains(df)
+    assert audit["representative_row_selection_version"] == "whole_row_v1"
+    assert audit["synthetic_row_risk_detected_bool"] is False
+
+
+def test_walk_forward_excludes_incomplete_max_horizon_events_and_marks_prototype():
+    day = 86_400_000
+    rows = []
+    for i in range(90):
+        rows.append(
+            {
+                "range_action_event_id": f"e{i}",
+                "range_regime_id": f"r{i}",
+                "signal_time_ms": i * day,
+                "future_horizon_minutes": 2880,
+                "future_data_complete_bool": i != 10,
+                "symbol": "BTCUSDT",
+            }
+        )
+    out = build_splits(pl.DataFrame(rows), "prototype_90d")
+    assert "e10" not in out["range_action_event_id"].to_list()
+    assert out["incomplete_label_excluded_count"].max() == 1
+    assert out["sufficient_for_parameter_selection_bool"].unique().to_list() == [False]

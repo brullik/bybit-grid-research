@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import polars as pl
 
-GRAIN_CONTRACT_VERSION = "grain_contract_v2"
+GRAIN_CONTRACT_VERSION = "grain_contract_v3_whole_row"
 GRAIN_KEYS = {
     "event_horizon": ["range_action_event_id", "future_horizon_minutes"],
     "event_horizon_sl": ["range_action_event_id", "future_horizon_minutes", "sl_atr_buffer"],
@@ -179,38 +179,51 @@ def _allowed_columns(df: pl.DataFrame, name: str) -> list[str]:
     return [c for c in df.columns if c in allow]
 
 
+def whole_row_invariance_violations(
+    df: pl.DataFrame, name: str, keys: list[str], columns: list[str]
+) -> pl.DataFrame:
+    cols = [c for c in columns if c in df.columns]
+    non_keys = [c for c in cols if c not in keys]
+    if not non_keys:
+        return pl.DataFrame({"grain": [], "struct_cardinality": []})
+    bad = (
+        df.select(cols)
+        .group_by(keys)
+        .agg(pl.struct(non_keys).n_unique().alias("struct_cardinality"))
+        .filter(pl.col("struct_cardinality") > 1)
+    )
+    return bad.with_columns(pl.lit(name).alias("grain")) if not bad.is_empty() else pl.DataFrame({"grain": [], "struct_cardinality": []})
+
+
+def null_pattern_violations(
+    df: pl.DataFrame, name: str, keys: list[str], columns: list[str]
+) -> pl.DataFrame:
+    cols = [c for c in columns if c in df.columns]
+    non_keys = [c for c in cols if c not in keys]
+    if not non_keys:
+        return pl.DataFrame({"grain": [], "null_pattern_cardinality": []})
+    bad = (
+        df.select(cols)
+        .with_columns(pl.struct([pl.col(c).is_null().alias(c) for c in non_keys]).alias("__null_pattern"))
+        .group_by(keys)
+        .agg(pl.col("__null_pattern").n_unique().alias("null_pattern_cardinality"))
+        .filter(pl.col("null_pattern_cardinality") > 1)
+    )
+    return bad.with_columns(pl.lit(name).alias("grain")) if not bad.is_empty() else pl.DataFrame({"grain": [], "null_pattern_cardinality": []})
+
+
 def invariance_violations(
     df: pl.DataFrame, name: str, keys: list[str], columns: list[str]
 ) -> pl.DataFrame:
-    check = [c for c in columns if c not in keys]
-    frames = []
-    for c in check:
-        bad = (
-            df.group_by(keys)
-            .agg(pl.col(c).drop_nulls().n_unique().alias("distinct_non_null_count"))
-            .filter(pl.col("distinct_non_null_count") > 1)
-        )
-        if not bad.is_empty():
-            frames.append(bad.with_columns(pl.lit(name).alias("grain"), pl.lit(c).alias("column")))
-    return (
-        pl.concat(frames, how="diagonal_relaxed")
-        if frames
-        else pl.DataFrame({"grain": [], "column": [], "distinct_non_null_count": []})
-    )
+    return whole_row_invariance_violations(df, name, keys, columns)
 
 
 def unique_grain(
     df: pl.DataFrame, keys: list[str], columns: list[str] | None = None
 ) -> pl.DataFrame:
-    cols = columns or df.columns
-    non_keys = [c for c in cols if c not in keys]
-    out = (
-        df.select([c for c in keys + non_keys if c in df.columns])
-        .group_by(keys)
-        .agg([pl.col(c).drop_nulls().first().alias(c) for c in non_keys])
-        if non_keys
-        else df.select(keys).unique()
-    )
+    cols = [c for c in (columns or df.columns) if c in df.columns]
+    selected = df.select(cols).sort(keys)
+    out = selected.unique(keys, keep="first", maintain_order=True)
     return out.select(keys + [c for c in out.columns if c not in keys])
 
 
@@ -269,13 +282,24 @@ def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dic
         raise ValueError(f"null/missing required outcome keys: null={missing}, missing={absent}")
     forbidden = {}
     inv_counts = {}
+    null_counts = {}
     inv_frames = []
     grains = {}
     for name, keys in KEYS.items():
         cols = _allowed_columns(df, name)
         forbidden[name] = _forbidden(name, cols)
-        inv = invariance_violations(df, name, keys, cols)
+        inv = (
+            pl.DataFrame({"grain": [], "struct_cardinality": []})
+            if name == "expanded_scoring_input"
+            else whole_row_invariance_violations(df, name, keys, cols)
+        )
+        null_inv = (
+            pl.DataFrame({"grain": [], "null_pattern_cardinality": []})
+            if name == "expanded_scoring_input"
+            else null_pattern_violations(df, name, keys, cols)
+        )
         inv_counts[name] = inv.height
+        null_counts[name] = null_inv.height
         if not inv.is_empty():
             inv_frames.append(inv)
         grains[name] = unique_grain(df, keys, cols)
@@ -290,6 +314,9 @@ def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dic
                     "grain_contract_audit_ok": False,
                     "forbidden_columns_found_by_grain": bad_forbidden,
                     "invariance_violation_count_by_grain": inv_counts,
+                    "whole_row_invariance_violation_count_by_grain": inv_counts,
+                    "null_pattern_violation_count_by_grain": null_counts,
+                    "synthetic_row_risk_detected_bool": sum(inv_counts.values()) > 0,
                 },
                 sort_keys=True,
             )
@@ -314,6 +341,10 @@ def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dic
         "contract_columns_by_grain": CONTRACT_COLUMNS_BY_GRAIN,
         "forbidden_columns_found_by_grain": forbidden,
         "invariance_violation_count_by_grain": inv_counts,
+        "whole_row_invariance_violation_count_by_grain": inv_counts,
+        "null_pattern_violation_count_by_grain": null_counts,
+        "synthetic_row_risk_detected_bool": sum(inv_counts.values()) > 0,
+        "representative_row_selection_version": "whole_row_v1",
         "grain_contract_audit_ok": contract_ok,
     }
     return grains, audit
@@ -345,6 +376,10 @@ def write_outcome_grains(outcome_run_id: str, scoring_run_id: str) -> dict[str, 
                     "contract_columns_by_grain",
                     "forbidden_columns_found_by_grain",
                     "invariance_violation_count_by_grain",
+                    "whole_row_invariance_violation_count_by_grain",
+                    "null_pattern_violation_count_by_grain",
+                    "synthetic_row_risk_detected_bool",
+                    "representative_row_selection_version",
                     "grain_contract_audit_ok",
                 ]
             },
