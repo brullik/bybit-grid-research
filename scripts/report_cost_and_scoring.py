@@ -8,7 +8,7 @@ p.add_argument("--scoring-run-id", required=True)
 a = p.parse_args()
 rep = Path("reports/scoring_runs") / a.scoring_run_id
 rep.mkdir(parents=True, exist_ok=True)
-(rep / "cost_model_config.yml").write_text(
+(rep / "cost_model_config_resolved.yml").write_text(
     Path("config/cost_scenarios.yml").read_text(encoding="utf-8"), encoding="utf-8"
 )
 (rep / "cost_model_audit.json").write_text(

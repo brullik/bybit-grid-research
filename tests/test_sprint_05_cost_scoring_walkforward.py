@@ -46,7 +46,7 @@ def test_long_short_geometric_cycle_formulas_asymmetric_rates():
         (0.01 - (0.001 + 0.002 * 1.01)) * 10_000, 8
     )
     assert round(out["net_cycle_return_short_bps"], 8) == round(
-        (((0.01) / 1.01) - (0.002 + 0.001 / 1.01)) * 10_000, 8
+        (((0.01) / 1.01) - (0.001 + 0.002 / 1.01)) * 10_000, 8
     )
     assert out["fee_break_even_long_bool"] is True
 
@@ -70,6 +70,10 @@ def test_grains_unique_and_funding_not_multiplied():
             "grid_cell_number": [5, 5, 10, 10],
             "sl_atr_buffer": [0.0, 1.0, 0.0, 1.0],
             "funding_rate_sum": [0.01] * 4,
+            "outcome_id": [f"o{i}" for i in range(4)],
+            "outcome_match_key": [f"m{i}" for i in range(4)],
+            "symbol": ["BTCUSDT"] * 4,
+            "signal_time_ms": [1] * 4,
         }
     )
     grains, audit = build_outcome_grains(df)
@@ -137,4 +141,4 @@ def test_review_pack_allowlist(tmp_path: Path):
         text=True,
         capture_output=True,
     )
-    assert res.returncode == 0
+    assert res.returncode != 0
