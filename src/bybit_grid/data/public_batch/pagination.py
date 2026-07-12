@@ -32,7 +32,7 @@ def fetch_all_instruments(client, server_time, category="linear", max_pages=20):
         if cursor in seen_cursors:
             raise PublicBatchError("instrument_cursor_cycle")
         seen_cursors.add(cursor)
-        params = {"category": category, "limit": 1000}
+        params = {"category": category, "status": "Trading", "limit": 1000}
         if cursor:
             params["cursor"] = cursor
         raw = client.public_get("/v5/market/instruments-info", params)
