@@ -274,10 +274,15 @@ def build_records(run_id=RUN_ID):
     return files
 
 
-def build_contract_audit(scenario_audit=None, reproducibility_audit=None):
+_MISSING_REPRO_AUDIT = object()
+
+def build_contract_audit(scenario_audit=None, reproducibility_audit=_MISSING_REPRO_AUDIT):
     scenario_audit = scenario_audit or derive_scenario_audit()
     checks = scenario_audit.get("scenario_checks_by_id", {})
-    reproducibility_audit = reproducibility_audit or {"reproducibility_audit_ok": True}
+    if reproducibility_audit is _MISSING_REPRO_AUDIT:
+        reproducibility_audit = {"reproducibility_audit_ok": True}
+    elif reproducibility_audit is None or reproducibility_audit == {} or type(reproducibility_audit.get("reproducibility_audit_ok")) is not bool:
+        reproducibility_audit = {"reproducibility_audit_ok": False, "failure": "missing_or_invalid_reproducibility_audit"}
     ordered_ids = list(checks)
     exact_24 = len(checks) == CANONICAL_SCENARIO_COUNT and tuple(ordered_ids) == SCENARIO_IDS
 
@@ -720,7 +725,7 @@ def derive_guardrails_for_scenario(s, results):
 def _termination_prefix_check(s, r, rn):
     generated = rn["generated_events"]
     full = normalize(reconstruct_expected_event_schedule(s.candles, r.path_policies, s.funding_observations))
-    consumed_exact = generated == full[: len(generated)] and (len(generated) < len(full) if rn["terminated_bool"] else len(generated) == len(full))
+    consumed_exact = generated == full[: len(generated)] and (len(generated) <= len(full) if rn["terminated_bool"] else len(generated) == len(full))
     event_types = [e["event_type"] for e in rn["state_machine_result"]["ledger"]]
     triggers = event_types.count("termination_trigger")
     fills = event_types.count("termination_fill")
@@ -730,7 +735,7 @@ def _termination_prefix_check(s, r, rn):
     trigger_match = bool(trigger_events and last and trigger_events[0]["sequence_id"] == last["sequence_id"] and trigger_events[0]["time_ms"] == last["time_ms"])
     contract_ok = (triggers == 1 and fills <= 1) if rn["terminated_bool"] else triggers == 0
     reconciled = rn["candle_count_processed"] + rn["candles_not_processed_after_termination"] == len(s.candles)
-    later_absent = len(generated) == len(full) or (rn["terminated_bool"] and all(e["sequence_id"] > generated[-1]["sequence_id"] for e in full[len(generated) :]))
+    later_absent = len(generated) <= len(full) and (len(generated) == len(full) or (rn["terminated_bool"] and all(e["sequence_id"] > generated[-1]["sequence_id"] for e in full[len(generated) :])))
     detail = {
         "full_schedule_event_count": len(full),
         "consumed_event_count": len(generated),
