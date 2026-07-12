@@ -40,18 +40,18 @@ def test_run_status_lifecycle_and_no_review_pack_ok(tmp_path):
     rep_root = tmp_path / "rep"
     with pytest.raises(EvidenceError):
         write_run(out_root, rep_root, fail_after_building=True)
-    failed = read_json(out_root / "ohlc_minimal_v2_synthetic_audit_v3" / "ohlc_replay_run_status.json")
+    failed = read_json(out_root / "ohlc_minimal_v2_synthetic_audit_v4" / "ohlc_replay_run_status.json")
     assert failed["status"] == "failed" and "review_pack_ok" not in failed and "evidence_run_audit_ok" not in failed
     shutil.rmtree(out_root)
     shutil.rmtree(rep_root)
     with pytest.raises(EvidenceError):
         write_run(out_root, rep_root, fail_after_artifacts_test_hook=True)
-    failed = read_json(out_root / "ohlc_minimal_v2_synthetic_audit_v3" / "ohlc_replay_run_status.json")
+    failed = read_json(out_root / "ohlc_minimal_v2_synthetic_audit_v4" / "ohlc_replay_run_status.json")
     assert failed["status"] == "failed" and "evidence_run_audit_ok" not in failed
     shutil.rmtree(out_root)
     shutil.rmtree(rep_root)
     res = write_run(out_root, rep_root)
-    status = read_json(out_root / "ohlc_minimal_v2_synthetic_audit_v3" / "ohlc_replay_run_status.json")
+    status = read_json(out_root / "ohlc_minimal_v2_synthetic_audit_v4" / "ohlc_replay_run_status.json")
     assert res["status"] == status["status"] == "complete"
     assert set(status) == {"run_id", "status", "scenario_count", "fixed_replay_result_count", "envelope_result_count", "evidence_run_audit_ok"}
 
@@ -103,7 +103,7 @@ def _write_pack(tmp_path):
     rep_root = tmp_path / "rep"
     write_run(out_root, rep_root)
     z = tmp_path / "pack.zip"
-    run = "ohlc_minimal_v2_synthetic_audit_v3"
+    run = "ohlc_minimal_v2_synthetic_audit_v4"
     build_zip(out_root / run, rep_root / run, z)
     return z
 
@@ -138,7 +138,7 @@ def test_semantic_tamper_rejected_after_rehash(tmp_path, member):
 def test_builder_refuses_incomplete_and_verifies_tmp(tmp_path):
     out = tmp_path / "out"
     rep = tmp_path / "rep"
-    run = "ohlc_minimal_v2_synthetic_audit_v3"
+    run = "ohlc_minimal_v2_synthetic_audit_v4"
     write_run(out, rep)
     (out / run / "ohlc_replay_run_status.json").write_text('{"run_id":"x","status":"building"}\n')
     with pytest.raises(Exception):

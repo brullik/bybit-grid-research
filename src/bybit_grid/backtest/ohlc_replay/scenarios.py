@@ -19,14 +19,15 @@ from .models import (
 
 OHLC_REPLAY_CONTRACT_VERSION = "ohlc_minimal_path_replay_contract_v2"
 SCENARIO_VERSION = "ohlc_minimal_path_scenarios_v2"
-RUN_ID = "ohlc_minimal_v2_synthetic_audit_v3"
-REVIEW_PACK_SCHEMA_VERSION = "ohlc_minimal_path_review_pack_v3_geometric_audit"
-SCENARIO_AUDIT_VERSION = "ohlc_scenario_audit_v3_geometric_derived"
+RUN_ID = "ohlc_minimal_v2_synthetic_audit_v4"
+REVIEW_PACK_SCHEMA_VERSION = "ohlc_minimal_path_review_pack_v4_independent_evidence"
+SCENARIO_AUDIT_VERSION = "ohlc_scenario_audit_v4_independent_derived"
+CONTRACT_AUDIT_VERSION = "ohlc_contract_audit_v4_independent_derived"
 MANIFEST_HASH_POLICY = "self_excluded_v1"
 EVIDENCE_TYPE_CONTRACT_VERSION = "strict_json_type_identity_v1"
 CANONICAL_SERIALIZATION_VERSION = "neutral_grid_canonical_json_v1"
-REVIEW_PHASE = "ohlc_synthetic_evidence_geometric_audit_complete"
-DEFAULT_PACK = "pm_review_pack_ohlc_replay_ohlc_minimal_v2_synthetic_audit_v3.zip"
+REVIEW_PHASE = "ohlc_synthetic_evidence_independent_audit_complete"
+DEFAULT_PACK = "pm_review_pack_ohlc_replay_ohlc_minimal_v2_synthetic_audit_v4.zip"
 CANONICAL_SCENARIO_COUNT = 24
 
 GUARDRAILS = {
