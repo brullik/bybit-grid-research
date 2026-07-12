@@ -11,7 +11,10 @@ from .envelope import (
 from .models import CandleSource, FundingObservation, MinimalPathPolicy, OhlcCandle1m
 from .paths import minimal_path_prices, minimal_paths_are_distinct, normalize_consecutive_duplicates
 from .replay import (
+    GeneratedReplayEvent,
     OhlcReplayResult,
+    ReplayEventKind,
+    reconstruct_expected_event_schedule,
     replay_ohlc_minimal_path,
     validate_candle_sequence,
     validate_funding_observations,
@@ -25,7 +28,10 @@ __all__ = [
     "minimal_path_prices",
     "minimal_paths_are_distinct",
     "normalize_consecutive_duplicates",
+    "GeneratedReplayEvent",
     "OhlcReplayResult",
+    "ReplayEventKind",
+    "reconstruct_expected_event_schedule",
     "replay_ohlc_minimal_path",
     "validate_candle_sequence",
     "validate_funding_observations",

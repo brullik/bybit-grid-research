@@ -48,7 +48,11 @@ class OhlcCandle1m:
     def __post_init__(self) -> None:
         if type(self.category) is not str or self.category != "linear":
             raise ValueError("category must be exactly str 'linear'")
-        if type(self.symbol) is not str or self.symbol.strip() == "":
+        if (
+            type(self.symbol) is not str
+            or self.symbol.strip() == ""
+            or self.symbol != self.symbol.strip()
+        ):
             raise ValueError("symbol must be a non-empty stripped str")
         _int_minute(self.open_time_ms, "open_time_ms")
         if type(self.closed_bool) is not bool or self.closed_bool is not True:
