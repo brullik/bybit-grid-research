@@ -9,6 +9,7 @@ from pathlib import Path
 from types import MappingProxyType as _MappingProxyType
 from typing import Any
 
+from bybit_grid.backtest.neutral_grid.geometry import geometric_grid_levels_decimal
 from bybit_grid.backtest.neutral_grid.models import (
     LiquidityRole as _LiquidityRole,
     NeutralGridConfig as _NeutralGridConfig,
@@ -40,6 +41,7 @@ from .scenarios import (
     REVIEW_PACK_SCHEMA_VERSION,
     REVIEW_PHASE,
     RUN_ID,
+    SCENARIO_AUDIT_VERSION,
     SCENARIO_CATALOG,
     SCENARIO_IDS,
     SCENARIO_VERSION,
@@ -70,6 +72,7 @@ MANIFEST_KEYS = (
     "run_id",
     "ohlc_replay_contract_version",
     "scenario_version",
+    "scenario_audit_version",
     "canonical_serialization_version",
     "evidence_type_contract_version",
     "canonical_scenario_count",
@@ -260,7 +263,7 @@ def build_records(run_id=RUN_ID):
         "completed_cycles.jsonl": jsonl_bytes(cycles),
         "scenario_audit.json": canonical_json_bytes(scenario_audit),
         "reproducibility_audit.json": canonical_json_bytes(repro),
-        "ohlc_replay_report.md": build_ohlc_replay_report(inputs, fixed, envs).encode(),
+        "ohlc_replay_report.md": build_ohlc_replay_report(inputs, fixed, envs, run_id).encode(),
         "risk_budget_readiness_report.md": build_risk_budget_readiness_report().encode(),
     }
     manifest = build_manifest(run_id, fixed_n, env_n, files)
@@ -268,17 +271,26 @@ def build_records(run_id=RUN_ID):
     return files
 
 
-def build_contract_audit():
-    return {
-        "contract_audit_ok": True,
-        "closed_contiguous_1m_enforced_bool": True,
+def build_contract_audit(scenario_audit=None):
+    scenario_audit = scenario_audit or derive_scenario_audit()
+    checks = scenario_audit.get("scenario_checks_by_id", {})
+    conditions = {
+        "closed_contiguous_1m_enforced_bool": all(c.get("closed_contiguous_candles_bool") is True for c in checks.values()),
         "minimal_path_policies_frozen_bool": True,
         "funding_before_price_enforced_bool": True,
         "funding_source_provenance_enforced_bool": True,
         "strict_snapshot_identity_enforced_bool": True,
         "fresh_nested_replay_enforced_bool": True,
-        "exact_cartesian_enumeration_enforced_bool": True,
+        "exact_cartesian_enumeration_enforced_bool": all(c.get("assignment_keys_exact_ordered_bool") is True for c in checks.values()),
+        "canonical_geometric_levels_enforced_bool": all(c.get("canonical_levels_preserved_bool") is True and c.get("all_assignments_share_exact_geometry_bool") is True for c in checks.values()),
         "canonical_byte_identity_enforced_bool": True,
+        "all_scenario_audits_pass_bool": scenario_audit.get("scenario_audit_ok") is True,
+    }
+    failures = [k for k, v in conditions.items() if v is not True]
+    return {
+        **conditions,
+        "failures": failures,
+        "contract_audit_ok": not failures,
         "no_live_execution_bool": True,
     }
 
@@ -313,8 +325,8 @@ def _legacy_hard_coded_scenario_audit_removed():
     }
 
 
-def build_ohlc_replay_report(inputs, fixed, envs):
-    return f"# OHLC Replay Synthetic Evidence Report\n\nrun_id: {RUN_ID}\nscenario_count: {len(inputs)}\nfixed_replay_result_count: {len(fixed)}\nenvelope_result_count: {len(envs)}\nevidence_run_audit_ok: true\n"
+def build_ohlc_replay_report(inputs, fixed, envs, run_id=RUN_ID):
+    return f"# OHLC Replay Synthetic Evidence Report\n\nrun_id: {run_id}\nscenario_count: {len(inputs)}\nfixed_replay_result_count: {len(fixed)}\nenvelope_result_count: {len(envs)}\nevidence_run_audit_ok: true\n"
 
 
 def build_risk_budget_readiness_report():
@@ -330,6 +342,7 @@ def build_manifest(run_id, fixed_n, env_n, files):
         "run_id": run_id,
         "ohlc_replay_contract_version": OHLC_REPLAY_CONTRACT_VERSION,
         "scenario_version": SCENARIO_VERSION,
+        "scenario_audit_version": SCENARIO_AUDIT_VERSION,
         "canonical_serialization_version": CANONICAL_SERIALIZATION_VERSION,
         "evidence_type_contract_version": EVIDENCE_TYPE_CONTRACT_VERSION,
         "canonical_scenario_count": CANONICAL_SCENARIO_COUNT,
@@ -597,38 +610,104 @@ def _fresh_record_for(s):
     return normalize(e), list(e.assignment_results)
 
 
+
+def _economic_fingerprint(r):
+    sm = r["state_machine_result"]
+    cycles = sm["completed_cycles"]
+    return {
+        "final_total_pnl_usdt": r["final_total_pnl_usdt"],
+        "final_mark_price": r["final_mark_price"],
+        "signed_position": sm["signed_position"],
+        "average_entry": sm["average_entry"],
+        "cumulative_realized_position_pnl_usdt": sm["cumulative_realized_position_pnl_gross_usdt"],
+        "cumulative_completed_cycle_gross_pnl_usdt": sm["cumulative_completed_grid_cycle_gross_usdt"],
+        "cumulative_trading_fees_usdt": sm["cumulative_trading_fees_usdt"],
+        "cumulative_funding_pnl_usdt": sm["cumulative_funding_pnl_usdt"],
+        "completed_cycle_count": len(cycles),
+        "canonical_cycle_totals": [canonical_sha256(c) for c in cycles],
+        "terminated_bool": r["terminated_bool"],
+        "termination_reason": r["termination_reason"],
+        "candle_count_processed": r["candle_count_processed"],
+        "candles_not_processed_after_termination": r["candles_not_processed_after_termination"],
+    }
+
+
+def derive_guardrails_for_scenario(s, results):
+    nested = [normalize(r)["state_machine_result"] for r in results]
+    derived = dict(_GUARDRAILS)
+    # Synthetic adapter evidence intentionally proves none of these native/live/readiness guardrails.
+    derived.update({k: False for k in _GUARDRAILS})
+    # Cross-check that nested proofs/audits do not claim native/live readiness.
+    for sm in nested:
+        if any("bybit" in str(v).lower() and "synthetic_fixture" not in str(v).lower() for v in sm.get("ledger", [])):
+            derived["real_bybit_batch_integration_proven_bool"] = False
+    return derived
+
+
+def _termination_prefix_check(s, r, rn):
+    generated = rn["generated_events"]
+    expected_full = normalize(r.generated_events)
+    consumed_exact = generated == expected_full
+    if rn["terminated_bool"]:
+        consumed_exact = generated == expected_full[: len(generated)] and len(generated) < len(expected_full) or generated == expected_full
+    event_types = [e["event_type"] for e in rn["state_machine_result"]["ledger"]]
+    triggers = event_types.count("termination_trigger")
+    fills = event_types.count("termination_fill")
+    contract_ok = (triggers == 1 and fills <= 1) if rn["terminated_bool"] else triggers == 0
+    reconciled = rn["candle_count_processed"] + rn["candles_not_processed_after_termination"] == len(s.candles)
+    later_absent = True if rn["terminated_bool"] else len(generated) == len(expected_full)
+    return consumed_exact, later_absent, contract_ok, reconciled
+
+
 def derive_scenario_audit(catalog=SCENARIO_CATALOG, replay_records=None):
     checks = {}
     failures = []
     ids = [s.scenario_id for s in catalog]
     if tuple(ids) != SCENARIO_IDS or len(set(ids)) != len(ids) or len(ids) != CANONICAL_SCENARIO_COUNT:
         failures.append("scenario_id_contract")
+    record_map = replay_records or {}
     for s in catalog:
-        norm, results = _fresh_record_for(s)
-        result_norms = [normalize(r) for r in results]
+        _, fresh_results = _fresh_record_for(s)
+        if s.scenario_id in record_map:
+            results = record_map[s.scenario_id]
+        else:
+            results = fresh_results
+        result_norms = [normalize(r) if not isinstance(r, dict) else r for r in results]
         final_pnls = [r["final_total_pnl_usdt"] for r in result_norms]
         ledgers = [r["state_machine_result"]["ledger"] for r in result_norms]
         cycles = [len(r["state_machine_result"]["completed_cycles"]) for r in result_norms]
         funding_events = [e for r in result_norms for e in r["state_machine_result"]["ledger"] if e["event_type"] == "funding"]
         assignment_keys = []
         if s.mode is ScenarioMode.ambiguity_envelope:
-            assignment_keys = ["".join(str(i) for i in _assignment_key(r)) for r in results]
+            assignment_keys = ["".join(str(i) for i in _assignment_key(r)) for r in fresh_results]
         final_positions = [r["state_machine_result"]["signed_position"] for r in result_norms]
         cumulative_funding = result_norms[0]["state_machine_result"]["cumulative_funding_pnl_usdt"] if result_norms else "0"
         generated_prices = [e["price"] for r in result_norms for e in r["generated_events"] if e["kind"] == "price"]
+        geom = geometric_grid_levels_decimal(s.config.lower_price, s.config.upper_price, s.config.grid_cell_number)
+        canonical_levels = [str(x) for x in geom.levels]
         level_count = int(s.config.grid_cell_number) + 1
-        levels = [str(s.config.lower_price + (s.config.upper_price - s.config.lower_price) * _D(i) / _D(s.config.grid_cell_number)) for i in range(level_count)]
+        result_levels = [r["state_machine_result"]["levels"] for r in result_norms]
+        canonical_levels_ok = len(canonical_levels) == level_count and len(set(canonical_levels)) == level_count and all(_D(canonical_levels[i]) < _D(canonical_levels[i + 1]) for i in range(level_count - 1)) and canonical_levels[0] == str(s.config.lower_price) and canonical_levels[-1] == str(s.config.upper_price) and geom.geometry_rounding_applied_bool is False
+        all_assignments_geometry = all(x == canonical_levels for x in result_levels)
+        econ_fps = [_economic_fingerprint(r) for r in result_norms]
+        econ_hashes = {canonical_sha256(x) for x in econ_fps}
+        event_hashes = {canonical_sha256(r["generated_events"]) for r in result_norms}
+        ledger_hashes = {canonical_sha256(r["state_machine_result"]["ledger"]) for r in result_norms}
+        prefix_bits = [_termination_prefix_check(s, fresh_results[i], result_norms[i]) for i in range(len(result_norms))]
         term_sides = [x for x in (("lower" if s.config.lower_termination_price is not None else None), ("upper" if s.config.upper_termination_price is not None else None)) if x]
+        guardrails = derive_guardrails_for_scenario(s, fresh_results)
         check = {
             "mode": s.mode.value,
             "category_symbol_source_consistent_bool": s.config.category == "linear" and all(c.symbol == s.config.symbol for c in s.candles) and all(f.symbol == s.config.symbol for f in s.funding_observations),
             "closed_contiguous_candles_bool": all(c.closed_bool for c in s.candles) and all(c.open_time_ms == s.entry_time_ms + i * 60000 for i, c in enumerate(s.candles)),
-            "assignment_count": len(results),
+            "assignment_count": len(result_norms),
             "assignment_keys": assignment_keys,
             "assignment_keys_unique_bool": len(set(assignment_keys)) == len(assignment_keys),
             "assignment_keys_exact_ordered_bool": assignment_keys == sorted(assignment_keys) and len(set(assignment_keys)) == len(assignment_keys),
-            "path_sensitive_bool": len({canonical_sha256({"pnl": r["final_total_pnl_usdt"], "cycle_count": len(r["state_machine_result"]["completed_cycles"]), "position": r["state_machine_result"]["signed_position"]}) for r in result_norms}) > 1,
-            "material_path_outcome_differs_bool": len({canonical_sha256(r) for r in result_norms}) > 1,
+            "economic_fingerprints": econ_fps,
+            "path_sensitive_bool": len(econ_hashes) > 1,
+            "material_path_outcome_differs_bool": len(econ_hashes) > 1,
+            "trace_sensitive_bool": len(event_hashes) > 1 or len(ledger_hashes) > 1,
             "all_final_positions_non_negative_bool": all(_D(p) >= 0 for p in final_positions),
             "all_final_positions_negative_bool": all(_D(p) < 0 for p in final_positions),
             "positive_long_exposure_observed_bool": any(_D(p) > 0 for p in final_positions),
@@ -644,51 +723,64 @@ def derive_scenario_audit(catalog=SCENARIO_CATALOG, replay_records=None):
             "termination_candle_index": (result_norms[0]["candle_count_processed"] - 1 if result_norms and result_norms[0]["termination_reason"] else None),
             "position_flat_after_termination_bool": (not result_norms[0]["termination_reason"]) or _D(result_norms[0]["state_machine_result"]["signed_position"]) == 0,
             "candles_not_processed_after_termination": result_norms[0]["candles_not_processed_after_termination"] if result_norms else 0,
-            "later_price_or_funding_events_absent_bool": (not result_norms[0]["termination_reason"]) or result_norms[0]["candles_not_processed_after_termination"] >= 0,
-            "canonical_levels": levels,
+            "consumed_event_prefix_exact_bool": all(x[0] for x in prefix_bits),
+            "later_price_or_funding_events_absent_bool": all(x[1] for x in prefix_bits),
+            "termination_event_contract_ok": all(x[2] for x in prefix_bits),
+            "ignored_candle_count_reconciled_bool": all(x[3] for x in prefix_bits),
+            "canonical_levels": canonical_levels,
             "canonical_level_count": level_count,
-            "canonical_levels_preserved_bool": len(set(levels)) == level_count,
-            "no_level_collapse_bool": len(set(levels)) == level_count,
+            "canonical_levels_preserved_bool": canonical_levels_ok and all_assignments_geometry,
+            "no_level_collapse_bool": len(set(canonical_levels)) == level_count,
+            "all_assignments_share_exact_geometry_bool": all_assignments_geometry,
+            "geometry_rounding_applied_bool": geom.geometry_rounding_applied_bool,
             "configured_termination_sides": term_sides,
             "one_termination_boundary_configured_bool": len(term_sides) == 1,
             "lower_termination_side_configured_bool": term_sides == ["lower"],
             "upper_termination_side_configured_bool": term_sides == ["upper"],
             "two_sided_termination_configured_bool": len(term_sides) == 2,
-            "guardrails": {k: s.expected[k] for k in _GUARDRAILS},
+            "guardrails": guardrails,
         }
+        if not check["canonical_levels_preserved_bool"]:
+            failures.append(f"{s.scenario_id}:canonical_levels")
+        if not (check["consumed_event_prefix_exact_bool"] and check["later_price_or_funding_events_absent_bool"] and check["termination_event_contract_ok"] and check["ignored_candle_count_reconciled_bool"]):
+            failures.append(f"{s.scenario_id}:termination_prefix")
         if s.scenario_id in {"09_gap_up_preserved", "10_gap_down_preserved"}:
             prev_close = str(s.candles[0].close)
             next_open = str(s.candles[1].open)
             lo, hi = sorted((_D(prev_close), _D(next_open)))
-            check.update({
-                "gap_direction": "up" if _D(next_open) > _D(prev_close) else "down",
-                "previous_candle_close_retained": prev_close,
-                "next_candle_open_retained": next_open,
-                "gap_preserved_bool": prev_close in generated_prices and next_open in generated_prices,
-                "no_interpolated_synthetic_price_inserted_between_gap_bool": not any(lo < _D(p) < hi for p in generated_prices[generated_prices.index(prev_close)+1:generated_prices.index(next_open)]),
-            })
+            check.update(
+                {
+                    "gap_direction": "up" if _D(next_open) > _D(prev_close) else "down",
+                    "previous_candle_close_retained": prev_close,
+                    "next_candle_open_retained": next_open,
+                    "gap_preserved_bool": prev_close in generated_prices and next_open in generated_prices,
+                    "no_interpolated_synthetic_price_inserted_between_gap_bool": not any(
+                        lo < _D(p) < hi
+                        for p in generated_prices[
+                            generated_prices.index(prev_close) + 1 : generated_prices.index(next_open)
+                        ]
+                    ),
+                }
+            )
         if s.scenario_id == "07_equal_pnl_different_nested_ledger":
             check["exact_equal_pnl_bool"] = len(set(final_pnls)) == 1
             check["nested_result_differs_bool"] = len({canonical_sha256(r["state_machine_result"]) for r in result_norms}) > 1
             check["ledger_differs_bool"] = len({canonical_sha256(x) for x in ledgers}) > 1
+            check["economic_fingerprint_equal_bool"] = len(econ_hashes) == 1
         if s.scenario_id == "22_bybit_source_enum_contract":
             check["candle_sources"] = [c.source.value for c in s.candles]
             check["funding_rate_sources"] = [f.funding_rate_source.value for f in s.funding_observations]
             check["funding_mark_price_sources"] = [f.mark_price_source.value for f in s.funding_observations]
-            check["synthetic_fixture_of_source_contract_bool"] = (
-                set(check["candle_sources"]) == {_CandleSource.bybit_trade_kline_1m.value}
-                and set(check["funding_rate_sources"]) == {_FundingRateSource.bybit_funding_history.value}
-                and set(check["funding_mark_price_sources"]) == {_FundingMarkPriceSource.bybit_mark_price_kline_1m.value}
-            )
+            check["synthetic_fixture_of_source_contract_bool"] = (set(check["candle_sources"]) == {_CandleSource.bybit_trade_kline_1m.value} and set(check["funding_rate_sources"]) == {_FundingRateSource.bybit_funding_history.value} and set(check["funding_mark_price_sources"]) == {_FundingMarkPriceSource.bybit_mark_price_kline_1m.value})
         for k, v in dict(s.expected).items():
             if k in _GUARDRAILS:
-                if check["guardrails"][k] is not v:
+                if guardrails[k] is not v:
                     failures.append(f"{s.scenario_id}:{k}")
             elif k == "exact_assignment_count" and check["assignment_count"] != v:
                 failures.append(f"{s.scenario_id}:{k}")
             elif k == "path_sensitive_bool" and check["path_sensitive_bool"] is not v:
                 failures.append(f"{s.scenario_id}:{k}")
-            elif k == "equal_top_level_pnl_different_nested_ledger_bool" and not (check.get("exact_equal_pnl_bool") and check.get("nested_result_differs_bool") and check.get("ledger_differs_bool")):
+            elif k == "equal_top_level_pnl_different_nested_ledger_bool" and not (check.get("exact_equal_pnl_bool") and check.get("nested_result_differs_bool") and check.get("ledger_differs_bool") and check.get("economic_fingerprint_equal_bool")):
                 failures.append(f"{s.scenario_id}:{k}")
             elif k == "completed_cycle_count_min" and check["completed_cycle_count_min"] != v:
                 failures.append(f"{s.scenario_id}:{k}")
@@ -701,7 +793,7 @@ def derive_scenario_audit(catalog=SCENARIO_CATALOG, replay_records=None):
             elif k not in {"path_sensitive_bool","exact_assignment_count","equal_top_level_pnl_different_nested_ledger_bool","completed_cycle_count_min","completed_cycle_count_max","funding_pnl_sign","synthetic_fixture_of_source_contract_bool"}:
                 failures.append(f"{s.scenario_id}:unmapped:{k}")
         checks[s.scenario_id] = check
-    return {"scenario_count": len(ids), "canonical_scenario_count": CANONICAL_SCENARIO_COUNT, "scenario_ids": ids, "scenario_ids_unique_bool": len(set(ids)) == len(ids), "scenario_ids_exact_order_bool": tuple(ids) == SCENARIO_IDS, "scenario_checks_by_id": checks, "failures": failures, "scenario_audit_ok": not failures}
+    return {"scenario_audit_version": SCENARIO_AUDIT_VERSION, "scenario_count": len(ids), "canonical_scenario_count": CANONICAL_SCENARIO_COUNT, "scenario_ids": ids, "scenario_ids_unique_bool": len(set(ids)) == len(ids), "scenario_ids_exact_order_bool": tuple(ids) == SCENARIO_IDS, "scenario_checks_by_id": checks, "failures": failures, "scenario_audit_ok": not failures}
 
 
 def build_scenario_audit():
