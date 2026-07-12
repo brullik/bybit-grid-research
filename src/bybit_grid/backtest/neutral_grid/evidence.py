@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -17,11 +18,12 @@ from .serialization import (
 )
 
 RUN_ID = "neutral_sm_v1_synthetic_v2"
-DEFAULT_PACK = "pm_review_pack_state_machine_neutral_sm_v1_synthetic_v2.zip"
+DEFAULT_PACK = "pm_review_pack_state_machine_neutral_sm_v1_synthetic_v2_gate6a.zip"
 STATE_MACHINE_CONTRACT_VERSION = "native_neutral_grid_reference_contract_v1"
-REVIEW_PACK_SCHEMA_VERSION = "neutral_grid_state_machine_review_pack_v2"
+REVIEW_PACK_SCHEMA_VERSION = "neutral_grid_state_machine_review_pack_v3_strict_types"
 MANIFEST_HASH_POLICY = "self_excluded_v1"
-REVIEW_PHASE = "synthetic_state_machine_evidence_complete"
+REVIEW_PHASE = "gate_6a_evidence_complete"
+EVIDENCE_TYPE_CONTRACT_VERSION = "strict_json_type_identity_v1"
 CANONICAL_SCENARIO_COUNT = 33
 RUN_STATUS_SCHEMA_VERSION = "neutral_grid_state_machine_run_status_v1"
 MEMBERS = [
@@ -47,6 +49,7 @@ MANIFEST_KEYS = {
     "state_machine_contract_version",
     "canonical_serialization_version",
     "scenario_version",
+    "evidence_type_contract_version",
     "canonical_scenario_count",
     "risk_budget_proven_bool",
     "parameter_selection_authorized_bool",
@@ -118,10 +121,23 @@ def _no_duplicate_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _reject_json_float(value: str) -> None:
+    raise EvidenceError("json_float_forbidden", token=value)
+
+
+def _reject_nonfinite_constant(value: str) -> None:
+    raise EvidenceError("nonfinite_json_number_forbidden", token=value)
+
+
 def strict_json_loads(data: bytes | str, *, member: str = "<memory>") -> Any:
     try:
         text = data.decode("utf-8") if isinstance(data, bytes) else data
-        return json.loads(text, object_pairs_hook=_no_duplicate_object_pairs)
+        return json.loads(
+            text,
+            object_pairs_hook=_no_duplicate_object_pairs,
+            parse_float=_reject_json_float,
+            parse_constant=_reject_nonfinite_constant,
+        )
     except EvidenceError:
         raise
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -314,7 +330,10 @@ def audit_persisted_scenario_evidence(
     if len(results) != CANONICAL_SCENARIO_COUNT:
         _fail(failures, "result_record_count_mismatch")
     for row, exp in zip(results, exp_results, strict=False):
-        if row.get("result_sha256") != canonical_sha256(row.get("normalized_result")):
+        result_hash = row.get("result_sha256")
+        if type(result_hash) is not str or _SHA256_RE.fullmatch(result_hash) is None:
+            result_hashes_match = False
+        elif result_hash != canonical_sha256(row.get("normalized_result")):
             result_hashes_match = False
         if row != exp:
             replay_match = False
@@ -347,6 +366,15 @@ def audit_persisted_scenario_evidence(
             r.termination.__class__()
         )
         audits_pass &= audit_simulation_result(r).passed_bool
+    input_hashes_match = True
+    for row in inputs:
+        input_hash = row.get("scenario_input_sha256")
+        if type(input_hash) is not str or _SHA256_RE.fullmatch(input_hash) is None:
+            input_hashes_match = False
+        elif input_hash != canonical_sha256(row.get("scenario")):
+            input_hashes_match = False
+    if not input_hashes_match:
+        _fail(failures, "scenario_input_hash_mismatch")
     hashes = [r.get("scenario_input_sha256") for r in inputs]
     out = {
         "scenario_audit_ok": False,
@@ -360,7 +388,8 @@ def audit_persisted_scenario_evidence(
         "all_result_audits_pass_bool": audits_pass and bool(results),
         "input_event_evidence_complete_bool": input_ok,
         "scenario_ids_unique_bool": len(ids) == len(set(ids)) and ids == exp_ids,
-        "scenario_input_hashes_unique_bool": len(hashes) == len(set(hashes))
+        "scenario_input_hashes_unique_bool": input_hashes_match
+        and len(hashes) == len(set(hashes))
         and len(hashes) == CANONICAL_SCENARIO_COUNT,
         "result_hashes_match_bool": result_hashes_match
         and len(results) == CANONICAL_SCENARIO_COUNT,
@@ -479,6 +508,19 @@ def _require_canonical_jsonl(member: str, data: bytes) -> list[dict[str, Any]]:
     return rows
 
 
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _require_exact_type(value: Any, expected_type: type, code: str, *, field: str) -> None:
+    if type(value) is not expected_type:
+        raise EvidenceError(code, field=field)
+
+
+def _require_string_list(value: Any, code: str, *, field: str) -> None:
+    if not isinstance(value, list) or any(type(item) is not str for item in value):
+        raise EvidenceError(code, field=field)
+
+
 def validate_manifest(manifest_bytes: bytes, data: dict[str, bytes], run_id: str) -> dict[str, Any]:
     man = _require_canonical_json("review_pack_manifest.json", manifest_bytes)
     if not isinstance(man, dict):
@@ -487,6 +529,24 @@ def validate_manifest(manifest_bytes: bytes, data: dict[str, bytes], run_id: str
         missing = sorted(MANIFEST_KEYS - set(man))
         extra = sorted(set(man) - MANIFEST_KEYS)
         raise EvidenceError("manifest_key_set_mismatch", missing=missing, extra=extra)
+    required_types = {
+        "review_pack_schema_version": str,
+        "manifest_hash_policy": str,
+        "review_phase": str,
+        "run_id": str,
+        "state_machine_contract_version": str,
+        "canonical_serialization_version": str,
+        "scenario_version": str,
+        "evidence_type_contract_version": str,
+        "canonical_scenario_count": int,
+        "risk_budget_proven_bool": bool,
+        "parameter_selection_authorized_bool": bool,
+        "live_authorized_bool": bool,
+        "sha256": dict,
+    }
+    for field, expected_type in required_types.items():
+        _require_exact_type(man[field], expected_type, "manifest_type_mismatch", field=field)
+    _require_string_list(man["members"], "manifest_type_mismatch", field="members")
     expected = {
         "review_pack_schema_version": REVIEW_PACK_SCHEMA_VERSION,
         "manifest_hash_policy": MANIFEST_HASH_POLICY,
@@ -495,6 +555,7 @@ def validate_manifest(manifest_bytes: bytes, data: dict[str, bytes], run_id: str
         "state_machine_contract_version": STATE_MACHINE_CONTRACT_VERSION,
         "canonical_serialization_version": CANONICAL_SERIALIZATION_VERSION,
         "scenario_version": SCENARIO_VERSION,
+        "evidence_type_contract_version": EVIDENCE_TYPE_CONTRACT_VERSION,
         "canonical_scenario_count": CANONICAL_SCENARIO_COUNT,
         **FALSE_GUARDRAILS,
         "members": MEMBERS,
@@ -503,8 +564,10 @@ def validate_manifest(manifest_bytes: bytes, data: dict[str, bytes], run_id: str
         if man.get(key) != value:
             raise EvidenceError("manifest_semantics_mismatch", field=key)
     sha = man.get("sha256")
-    if not isinstance(sha, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in sha.items()):
+    if any(type(k) is not str or type(v) is not str for k, v in sha.items()):
         raise EvidenceError("manifest_sha256_type_mismatch")
+    if any(_SHA256_RE.fullmatch(v) is None for v in sha.values()):
+        raise EvidenceError("manifest_sha256_format_mismatch")
     if MEMBERS[0] in sha:
         raise EvidenceError("manifest_self_hash_forbidden")
     if set(sha) != set(MEMBERS[1:]):
@@ -517,11 +580,11 @@ def validate_manifest(manifest_bytes: bytes, data: dict[str, bytes], run_id: str
 
 def validate_artifact_bundle(artifacts: dict[str, bytes], run_id: str) -> dict[str, Any]:
     try:
-        status = _require_canonical_json("state_machine_run_status.json", artifacts["state_machine_run_status.json"])
-        contract = _require_canonical_json("state_machine_contract_audit.json", artifacts["state_machine_contract_audit.json"])
-        catalog = _require_canonical_json("scenario_catalog.json", artifacts["scenario_catalog.json"])
+        _require_canonical_json("state_machine_run_status.json", artifacts["state_machine_run_status.json"])
+        _require_canonical_json("state_machine_contract_audit.json", artifacts["state_machine_contract_audit.json"])
+        _require_canonical_json("scenario_catalog.json", artifacts["scenario_catalog.json"])
         scen_aud = _require_canonical_json("scenario_audit.json", artifacts["scenario_audit.json"])
-        repro = _require_canonical_json("reproducibility_audit.json", artifacts["reproducibility_audit.json"])
+        _require_canonical_json("reproducibility_audit.json", artifacts["reproducibility_audit.json"])
         inputs = _require_canonical_jsonl("scenario_inputs.jsonl", artifacts["scenario_inputs.jsonl"])
         results = _require_canonical_jsonl("scenario_results.jsonl", artifacts["scenario_results.jsonl"])
         ledger = _require_canonical_jsonl("ledger_events.jsonl", artifacts["ledger_events.jsonl"])
@@ -530,31 +593,48 @@ def validate_artifact_bundle(artifacts: dict[str, bytes], run_id: str) -> dict[s
         risk = artifacts["risk_budget_readiness_report.md"]
     except KeyError as e:
         raise EvidenceError("malformed_required_artifact") from e
-    if status != {
+    exp_inputs, exp_results, exp_ledger, exp_cycles = build_evidence_records()
+    expected_status = {
         "canonical_scenario_count": CANONICAL_SCENARIO_COUNT,
         "completed_scenario_count": CANONICAL_SCENARIO_COUNT,
         "failed_scenario_count": 0,
         "input_record_count": CANONICAL_SCENARIO_COUNT,
         "result_record_count": CANONICAL_SCENARIO_COUNT,
-        "ledger_event_count": len(ledger),
-        "completed_cycle_count": len(cycles),
+        "ledger_event_count": len(exp_ledger),
+        "completed_cycle_count": len(exp_cycles),
         "run_id": run_id,
         "schema_version": RUN_STATUS_SCHEMA_VERSION,
         "state_machine_contract_version": STATE_MACHINE_CONTRACT_VERSION,
         "status": "complete",
-    }:
+    }
+    expected_catalog = {
+        "canonical_scenario_count": CANONICAL_SCENARIO_COUNT,
+        "scenario_ids": list(SCENARIO_IDS),
+        "scenario_version": SCENARIO_VERSION,
+    }
+    if artifacts["state_machine_run_status.json"] != canonical_json_bytes(expected_status):
         raise EvidenceError("status_semantics_mismatch")
-    if contract != CONTRACT_AUDIT:
+    if artifacts["state_machine_contract_audit.json"] != canonical_json_bytes(CONTRACT_AUDIT):
         raise EvidenceError("contract_audit_semantics_mismatch")
-    if catalog != {"canonical_scenario_count": CANONICAL_SCENARIO_COUNT, "scenario_ids": list(SCENARIO_IDS), "scenario_version": SCENARIO_VERSION}:
+    if artifacts["scenario_catalog.json"] != canonical_json_bytes(expected_catalog):
         raise EvidenceError("scenario_catalog_mismatch")
+    if artifacts["scenario_inputs.jsonl"] != jsonl_bytes(exp_inputs):
+        raise EvidenceError("input_records_mismatch")
+    if artifacts["scenario_results.jsonl"] != jsonl_bytes(exp_results):
+        raise EvidenceError("stored_result_replay_mismatch")
+    if artifacts["ledger_events.jsonl"] != jsonl_bytes(exp_ledger):
+        raise EvidenceError("ledger_rows_replay_mismatch")
+    if artifacts["completed_cycles.jsonl"] != jsonl_bytes(exp_cycles):
+        raise EvidenceError("cycle_rows_replay_mismatch")
     if any(row.get("scenario", {}).get("scenario_version") != SCENARIO_VERSION for row in inputs):
         raise EvidenceError("scenario_version_mismatch")
     expected_audit = audit_persisted_scenario_evidence(inputs, results, ledger, cycles)
     if scen_aud != expected_audit or not expected_audit["scenario_audit_ok"]:
         raise EvidenceError("scenario_audit_semantics_mismatch", failures=expected_audit["failures"])
+    if artifacts["scenario_audit.json"] != canonical_json_bytes(expected_audit):
+        raise EvidenceError("scenario_audit_semantics_mismatch", failures=expected_audit["failures"])
     expected_repro = derive_reproducibility_audit({"inputs": inputs, "results": results, "ledger": ledger, "cycles": cycles, "scenario_audit": scen_aud})
-    if repro != expected_repro or not expected_repro["reproducibility_audit_ok"]:
+    if artifacts["reproducibility_audit.json"] != canonical_json_bytes(expected_repro) or not expected_repro["reproducibility_audit_ok"]:
         raise EvidenceError("reproducibility_audit_semantics_mismatch")
     validate_reports(synthetic, risk, scen_aud)
     return {"input_records_verified": len(inputs), "result_records_verified": len(results), "ledger_rows_verified": len(ledger), "cycle_rows_verified": len(cycles), "fresh_replay_match_bool": True}

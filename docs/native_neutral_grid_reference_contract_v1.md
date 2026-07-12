@@ -130,3 +130,11 @@ live_execution_present_bool = false
 parameter_selection_authorized_bool = false
 live_authorized_bool = false
 ```
+
+## Gate 6A strict JSON type identity
+
+Gate 6A evidence validation treats JSON type identity as part of the persisted evidence semantics. JSON booleans are not interchangeable with integers, so `false` cannot be replaced by `0` and `true` cannot be replaced by `1`. JSON integers are not interchangeable with floating-point numbers, so `33` cannot be replaced by `33.0`, `3.3e1`, or any other floating-point token.
+
+All Decimal accounting values remain canonical strings in evidence artifacts. State-machine evidence JSON forbids JSON floats entirely, and also forbids non-standard JSON numeric constants such as `NaN`, `Infinity`, and `-Infinity`.
+
+The review-pack checker supplements the existing replay and accounting audits by comparing persisted JSON and JSONL artifacts against independently rebuilt canonical expected bytes. This strict type and byte-identity contract changes only evidence validation and does not change the neutral-grid state-machine economics, scenario definitions, or accounting formulas.

@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bybit_grid.backtest.neutral_grid.evidence import (
     CANONICAL_SERIALIZATION_VERSION,
+    EVIDENCE_TYPE_CONTRACT_VERSION,
     FALSE_GUARDRAILS,
     MANIFEST_HASH_POLICY,
     MEMBERS,
@@ -42,7 +43,7 @@ def main(argv=None):
         return emit(
             {"review_pack_ok": False, "error": "conflicting_output_paths", "run_id": a.run_id}, 1
         )
-    dest = Path(vals[0] if vals else "pm_review_pack_state_machine_neutral_sm_v1_synthetic_v2.zip")
+    dest = Path(vals[0] if vals else "pm_review_pack_state_machine_neutral_sm_v1_synthetic_v2_gate6a.zip")
     out = Path(a.output_root) / a.run_id
     rep = Path(a.report_root) / a.run_id
     try:
@@ -61,6 +62,7 @@ def main(argv=None):
             "state_machine_contract_version": STATE_MACHINE_CONTRACT_VERSION,
             "canonical_serialization_version": CANONICAL_SERIALIZATION_VERSION,
             "scenario_version": SCENARIO_VERSION,
+            "evidence_type_contract_version": EVIDENCE_TYPE_CONTRACT_VERSION,
             "canonical_scenario_count": 33,
             **FALSE_GUARDRAILS,
             "members": MEMBERS,
