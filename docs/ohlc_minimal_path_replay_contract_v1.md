@@ -48,3 +48,36 @@ Sprint 06.2A.2 closes the in-memory replay-evidence contract before persisted OH
 * **Whole-envelope strict reconciliation:** after each assignment passes the hardened replay audit, the envelope audit reconstructs the Cartesian assignment set, rebuilds aggregate envelope evidence from assignment results, and strictly compares the whole stored envelope to the recomputed envelope while preserving deterministic ordering and PnL tie-breaking.
 
 This contract continues to be limited to the two deterministic minimal-turn paths. It does not claim complete tick-path reconstruction, native exchange equivalence, liquidation modeling, or a true global PnL bound.
+
+## Sprint 06.2B — persisted synthetic OHLC evidence gate
+
+Sprint 06.2B freezes a deterministic 24-scenario synthetic OHLC catalog under contract
+`ohlc_minimal_path_replay_contract_v2` and scenario version
+`ohlc_minimal_path_scenarios_v1`. The catalog is text-only source code, has no wall-clock,
+random, machine-specific, downloaded market-data, private API, or live-execution inputs, and
+keeps the accepted Sprint 06.2A minimal path replay semantics unchanged.
+
+Funding observations now carry explicit source provenance: one exact funding-rate source enum and
+one exact funding mark-price source enum per replay. Replays reject mixed funding-rate sources,
+mixed mark-price sources, and funding category/symbol mismatches. The Bybit-named source scenario
+is synthetic evidence for the enum/source contract only; it is not downloaded Bybit market
+evidence.
+
+The owner runner writes canonical JSON/JSONL and Markdown evidence members, reads them back with a
+strict parser, and then performs a fresh semantic replay reconciliation before writing the final
+`complete` status. Strict persisted parsing rejects duplicate JSON keys, float/non-finite tokens,
+blank JSONL lines, missing final newlines, and non-canonical bytes. The neutral-grid Gate 6A
+canonical serializer remains reused rather than weakened.
+
+The review pack has exactly fourteen members in a fixed order, with a self-excluded manifest that
+hashes the other thirteen members. The checker independently validates member order, manifest
+schema, hashes, canonical byte identity, scenario catalog membership/order/version, fixed replay
+results, ambiguity envelopes, generated replay events, full state-machine ledger rows, and completed
+cycles against fresh replay output. Hashes are necessary but not sufficient: semantic tampering is
+rejected after rehash.
+
+Remaining false guardrails are preserved: minimal paths are not complete intrabar bounds; native
+quantity, native termination, liquidation, funding coverage, real Bybit batch integration, global
+true worst/best case, risk budget 5 USDT, parameter selection, profitability, live execution, and
+live authorization are not proven. The only readiness flag advanced by this synthetic gate is that
+the deterministic evidence is sufficient for the next real Bybit batch-integration step.
