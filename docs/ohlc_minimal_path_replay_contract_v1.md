@@ -33,3 +33,18 @@ Sprint 06.2A.1 tightens the OHLC minimal-path adapter contract before any persis
 * **Strict enumeration cap type:** `max_exact_ambiguous_candles` must be an `int`, not `bool`, and must be `>= 0`. Floats, strings, booleans, and negative values are rejected before enumeration or candle processing. `MinimalPathEnumerationCapExceededError` remains reserved for valid caps below the actual ambiguous-candle count.
 
 This contract still does not claim complete tick-path reconstruction, native exchange equivalence, or a true global PnL bound outside the two minimal paths.
+
+## Sprint 06.2A.2 strict snapshot identity and funding provenance
+
+Sprint 06.2A.2 closes the in-memory replay-evidence contract before persisted OHLC evidence is allowed.
+
+* **Exact Python runtime type identity:** replay and envelope audits reject scalar aliases such as `True` for `1`, `False` for `0`, floats for integers, integer zero for `Decimal("0")`, and `str` subclasses for exact public string evidence. Whole-result comparison is strict and recursive across dataclasses, enums, Decimals, tuples, and mappings.
+* **Immutable tuple evidence:** retained replay evidence containers must be exact tuples: `path_policies`, `source_candles`, `source_funding_observations`, and `generated_events`. Envelope `assignment_results`, min/max assignments, and termination-reason evidence are also exact tuples. Mutable list substitutions fail closed.
+* **Explicit `source_config`:** `OhlcReplayResult` retains the exact `NeutralGridConfig` used to produce the replay. The nested state-machine result config must match this source config by strict typed identity, and fresh audit replay uses `source_config` rather than trusting the nested result.
+* **Uniform `CandleSource`:** a replay may contain exactly one `CandleSource` value across all source candles. The result exposes that source as `candle_source`; mixed synthetic and Bybit trade-kline candle sources are rejected.
+* **Funding category/symbol provenance:** `FundingObservation` carries exact `category`, `symbol`, `time_ms`, `funding_rate`, and `mark_price` fields. Funding observations must be exact `linear` observations for the same stripped symbol as the replay config and source candles; no category or symbol is inferred or defaulted.
+* **Strict non-falsey sequence inputs:** public sequence inputs fail closed unless they are real non-string sequences. `candles` and path-policy sequences reject booleans, numbers, strings, bytes, mappings, and arbitrary non-sequence objects. `funding_observations` may be `None` or an actual non-string sequence; falsey aliases such as `False`, `0`, `""`, `b""`, and `{}` are not silently treated as empty.
+* **Whole-result fresh replay comparison:** the replay audit validates snapshot shape, provenance, event schedule, nested state-machine audit status, and then compares the entire stored `OhlcReplayResult` to an independently generated fresh replay using strict typed identity, including the entire nested `SimulationResult`.
+* **Whole-envelope strict reconciliation:** after each assignment passes the hardened replay audit, the envelope audit reconstructs the Cartesian assignment set, rebuilds aggregate envelope evidence from assignment results, and strictly compares the whole stored envelope to the recomputed envelope while preserving deterministic ordering and PnL tie-breaking.
+
+This contract continues to be limited to the two deterministic minimal-turn paths. It does not claim complete tick-path reconstruction, native exchange equivalence, liquidation modeling, or a true global PnL bound.

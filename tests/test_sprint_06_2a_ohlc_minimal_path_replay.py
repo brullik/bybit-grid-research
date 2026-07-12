@@ -140,7 +140,7 @@ def test_fixed_replay_invariant_ambiguous_no_double_fill_and_termination():
 
 
 def test_funding_order_and_rejections():
-    fs = [FundingObservation(120000, D("0.01"), D("100"))]
+    fs = [FundingObservation("linear", "BTCUSDT", 120000, D("0.01"), D("100"))]
     r = replay_ohlc_minimal_path(
         cfg(), 60000, [c(60000), c(120000)], MinimalPathPolicy.open_high_low_close, fs
     )
@@ -154,7 +154,7 @@ def test_funding_order_and_rejections():
             60000,
             [c(60000)],
             MinimalPathPolicy.open_high_low_close,
-            [FundingObservation(60000, D("0"), D("100"))],
+            [FundingObservation("linear", "BTCUSDT", 60000, D("0"), D("100"))],
         )
     with pytest.raises(ValueError):
         replay_ohlc_minimal_path(
@@ -162,10 +162,10 @@ def test_funding_order_and_rejections():
             60000,
             [c(60000), c(120000)],
             MinimalPathPolicy.open_high_low_close,
-            [FundingObservation(180000, D("0"), D("100"))],
+            [FundingObservation("linear", "BTCUSDT", 180000, D("0"), D("100"))],
         )
     with pytest.raises(ValueError):
-        FundingObservation(1, D("0"), D("100"))
+        FundingObservation("linear", "BTCUSDT", 1, D("0"), D("100"))
 
 
 def test_deterministic_detached_envelope_audit_and_guardrails():

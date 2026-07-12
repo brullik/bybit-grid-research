@@ -77,11 +77,21 @@ class OhlcCandle1m:
 
 @dataclass(frozen=True)
 class FundingObservation:
+    category: str
+    symbol: str
     time_ms: int
     funding_rate: Decimal
     mark_price: Decimal
 
     def __post_init__(self) -> None:
+        if type(self.category) is not str or self.category != "linear":
+            raise ValueError("category must be exactly str 'linear'")
+        if (
+            type(self.symbol) is not str
+            or self.symbol.strip() == ""
+            or self.symbol != self.symbol.strip()
+        ):
+            raise ValueError("symbol must be a non-empty stripped str")
         _int_minute(self.time_ms, "time_ms")
         _dec(self.funding_rate, "funding_rate", positive=False)
         _dec(self.mark_price, "mark_price", positive=True)

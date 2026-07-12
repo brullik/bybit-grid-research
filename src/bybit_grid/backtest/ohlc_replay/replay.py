@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from typing import Sequence
+from collections.abc import Mapping, Sequence
 from bybit_grid.backtest.neutral_grid.audit import audit_simulation_result
 from bybit_grid.backtest.neutral_grid.engine import NeutralGridReferenceEngine
 from bybit_grid.backtest.neutral_grid.models import (
@@ -11,7 +11,7 @@ from bybit_grid.backtest.neutral_grid.models import (
     PriceEvent,
     SimulationResult,
 )
-from .models import MINUTE_MS, FundingObservation, MinimalPathPolicy, OhlcCandle1m
+from .models import MINUTE_MS, CandleSource, FundingObservation, MinimalPathPolicy, OhlcCandle1m
 from .paths import minimal_path_prices, minimal_paths_are_distinct
 
 
@@ -78,28 +78,39 @@ class OhlcReplayResult:
     generated_events: tuple[GeneratedReplayEvent, ...]
     source_candles: tuple[OhlcCandle1m, ...]
     source_funding_observations: tuple[FundingObservation, ...]
+    candle_source: CandleSource
+    source_config: NeutralGridConfig
+
+
+def _is_public_sequence(value: object) -> bool:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray, Mapping))
+        and not isinstance(value, bool)
+    )
 
 
 def validate_candle_sequence(
     candles: Sequence[OhlcCandle1m], entry_time_ms: int
 ) -> tuple[OhlcCandle1m, ...]:
     _nb_int(entry_time_ms, "entry_time_ms", minute=True)
-    try:
-        cs = tuple(candles)
-    except TypeError as exc:
-        raise ValueError("candles must be a sequence") from exc
+    if not _is_public_sequence(candles):
+        raise ValueError("candles must be a non-string sequence")
+    cs = tuple(candles)
     if not cs:
         raise ValueError("at least one candle required")
     expected = entry_time_ms
     seen: set[int] = set()
-    cat = sym = None
+    cat = sym = src = None
     for c in cs:
-        if not isinstance(c, OhlcCandle1m):
-            raise ValueError("candles must be OhlcCandle1m")
+        if type(c) is not OhlcCandle1m:
+            raise ValueError("candles must be exactly OhlcCandle1m")
         if cat is None:
-            cat, sym = c.category, c.symbol
+            cat, sym, src = c.category, c.symbol, c.source
         if c.category != cat or c.symbol != sym:
             raise ValueError("all candles same category and symbol")
+        if c.source is not src:
+            raise ValueError("all candles must have one CandleSource")
         if c.open_time_ms in seen:
             raise ValueError("duplicate candle timestamp")
         if c.open_time_ms != expected:
@@ -120,7 +131,7 @@ def validate_replay_provenance(
         or config.symbol != config.symbol.strip()
     ):
         raise ValueError("config symbol must be stripped non-empty str")
-    if config.category != "linear":
+    if type(config.category) is not str or config.category != "linear":
         raise ValueError("config category must be linear")
     for c in candles:
         if c.category != "linear" or c.category != config.category or c.symbol != config.symbol:
@@ -132,6 +143,8 @@ def _policies(
 ) -> tuple[MinimalPathPolicy, ...]:
     if isinstance(policies, MinimalPathPolicy):
         return (policies,) * n
+    if not _is_public_sequence(policies):
+        raise ValueError("path policies must be MinimalPathPolicy or non-string sequence")
     ps = tuple(policies)
     if len(ps) != n or any(not isinstance(p, MinimalPathPolicy) for p in ps):
         raise ValueError("invalid path policies")
@@ -143,13 +156,20 @@ def validate_funding_observations(
     candles: tuple[OhlcCandle1m, ...],
     entry_time_ms: int,
 ) -> tuple[FundingObservation, ...]:
-    fs = tuple(funding or ())
+    if funding is None:
+        fs = ()
+    elif not _is_public_sequence(funding):
+        raise ValueError("funding_observations must be None or a non-string sequence")
+    else:
+        fs = tuple(funding)
     boundaries = {c.open_time_ms for c in candles}
     prev = -1
     final_close = candles[-1].close_boundary_ms
     for f in fs:
-        if not isinstance(f, FundingObservation):
-            raise ValueError("funding must be FundingObservation")
+        if type(f) is not FundingObservation:
+            raise ValueError("funding must be exactly FundingObservation")
+        if f.category != candles[0].category or f.symbol != candles[0].symbol:
+            raise ValueError("funding category/symbol mismatch")
         if f.time_ms <= prev:
             raise ValueError("funding observations sorted strictly by time")
         if f.time_ms == entry_time_ms:
@@ -239,6 +259,8 @@ def _execute_ohlc_replay_core(
         tuple(events),
         cs,
         fs,
+        cs[0].source,
+        config,
     )
 
 

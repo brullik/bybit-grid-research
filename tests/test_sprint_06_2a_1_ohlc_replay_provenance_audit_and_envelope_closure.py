@@ -54,7 +54,7 @@ def ok_result():
         60000,
         [c(), c(120000, o="100", h="106", low="94", cl="101")],
         MinimalPathPolicy.open_high_low_close,
-        [FundingObservation(120000, D("0.01"), D("100"))],
+        [FundingObservation("linear", "BTCUSDT", 120000, D("0.01"), D("100"))],
     )
 
 
