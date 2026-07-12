@@ -19,6 +19,16 @@ class MinimalPathPolicy(Enum):
     open_low_high_close = "open_low_high_close"
 
 
+class FundingRateSource(Enum):
+    synthetic = "synthetic"
+    bybit_funding_history = "bybit_funding_history"
+
+
+class FundingMarkPriceSource(Enum):
+    synthetic = "synthetic"
+    bybit_mark_price_kline_1m = "bybit_mark_price_kline_1m"
+
+
 def _int_minute(value: Any, name: str) -> None:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{name} must be int, not bool")
@@ -82,6 +92,8 @@ class FundingObservation:
     time_ms: int
     funding_rate: Decimal
     mark_price: Decimal
+    funding_rate_source: FundingRateSource = FundingRateSource.synthetic
+    mark_price_source: FundingMarkPriceSource = FundingMarkPriceSource.synthetic
 
     def __post_init__(self) -> None:
         if type(self.category) is not str or self.category != "linear":
@@ -95,3 +107,7 @@ class FundingObservation:
         _int_minute(self.time_ms, "time_ms")
         _dec(self.funding_rate, "funding_rate", positive=False)
         _dec(self.mark_price, "mark_price", positive=True)
+        if type(self.funding_rate_source) is not FundingRateSource:
+            raise ValueError("funding_rate_source must be FundingRateSource")
+        if type(self.mark_price_source) is not FundingMarkPriceSource:
+            raise ValueError("mark_price_source must be FundingMarkPriceSource")

@@ -11,7 +11,15 @@ from bybit_grid.backtest.neutral_grid.models import (
     PriceEvent,
     SimulationResult,
 )
-from .models import MINUTE_MS, CandleSource, FundingObservation, MinimalPathPolicy, OhlcCandle1m
+from .models import (
+    MINUTE_MS,
+    CandleSource,
+    FundingMarkPriceSource,
+    FundingObservation,
+    FundingRateSource,
+    MinimalPathPolicy,
+    OhlcCandle1m,
+)
 from .paths import minimal_path_prices, minimal_paths_are_distinct
 
 
@@ -79,6 +87,8 @@ class OhlcReplayResult:
     source_candles: tuple[OhlcCandle1m, ...]
     source_funding_observations: tuple[FundingObservation, ...]
     candle_source: CandleSource
+    funding_rate_source: FundingRateSource | None
+    funding_mark_price_source: FundingMarkPriceSource | None
     source_config: NeutralGridConfig
 
 
@@ -165,11 +175,19 @@ def validate_funding_observations(
     boundaries = {c.open_time_ms for c in candles}
     prev = -1
     final_close = candles[-1].close_boundary_ms
+    rate_src = mark_src = None
     for f in fs:
         if type(f) is not FundingObservation:
             raise ValueError("funding must be exactly FundingObservation")
         if f.category != candles[0].category or f.symbol != candles[0].symbol:
             raise ValueError("funding category/symbol mismatch")
+        if rate_src is None:
+            rate_src = f.funding_rate_source
+            mark_src = f.mark_price_source
+        if f.funding_rate_source is not rate_src:
+            raise ValueError("all funding observations must have one FundingRateSource")
+        if f.mark_price_source is not mark_src:
+            raise ValueError("all funding observations must have one FundingMarkPriceSource")
         if f.time_ms <= prev:
             raise ValueError("funding observations sorted strictly by time")
         if f.time_ms == entry_time_ms:
@@ -260,6 +278,8 @@ def _execute_ohlc_replay_core(
         cs,
         fs,
         cs[0].source,
+        fs[0].funding_rate_source if fs else None,
+        fs[0].mark_price_source if fs else None,
         config,
     )
 

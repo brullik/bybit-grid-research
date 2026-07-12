@@ -8,7 +8,14 @@ from .envelope import (
     MinimalPathEnumerationCapExceededError,
     enumerate_minimal_path_ambiguity_envelope,
 )
-from .models import CandleSource, FundingObservation, MinimalPathPolicy, OhlcCandle1m
+from .models import (
+    CandleSource,
+    FundingMarkPriceSource,
+    FundingObservation,
+    FundingRateSource,
+    MinimalPathPolicy,
+    OhlcCandle1m,
+)
 from .paths import minimal_path_prices, minimal_paths_are_distinct, normalize_consecutive_duplicates
 from .replay import (
     GeneratedReplayEvent,
@@ -23,6 +30,8 @@ from .replay import (
 __all__ = [
     "CandleSource",
     "FundingObservation",
+    "FundingRateSource",
+    "FundingMarkPriceSource",
     "MinimalPathPolicy",
     "OhlcCandle1m",
     "minimal_path_prices",

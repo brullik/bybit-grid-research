@@ -4,7 +4,7 @@ from dataclasses import dataclass, fields, is_dataclass
 from decimal import Decimal
 from enum import Enum
 from .envelope import MinimalPathAmbiguityEnvelope, _build
-from .models import CandleSource, FundingObservation, MinimalPathPolicy, OhlcCandle1m
+from .models import CandleSource, FundingMarkPriceSource, FundingObservation, FundingRateSource, MinimalPathPolicy, OhlcCandle1m
 from .paths import minimal_paths_are_distinct
 from .replay import (
     GeneratedReplayEvent,
@@ -102,6 +102,10 @@ def _validate_replay_snapshot_shape(result: object) -> list[str]:
         f.append("source_config_mismatch")
     if not isinstance(result.candle_source, CandleSource):
         f.append("source_config_mismatch")
+    if result.funding_rate_source is not None and type(result.funding_rate_source) is not FundingRateSource:
+        f.append("source_config_mismatch")
+    if result.funding_mark_price_source is not None and type(result.funding_mark_price_source) is not FundingMarkPriceSource:
+        f.append("source_config_mismatch")
     if result.candle_count_processed > result.candle_count_input:
         f.append("replay_scalar_type_mismatch")
     return f
@@ -117,6 +121,8 @@ def audit_ohlc_replay_result(result: OhlcReplayResult) -> OhlcReplayAuditResult:
         if result.candle_source is not cs[0].source:
             f.append("source_config_mismatch")
         fs = validate_funding_observations(result.source_funding_observations, cs, result.entry_time_ms)
+        if (result.funding_rate_source, result.funding_mark_price_source) != ((fs[0].funding_rate_source, fs[0].mark_price_source) if fs else (None, None)):
+            f.append("source_config_mismatch")
         if _strict_equal(result.source_config, result.state_machine_result.config):
             f.append("source_config_mismatch")
         fresh = _execute_ohlc_replay_core(result.source_config, result.entry_time_ms, cs, result.path_policies, fs)
