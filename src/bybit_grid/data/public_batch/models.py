@@ -1,5 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from types import MappingProxyType
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import Enum
 from bybit_grid.backtest.ohlc_replay.models import (
@@ -19,6 +21,7 @@ class PublicBatchError(ValueError):
 
 class InstrumentContractType(str, Enum):
     LinearPerpetual = "LinearPerpetual"
+    LinearFutures = "LinearFutures"
 
 
 class InstrumentStatus(str, Enum):
@@ -135,11 +138,13 @@ class BybitInstrumentMeta:
         for n in ("symbol", "base_coin", "quote_coin", "settle_coin"):
             _str(getattr(self, n), n, upper=True)
         _str(self.contract_type, "contract_type")
+        if self.contract_type not in {"LinearPerpetual", "LinearFutures"}:
+            raise PublicBatchError("contract_type_unknown")
         _str(self.status, "status")
         _bool(self.is_pre_listing, "is_pre_listing")
         for n in ("launch_time_ms", "delivery_time_ms", "snapshot_server_time_ms"):
             _int(getattr(self, n), n)
-        _int(self.funding_interval_minutes, "funding_interval_minutes", positive=True)
+        _int(self.funding_interval_minutes, "funding_interval_minutes")
         for n in (
             "tick_size",
             "qty_step",
@@ -158,6 +163,7 @@ class BybitInstrumentMeta:
             and self.quote_coin == "USDT"
             and self.settle_coin == "USDT"
             and self.is_pre_listing is False
+            and self.funding_interval_minutes > 0
         )
 
 
@@ -255,6 +261,42 @@ class BybitFundingRate:
             FundingRateSource.bybit_funding_history,
             FundingMarkPriceSource.bybit_mark_price_kline_1m,
         )
+
+
+@dataclass(frozen=True)
+class BybitInstrumentUniverseAudit:
+    instrument_count: int
+    contract_type_counts: Mapping[str, int]
+    status_counts: Mapping[str, int]
+    quote_coin_counts: Mapping[str, int]
+    settle_coin_counts: Mapping[str, int]
+    funding_interval_counts: Mapping[int, int]
+    zero_funding_interval_count: int
+    zero_funding_interval_symbols: tuple[str, ...]
+    zero_funding_interval_by_contract_type: Mapping[str, int]
+    linear_perpetual_count: int
+    linear_futures_count: int
+    usdt_linear_perpetual_count: int
+    replay_eligible_count: int
+    replay_eligible_zero_funding_interval_count: int
+    replay_candidate_zero_funding_interval_symbols: tuple[str, ...]
+    symbols_unique_bool: bool
+    all_rows_exact_public_models_bool: bool
+    universe_audit_ok: bool
+    failures: tuple[str, ...]
+
+    def __post_init__(self):
+        for name in (
+            "contract_type_counts",
+            "status_counts",
+            "quote_coin_counts",
+            "settle_coin_counts",
+            "funding_interval_counts",
+            "zero_funding_interval_by_contract_type",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, MappingProxyType):
+                object.__setattr__(self, name, MappingProxyType(dict(value)))
 
 
 @dataclass(frozen=True)
