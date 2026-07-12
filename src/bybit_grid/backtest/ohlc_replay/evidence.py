@@ -4,9 +4,16 @@ import hashlib
 import json
 import re
 import zipfile
+from decimal import Decimal as _D
 from pathlib import Path
+from types import MappingProxyType as _MappingProxyType
 from typing import Any
 
+from bybit_grid.backtest.neutral_grid.models import (
+    LiquidityRole as _LiquidityRole,
+    NeutralGridConfig as _NeutralGridConfig,
+    QuantitySource as _QuantitySource,
+)
 from bybit_grid.backtest.neutral_grid.serialization import (
     canonical_json_bytes,
     canonical_sha256,
@@ -15,6 +22,14 @@ from bybit_grid.backtest.neutral_grid.serialization import (
 
 from .audit import audit_minimal_path_ambiguity_envelope, audit_ohlc_replay_result
 from .envelope import _assignment_key, enumerate_minimal_path_ambiguity_envelope
+from .models import (
+    CandleSource as _CandleSource,
+    FundingMarkPriceSource as _FundingMarkPriceSource,
+    FundingObservation as _FundingObservation,
+    FundingRateSource as _FundingRateSource,
+    MinimalPathPolicy as _MinimalPathPolicy,
+    OhlcCandle1m as _OhlcCandle1m,
+)
 from .replay import replay_ohlc_minimal_path
 from .scenarios import (
     CANONICAL_SCENARIO_COUNT,
@@ -30,6 +45,7 @@ from .scenarios import (
     SCENARIO_VERSION,
     ScenarioMode,
 )
+from .scenarios import GUARDRAILS as _GUARDRAILS, OhlcReplayScenario as _OhlcReplayScenario
 
 MEMBERS = (
     "review_pack_manifest.json",
@@ -275,7 +291,7 @@ def build_contract_audit():
     }
 
 
-def build_scenario_audit():
+def _legacy_hard_coded_scenario_audit_removed():
     ids = [s.scenario_id for s in SCENARIO_CATALOG]
     failures = []
     if tuple(ids) != SCENARIO_IDS:
@@ -346,9 +362,13 @@ def write_run(output_root: Path, report_root: Path, run_id=RUN_ID, fail_after_bu
         raise EvidenceError("fail_after_building_test_hook")
     files = build_records(run_id)
     for name, b in files.items():
+        if name == "ohlc_replay_run_status.json":
+            continue
         root = rep if name.endswith(".md") else out
         (root / name).write_bytes(b)
-    audit_directory(out, rep, run_id)
+    audit_directory(out, rep, run_id, require_complete_status=False)
+    (out / "ohlc_replay_run_status.json").write_bytes(files["ohlc_replay_run_status.json"])
+    audit_directory(out, rep, run_id, require_complete_status=True)
     return {
         "run_id": run_id,
         "status": "complete",
@@ -362,10 +382,15 @@ def write_run(output_root: Path, report_root: Path, run_id=RUN_ID, fail_after_bu
     }
 
 
-def audit_directory(out: Path, rep: Path, run_id=RUN_ID):
+def audit_directory(out: Path, rep: Path, run_id=RUN_ID, require_complete_status=True):
     expected = build_records(run_id)
     for name in MEMBERS:
-        data = (rep / name).read_bytes() if name.endswith(".md") else (out / name).read_bytes()
+        path = (rep / name) if name.endswith(".md") else (out / name)
+        if name == "ohlc_replay_run_status.json" and not require_complete_status:
+            if not path.exists() or read_json(path).get("status") != "building":
+                raise EvidenceError("run_status_not_building")
+            continue
+        data = path.read_bytes()
         if data != expected[name]:
             raise EvidenceError(f"member_semantic_mismatch:{name}")
     return True
@@ -399,6 +424,10 @@ def check_zip(path: Path, run_id=RUN_ID):
             data = z.read(n)
             if data != expected[n]:
                 raise EvidenceError(f"member_semantic_mismatch:{n}")
+        persisted_scenarios = reconstruct_persisted_scenarios([_loads_strict_bytes(line) for line in z.read("scenario_inputs.jsonl").splitlines(keepends=True)])
+        fresh_audit = derive_scenario_audit(persisted_scenarios)
+        if not fresh_audit["scenario_audit_ok"]:
+            raise EvidenceError("persisted_scenario_audit_failed")
         manifest = _loads_strict_bytes(z.read("review_pack_manifest.json"))
         if set(manifest.keys()) != set(MANIFEST_KEYS):
             raise EvidenceError("manifest_key_contract_mismatch")
@@ -427,3 +456,150 @@ def check_zip(path: Path, run_id=RUN_ID):
         "member_count": len(MEMBERS),
         "non_manifest_hash_count": 13,
     }
+
+# Sprint 06.2B.1 strict persisted-input reconstruction and source hygiene helpers.
+SOURCE_CONTROLLED_ROOTS = ("src", "scripts", "tests", "docs", "config")
+FORBIDDEN_SOURCE_SUFFIXES = (".zip", ".parquet", ".jsonl", ".db", ".sqlite", ".sqlite3", ".pyc", ".pyo")
+FORBIDDEN_SOURCE_DIR_NAMES = ("__pycache__", ".pytest_cache", ".ruff_cache")
+
+
+def find_source_hygiene_violations(root: Path) -> list[str]:
+    violations: list[str] = []
+    for rel in SOURCE_CONTROLLED_ROOTS:
+        base = root / rel
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            name = path.name
+            if path.is_dir() and (name in FORBIDDEN_SOURCE_DIR_NAMES or name.endswith(".egg-info")):
+                violations.append(str(path.relative_to(root)))
+            elif path.is_file() and path.suffix in FORBIDDEN_SOURCE_SUFFIXES:
+                violations.append(str(path.relative_to(root)))
+    return sorted(violations)
+def _sign(v: str) -> str:
+    d = _D(v)
+    return "positive" if d > 0 else "negative" if d < 0 else "zero"
+
+
+def _fresh_record_for(s):
+    if s.mode is ScenarioMode.fixed_replay:
+        r = _fixed_result(s)
+        return normalize(r), [r]
+    e = _env_result(s)
+    return normalize(e), list(e.assignment_results)
+
+
+def derive_scenario_audit(catalog=SCENARIO_CATALOG, replay_records=None):
+    checks = {}
+    failures = []
+    ids = [s.scenario_id for s in catalog]
+    if tuple(ids) != SCENARIO_IDS or len(set(ids)) != len(ids) or len(ids) != CANONICAL_SCENARIO_COUNT:
+        failures.append("scenario_id_contract")
+    for s in catalog:
+        norm, results = _fresh_record_for(s)
+        result_norms = [normalize(r) for r in results]
+        final_pnls = [r["final_total_pnl_usdt"] for r in result_norms]
+        ledgers = [r["state_machine_result"]["ledger"] for r in result_norms]
+        cycles = [len(r["state_machine_result"]["completed_cycles"]) for r in result_norms]
+        funding_events = [e for r in result_norms for e in r["state_machine_result"]["ledger"] if e["event_type"] == "funding"]
+        assignment_keys = []
+        if s.mode is ScenarioMode.ambiguity_envelope:
+            assignment_keys = ["".join(str(i) for i in _assignment_key(r)) for r in results]
+        check = {
+            "mode": s.mode.value,
+            "category_symbol_source_consistent_bool": s.config.category == "linear" and all(c.symbol == s.config.symbol for c in s.candles) and all(f.symbol == s.config.symbol for f in s.funding_observations),
+            "closed_contiguous_candles_bool": all(c.closed_bool for c in s.candles) and all(c.open_time_ms == s.entry_time_ms + i * 60000 for i, c in enumerate(s.candles)),
+            "assignment_count": len(results),
+            "assignment_keys_unique_bool": len(set(assignment_keys)) == len(assignment_keys),
+            "path_sensitive_bool": len({canonical_sha256({"pnl": r["final_total_pnl_usdt"], "cycle_count": len(r["state_machine_result"]["completed_cycles"]), "position": r["state_machine_result"]["signed_position"]}) for r in result_norms}) > 1,
+            "completed_cycle_count_min": min(cycles) if cycles else 0,
+            "completed_cycle_count_max": max(cycles) if cycles else 0,
+            "funding_event_count": len(funding_events),
+            "funding_pnl_signs": [_sign(e["funding_pnl_usdt"]) for e in funding_events],
+            "funding_positions_before": [e["signed_position_before"] for e in funding_events],
+            "termination_reason": result_norms[0]["termination_reason"] if result_norms else None,
+            "candles_not_processed_after_termination": result_norms[0]["candles_not_processed_after_termination"] if result_norms else 0,
+            "guardrails": {k: s.expected[k] for k in _GUARDRAILS},
+        }
+        if s.scenario_id == "07_equal_pnl_different_nested_ledger":
+            check["exact_equal_pnl_bool"] = len(set(final_pnls)) == 1
+            check["nested_result_differs_bool"] = len({canonical_sha256(r["state_machine_result"]) for r in result_norms}) > 1
+            check["ledger_differs_bool"] = len({canonical_sha256(x) for x in ledgers}) > 1
+        if s.scenario_id == "22_bybit_source_enum_contract":
+            check["candle_sources"] = [c.source.value for c in s.candles]
+            check["funding_rate_sources"] = [f.funding_rate_source.value for f in s.funding_observations]
+            check["funding_mark_price_sources"] = [f.mark_price_source.value for f in s.funding_observations]
+        for k, v in dict(s.expected).items():
+            if k in _GUARDRAILS:
+                if check["guardrails"][k] is not v:
+                    failures.append(f"{s.scenario_id}:{k}")
+            elif k == "exact_assignment_count" and check["assignment_count"] != v:
+                failures.append(f"{s.scenario_id}:{k}")
+            elif k == "path_sensitive_bool" and check["path_sensitive_bool"] is not v:
+                failures.append(f"{s.scenario_id}:{k}")
+            elif k == "equal_top_level_pnl_different_nested_ledger_bool" and not (check.get("exact_equal_pnl_bool") and check.get("nested_result_differs_bool") and check.get("ledger_differs_bool")):
+                failures.append(f"{s.scenario_id}:{k}")
+            elif k == "completed_cycle_count_min" and check["completed_cycle_count_min"] != v:
+                failures.append(f"{s.scenario_id}:{k}")
+            elif k == "completed_cycle_count_max" and check["completed_cycle_count_max"] != v:
+                failures.append(f"{s.scenario_id}:{k}")
+            elif k == "funding_pnl_sign" and _sign(result_norms[0]["state_machine_result"]["cumulative_funding_pnl_usdt"]) != v:
+                failures.append(f"{s.scenario_id}:{k}")
+        checks[s.scenario_id] = check
+    return {"scenario_count": len(ids), "canonical_scenario_count": CANONICAL_SCENARIO_COUNT, "scenario_ids": ids, "scenario_ids_unique_bool": len(set(ids)) == len(ids), "scenario_ids_exact_order_bool": tuple(ids) == SCENARIO_IDS, "scenario_checks_by_id": checks, "failures": failures, "scenario_audit_ok": not failures}
+
+
+def build_scenario_audit():
+    return derive_scenario_audit()
+
+
+def _exact_keys(obj, keys, label):
+    if type(obj) is not dict or set(obj) != set(keys):
+        raise EvidenceError(f"{label}_key_contract_mismatch")
+
+
+def _dec_from_str(v, label):
+    if type(v) is not str:
+        raise EvidenceError(f"{label}_decimal_string_required")
+    return _D(v)
+
+
+def _config_from_obj(o):
+    keys = ["category","symbol","lower_price","upper_price","base_price","grid_cell_number","quantity_per_grid_base","quantity_source","leverage","maker_fee_rate","taker_fee_rate","grid_fill_liquidity_role","termination_liquidity_role","termination_slippage_bps","lower_termination_price","upper_termination_price"]
+    _exact_keys(o, keys, "config")
+    return _NeutralGridConfig(o["category"], o["symbol"], _dec_from_str(o["lower_price"], "lower_price"), _dec_from_str(o["upper_price"], "upper_price"), _dec_from_str(o["base_price"], "base_price"), o["grid_cell_number"], _dec_from_str(o["quantity_per_grid_base"], "quantity"), _QuantitySource(o["quantity_source"]), _dec_from_str(o["leverage"], "leverage"), _dec_from_str(o["maker_fee_rate"], "maker_fee_rate"), _dec_from_str(o["taker_fee_rate"], "taker_fee_rate"), _LiquidityRole(o["grid_fill_liquidity_role"]), _LiquidityRole(o["termination_liquidity_role"]), _dec_from_str(o["termination_slippage_bps"], "slippage"), None if o["lower_termination_price"] is None else _dec_from_str(o["lower_termination_price"], "lower_term"), None if o["upper_termination_price"] is None else _dec_from_str(o["upper_termination_price"], "upper_term"))
+
+
+def _candle_from_obj(o):
+    _exact_keys(o, ["category","symbol","open_time_ms","open","high","low","close","closed_bool","source"], "candle")
+    return _OhlcCandle1m(o["category"], o["symbol"], o["open_time_ms"], _dec_from_str(o["open"], "open"), _dec_from_str(o["high"], "high"), _dec_from_str(o["low"], "low"), _dec_from_str(o["close"], "close"), o["closed_bool"], _CandleSource(o["source"]))
+
+
+def _funding_from_obj(o):
+    _exact_keys(o, ["category","symbol","time_ms","funding_rate","mark_price","funding_rate_source","mark_price_source"], "funding")
+    return _FundingObservation(o["category"], o["symbol"], o["time_ms"], _dec_from_str(o["funding_rate"], "funding_rate"), _dec_from_str(o["mark_price"], "mark_price"), _FundingRateSource(o["funding_rate_source"]), _FundingMarkPriceSource(o["mark_price_source"]))
+
+
+def deserialize_scenario_record(row) -> _OhlcReplayScenario:
+    _exact_keys(row, ["scenario_id", "scenario_version", "scenario_input_sha256", "mode", "scenario"], "scenario_input_row")
+    scen = row["scenario"]
+    _exact_keys(scen, ["scenario_id","scenario_version","mode","config","entry_time_ms","candles","funding_observations","path_policies","max_exact_ambiguous_candles","expected"], "scenario")
+    if canonical_sha256(scen) != row["scenario_input_sha256"]:
+        raise EvidenceError("scenario_input_sha256_mismatch")
+    mode = ScenarioMode(row["mode"])
+    if scen["mode"] != row["mode"] or scen["scenario_id"] != row["scenario_id"] or scen["scenario_version"] != row["scenario_version"]:
+        raise EvidenceError("scenario_row_field_mismatch")
+    policies = None if scen["path_policies"] is None else tuple(_MinimalPathPolicy(x) for x in scen["path_policies"])
+    s = _OhlcReplayScenario(scen["scenario_id"], scen["scenario_version"], mode, _config_from_obj(scen["config"]), scen["entry_time_ms"], tuple(_candle_from_obj(x) for x in scen["candles"]), tuple(_funding_from_obj(x) for x in scen["funding_observations"]), policies, scen["max_exact_ambiguous_candles"], _MappingProxyType(dict(scen["expected"])))
+    if normalize(s) != scen:
+        raise EvidenceError("reconstructed_scenario_bytes_mismatch")
+    return s
+
+
+def reconstruct_persisted_scenarios(rows):
+    scenarios = tuple(deserialize_scenario_record(r) for r in rows)
+    if tuple(s.scenario_id for s in scenarios) != SCENARIO_IDS:
+        raise EvidenceError("persisted_scenario_id_order_mismatch")
+    if len({s.scenario_id for s in scenarios}) != CANONICAL_SCENARIO_COUNT:
+        raise EvidenceError("persisted_scenario_duplicate_or_missing")
+    return scenarios
