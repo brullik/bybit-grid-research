@@ -16,6 +16,7 @@ from bybit_grid.backtest.neutral_grid.evidence import (
     REVIEW_PACK_SCHEMA_VERSION,
     REVIEW_PHASE,
     RUN_ID,
+    SCENARIO_VERSION,
     STATE_MACHINE_CONTRACT_VERSION,
     EvidenceError,
     validate_artifact_bundle,
@@ -41,7 +42,7 @@ def main(argv=None):
         return emit(
             {"review_pack_ok": False, "error": "conflicting_output_paths", "run_id": a.run_id}, 1
         )
-    dest = Path(vals[0] if vals else "pm_review_pack_state_machine_neutral_sm_v1_synthetic.zip")
+    dest = Path(vals[0] if vals else "pm_review_pack_state_machine_neutral_sm_v1_synthetic_v2.zip")
     out = Path(a.output_root) / a.run_id
     rep = Path(a.report_root) / a.run_id
     try:
@@ -59,6 +60,7 @@ def main(argv=None):
             "run_id": a.run_id,
             "state_machine_contract_version": STATE_MACHINE_CONTRACT_VERSION,
             "canonical_serialization_version": CANONICAL_SERIALIZATION_VERSION,
+            "scenario_version": SCENARIO_VERSION,
             "canonical_scenario_count": 33,
             **FALSE_GUARDRAILS,
             "members": MEMBERS,

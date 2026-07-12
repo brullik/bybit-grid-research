@@ -8,12 +8,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bybit_grid.backtest.neutral_grid.evidence import (
     CONTRACT_AUDIT,
     MEMBERS,
-    RISK_REPORT_GUARDRAILS,
     RUN_ID,
     RUN_STATUS_SCHEMA_VERSION,
     SCENARIO_IDS,
+    SCENARIO_VERSION,
     STATE_MACHINE_CONTRACT_VERSION,
     audit_persisted_scenario_evidence,
+    build_risk_budget_readiness_report,
+    build_synthetic_scenario_report,
     build_evidence_records,
     derive_reproducibility_audit,
     jsonl_bytes,
@@ -78,7 +80,7 @@ def main(argv=None):
         write_json(out / "state_machine_contract_audit.json", CONTRACT_AUDIT)
         write_json(
             out / "scenario_catalog.json",
-            {"canonical_scenario_count": 33, "scenario_ids": list(SCENARIO_IDS)},
+            {"canonical_scenario_count": 33, "scenario_ids": list(SCENARIO_IDS), "scenario_version": SCENARIO_VERSION},
         )
         write_jsonl(out / "scenario_inputs.jsonl", inputs)
         write_jsonl(out / "scenario_results.jsonl", results)
@@ -100,23 +102,16 @@ def main(argv=None):
             raise RuntimeError("reproducibility audit failed")
         write_json(out / "scenario_audit.json", aud)
         write_json(out / "reproducibility_audit.json", repro)
-        (rep / "synthetic_scenario_report.md").write_text(
-            "# Synthetic scenario report\n\ncanonical_scenario_count = 33\ninput_event_evidence_complete_bool = true\nall_scenarios_replay_match_bool = true\nall_result_audits_pass_bool = true\n",
-            encoding="utf-8",
-        )
-        (rep / "risk_budget_readiness_report.md").write_text(
-            "# Risk budget readiness\n"
-            + "\n".join(f"{k} = {str(v).lower()}" for k, v in RISK_REPORT_GUARDRAILS.items())
-            + "\n",
-            encoding="utf-8",
-        )
+        (rep / "synthetic_scenario_report.md").write_bytes(build_synthetic_scenario_report(aud))
+        (rep / "risk_budget_readiness_report.md").write_bytes(build_risk_budget_readiness_report())
         artifacts = {m: (out / m).read_bytes() for m in MEMBERS[1:10]} | {
             m: (rep / m).read_bytes() for m in MEMBERS[10:]
         }
         # validate reports/audits before completion; status is validated after final write by builder/checker
         validate_reports(
-            artifacts["synthetic_scenario_report.md"].decode(),
-            artifacts["risk_budget_readiness_report.md"].decode(),
+            artifacts["synthetic_scenario_report.md"],
+            artifacts["risk_budget_readiness_report.md"],
+            aud,
         )
         final = status(
             a.run_id,

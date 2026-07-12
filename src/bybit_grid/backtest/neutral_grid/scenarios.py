@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import TypeAlias
 
 from .engine import NeutralGridReferenceEngine
+from .geometry import geometric_grid_levels_decimal
 from .models import (
     FundingEvent,
     LiquidityRole,
@@ -18,7 +19,7 @@ from .models import (
     _non_bool_int,
 )
 
-SCENARIO_VERSION = "neutral_grid_synthetic_scenario_v1"
+SCENARIO_VERSION = "neutral_grid_synthetic_scenario_v2"
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,8 @@ SCENARIO_IDS = (
 
 
 def canonical_scenarios() -> tuple[ScenarioDefinition, ...]:
-    exact = cfg(upper="125", base="100")
+    exact_levels = geometric_grid_levels_decimal(Decimal("80"), Decimal("125"), 4).levels
+    exact = cfg(upper="125", base=str(exact_levels[2]))
     low = cfg(lower="0.08", upper="0.12", base="0.10", lower_term="0.07", upper_term="0.13")
     tight = cfg(
         lower="9998", upper="10002", base="10000", cells=8, lower_term="9997", upper_term="10003"
