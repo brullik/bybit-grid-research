@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import MappingProxyType
 from decimal import Decimal as D
+from collections.abc import Mapping
 from enum import Enum
 
 from bybit_grid.backtest.neutral_grid.models import LiquidityRole, NeutralGridConfig, QuantitySource
@@ -46,6 +47,33 @@ GUARDRAILS = {
     "live_authorized_bool": False,
     "sufficient_for_bybit_batch_integration_bool": False,
 }
+
+
+ALLOWED_EXPECTED_VALUE_TYPES = (bool, int, str)
+ALLOWED_EXPECTED_KEYS = frozenset(GUARDRAILS) | {
+    "path_sensitive_bool",
+    "exact_assignment_count",
+    "equal_top_level_pnl_different_nested_ledger_bool",
+    "completed_cycle_count_min",
+    "completed_cycle_count_max",
+    "funding_pnl_sign",
+    "synthetic_fixture_of_source_contract_bool",
+}
+
+def _freeze_expected(expected):
+    if not isinstance(expected, Mapping):
+        raise ValueError("expected must be a mapping")
+    frozen = {}
+    for key, value in expected.items():
+        if type(key) is not str or key not in ALLOWED_EXPECTED_KEYS:
+            raise ValueError(f"unknown expected semantic key: {key}")
+        if type(value) not in ALLOWED_EXPECTED_VALUE_TYPES or isinstance(value, bool) and key in {"exact_assignment_count", "completed_cycle_count_min", "completed_cycle_count_max"}:
+            raise ValueError(f"invalid expected semantic value for {key}")
+        frozen[key] = value
+    missing = set(GUARDRAILS) - set(frozen)
+    if missing:
+        raise ValueError(f"missing required guardrail keys: {sorted(missing)}")
+    return MappingProxyType(frozen)
 
 SCENARIO_IDS = (
     "01_flat_no_ambiguity",
@@ -120,8 +148,8 @@ class OhlcReplayScenario:
                 raise ValueError("ambiguity_envelope path policies must be None")
             if type(self.max_exact_ambiguous_candles) is not int or isinstance(self.max_exact_ambiguous_candles, bool) or self.max_exact_ambiguous_candles < 0:
                 raise ValueError("ambiguity_envelope cap must be exact non-negative int")
-        if type(self.expected) is not MappingProxyType:
-            raise ValueError("expected must be immutable MappingProxyType")
+        frozen_expected = _freeze_expected(self.expected)
+        object.__setattr__(self, "expected", frozen_expected)
         canonical_json_bytes(dict(self.expected))
 
 

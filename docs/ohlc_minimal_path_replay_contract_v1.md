@@ -114,3 +114,23 @@ All risk, profitability, parameter-selection, native/private API, Telegram, and 
 execution guardrails remain false. The minimal OHLC/OLHC paths are a deterministic replay
 contract and are not proof of complete intrabar bounds, arbitrary oscillation bounds, or
 global true best/worst cases.
+
+## Sprint 06.2B.2 evidence-contract closure
+
+The v2 OHLC minimal-path evidence contract keeps the accepted economics frozen: Decimal neutral-grid accounting, canonical `N`-cell / `N+1`-level geometry, OHLC and OLHC ordering, closed contiguous one-minute validation, funding before later price events, duplicate-node removal, gap preservation, exact `2^k` minimal-path enumeration, and strict replay snapshot identity are unchanged.
+
+Evidence hygiene paths are canonical POSIX paths. Source hygiene rejects forbidden source-controlled evidence and cache artifacts with case-insensitive suffix checks and always reports `path.relative_to(root).as_posix()`, so Windows reports `src/bad.zip` rather than `src\\bad.zip`. Root-level operator ZIP/JSONL files remain outside deterministic source roots and are ignored.
+
+Run status and review-pack status are intentionally separate. `ohlc_replay_run_status.json` never contains `review_pack_ok`; complete run status is a minimal versioned completion record with `evidence_run_audit_ok=true` only after artifacts are written, read back, reconstructed from persisted inputs, replayed, reconciled, and report-validated. Only the ZIP checker or self-checking ZIP builder may emit `review_pack_ok=true`.
+
+Reproducibility is independently derived rather than asserted. The audit rebuilds core JSONL artifacts from persisted scenario inputs, compares canonical bytes and SHA-256 values, strict-parses JSON/JSONL bytes, reconstructs scenarios, fresh-replays fixed and envelope cases, compares result/event/ledger/cycle bytes, and recursively rejects wall-clock, host, PID, UUID, absolute-path, or other machine-specific fields.
+
+Scenario semantics are measured for all 24 scenarios. The audit derives path-insensitive/path-sensitive assignments, long/short exposure signs, equal-PnL nested ledger differences, four-assignment ordering, gap-up/gap-down preservation without interpolation, low/tight canonical level preservation, funding event positions/rates/PnL signs, termination reason/prefix/ignored candles, cycle-count bounds, source enum provenance, and lower-only/upper-only one-sided termination guardrails.
+
+Expected scenario semantics are a closed, deeply immutable contract. Unknown expected keys are rejected during `OhlcReplayScenario` construction, required guardrail keys must be present, nested mutable values are rejected, and every recognized expected key maps to an independently computed audit field, including `synthetic_fixture_of_source_contract_bool` for the Bybit source enum fixture.
+
+Persisted-bundle reconciliation starts from strict-parsed `scenario_inputs.jsonl`. The checker deserializes exact scenario types and keys, verifies IDs/order/version/input hashes, fresh-runs every fixed replay and ambiguity envelope, rebuilds fixed rows, envelope rows, generated events, state-machine ledger rows, completed cycles, semantic audits, and reproducibility audits, and compares persisted canonical bytes. Missing, duplicate, extra, reordered, or semantically tampered rows are rejected even when the self-excluded manifest hash is recomputed.
+
+Lifecycle ownership is fail-closed inside `write_run()`: building status is written first, non-status artifacts are written, strict read-back and full reconciliation run, reproducibility/report checks are derived, and complete status is written last. Any early or late exception writes failed status last and re-raises; complete status is absent. The ZIP builder preflights complete status and artifacts, writes a temporary ZIP, runs the full semantic checker on that temporary ZIP, atomically replaces the destination only after success, and removes the temporary file on failure.
+
+Known limitations remain explicit and unchanged: minimal paths are not full intrabar reconstruction or global best/worst bounds, the catalog is synthetic, real Bybit batch integration is not proven, native Bybit equivalence and quantity/termination mapping are not proven, funding coverage is not complete production coverage, risk-budget sufficiency is false, parameter selection is not authorized, profitability claims are absent, and live execution is neither present nor authorized.

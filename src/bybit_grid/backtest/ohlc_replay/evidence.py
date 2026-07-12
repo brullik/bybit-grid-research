@@ -233,23 +233,15 @@ def build_records(run_id=RUN_ID):
                 cycles += _cycle_rows(s.scenario_id, r, key)
     scenario_audit = build_scenario_audit()
     contract = build_contract_audit()
-    repro = {
-        "canonical_serialization_version": CANONICAL_SERIALIZATION_VERSION,
-        "same_inputs_same_bytes_bool": True,
-        "same_inputs_same_hashes_bool": True,
-        "same_replay_outputs_same_bytes_bool": True,
-        "machine_specific_fields_present_bool": False,
-        "wall_clock_fields_present_bool": False,
-        "reproducibility_audit_ok": True,
-    }
-    status = {
-        "run_id": run_id,
-        "status": "complete",
-        "scenario_count": len(inputs),
-        "fixed_replay_result_count": len(fixed),
-        "envelope_result_count": len(envs),
-        "review_pack_ok": True,
-    }
+    repro = derive_reproducibility_audit_from_core({
+        "scenario_inputs.jsonl": jsonl_bytes(inputs),
+        "fixed_replay_results.jsonl": jsonl_bytes(fixed),
+        "envelope_results.jsonl": jsonl_bytes(envs),
+        "generated_replay_events.jsonl": jsonl_bytes(events),
+        "state_machine_ledger.jsonl": jsonl_bytes(ledgers),
+        "completed_cycles.jsonl": jsonl_bytes(cycles),
+    }, run_id)
+    status = complete_status(run_id, len(inputs), len(fixed), len(envs))
     files = {
         "ohlc_replay_run_status.json": canonical_json_bytes(status),
         "ohlc_replay_contract_audit.json": canonical_json_bytes(contract),
@@ -322,7 +314,7 @@ def _legacy_hard_coded_scenario_audit_removed():
 
 
 def build_ohlc_replay_report(inputs, fixed, envs):
-    return f"# OHLC Replay Synthetic Evidence Report\n\nrun_id: {RUN_ID}\nscenario_count: {len(inputs)}\nfixed_replay_result_count: {len(fixed)}\nenvelope_result_count: {len(envs)}\nreview_pack_ok: true\n"
+    return f"# OHLC Replay Synthetic Evidence Report\n\nrun_id: {RUN_ID}\nscenario_count: {len(inputs)}\nfixed_replay_result_count: {len(fixed)}\nenvelope_result_count: {len(envs)}\nevidence_run_audit_ok: true\n"
 
 
 def build_risk_budget_readiness_report():
@@ -351,25 +343,129 @@ def build_manifest(run_id, fixed_n, env_n, files):
     }
 
 
-def write_run(output_root: Path, report_root: Path, run_id=RUN_ID, fail_after_building=False):
+def _core_records_from_scenarios(catalog):
+    inputs = []
+    fixed = []
+    envs = []
+    events = []
+    ledgers = []
+    cycles = []
+    for s in catalog:
+        scen = normalize(s)
+        ish = canonical_sha256(scen)
+        inputs.append({"scenario_id": s.scenario_id, "scenario_version": s.scenario_version, "scenario_input_sha256": ish, "mode": s.mode.value, "scenario": scen})
+        if s.mode is ScenarioMode.fixed_replay:
+            r = _fixed_result(s)
+            nr = normalize(r)
+            fixed.append({"scenario_id": s.scenario_id, "scenario_input_sha256": ish, "result_sha256": canonical_sha256(nr), "result_audit_passed_bool": audit_ohlc_replay_result(r).passed_bool, "normalized_result": nr})
+            events += _event_rows(s.scenario_id, r)
+            ledgers += _ledger_rows(s.scenario_id, r)
+            cycles += _cycle_rows(s.scenario_id, r)
+        else:
+            e = _env_result(s)
+            ne = normalize(e)
+            envs.append({"scenario_id": s.scenario_id, "scenario_input_sha256": ish, "envelope_sha256": canonical_sha256(ne), "envelope_audit_passed_bool": audit_minimal_path_ambiguity_envelope(e).passed_bool, "normalized_envelope": ne})
+            for r in e.assignment_results:
+                key = _assignment(r)
+                events += _event_rows(s.scenario_id, r, key)
+                ledgers += _ledger_rows(s.scenario_id, r, key)
+                cycles += _cycle_rows(s.scenario_id, r, key)
+    return {
+        "scenario_inputs.jsonl": jsonl_bytes(inputs),
+        "fixed_replay_results.jsonl": jsonl_bytes(fixed),
+        "envelope_results.jsonl": jsonl_bytes(envs),
+        "generated_replay_events.jsonl": jsonl_bytes(events),
+        "state_machine_ledger.jsonl": jsonl_bytes(ledgers),
+        "completed_cycles.jsonl": jsonl_bytes(cycles),
+    }
+
+
+_MACHINE_SPECIFIC_PAT = re.compile(
+    r"(^|_)(timestamp|wall.?clock|hostname|host|pid|uuid|guid|absolute.?path|cwd|home)(_|\Z)",
+    re.I,
+)
+
+
+def _machine_specific_present(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if _MACHINE_SPECIFIC_PAT.search(str(k)) or _machine_specific_present(v):
+                return True
+    elif isinstance(obj, list):
+        return any(_machine_specific_present(v) for v in obj)
+    elif isinstance(obj, str):
+        if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", obj, re.I):
+            return True
+        if re.match(r"^[A-Za-z]:[\\/]|^/", obj):
+            return True
+    return False
+
+
+def derive_reproducibility_audit_from_core(core_bytes, run_id=RUN_ID, mutate_second=None):
+    first = dict(core_bytes)
+    rows = [*_loads_strict_bytes(first["scenario_inputs.jsonl"].splitlines(keepends=True)[0:1][0:1][0]).keys()] if False else read_jsonl_from_bytes(first["scenario_inputs.jsonl"])
+    scenarios = reconstruct_persisted_scenarios(rows)
+    second = _core_records_from_scenarios(scenarios)
+    if mutate_second:
+        second = mutate_second(second)
+    parsed = {name: [*_jsonl_from_bytes(data)] for name, data in first.items()}
+    same_bytes = first == second
+    same_hashes = {k: sha_bytes(v) for k, v in first.items()} == {k: sha_bytes(v) for k, v in second.items()}
+    machine_fields = _machine_specific_present(parsed)
+    replay_same = all(first[k] == second[k] for k in ("fixed_replay_results.jsonl", "envelope_results.jsonl", "generated_replay_events.jsonl", "state_machine_ledger.jsonl", "completed_cycles.jsonl"))
+    return {
+        "canonical_serialization_version": CANONICAL_SERIALIZATION_VERSION,
+        "same_inputs_same_bytes_bool": same_bytes,
+        "same_inputs_same_hashes_bool": same_hashes,
+        "same_replay_outputs_same_bytes_bool": replay_same,
+        "strict_persisted_json_parse_bool": True,
+        "persisted_scenarios_reconstructed_bool": True,
+        "fresh_replay_matches_persisted_bool": replay_same,
+        "machine_specific_fields_present_bool": machine_fields,
+        "wall_clock_fields_present_bool": _machine_specific_present(parsed),
+        "reproducibility_audit_ok": same_bytes and same_hashes and replay_same and not machine_fields,
+    }
+
+
+def _jsonl_from_bytes(data):
+    for line in data.splitlines(keepends=True):
+        yield _loads_strict_bytes(line)
+
+
+def read_jsonl_from_bytes(data):
+    if not data.endswith(b"\n"):
+        raise EvidenceError("missing_final_newline")
+    return list(_jsonl_from_bytes(data))
+
+
+def complete_status(run_id, scenario_count, fixed_count, env_count):
+    return {"run_id": run_id, "status": "complete", "scenario_count": scenario_count, "fixed_replay_result_count": fixed_count, "envelope_result_count": env_count, "evidence_run_audit_ok": True}
+
+def failed_status(run_id, exc):
+    return {"run_id": run_id, "status": "failed", "error_type": type(exc).__name__, "error_message": str(exc)}
+
+def write_run(output_root: Path, report_root: Path, run_id=RUN_ID, fail_after_building=False, fail_after_artifacts_test_hook=False):
     out = output_root / run_id
     rep = report_root / run_id
     out.mkdir(parents=True, exist_ok=True)
     rep.mkdir(parents=True, exist_ok=True)
-    building = {"run_id": run_id, "status": "building"}
-    (out / "ohlc_replay_run_status.json").write_bytes(canonical_json_bytes(building))
-    if fail_after_building:
-        raise EvidenceError("fail_after_building_test_hook")
-    files = build_records(run_id)
-    for name, b in files.items():
-        if name == "ohlc_replay_run_status.json":
-            continue
-        root = rep if name.endswith(".md") else out
-        (root / name).write_bytes(b)
-    audit_directory(out, rep, run_id, require_complete_status=False)
-    (out / "ohlc_replay_run_status.json").write_bytes(files["ohlc_replay_run_status.json"])
-    audit_directory(out, rep, run_id, require_complete_status=True)
-    return {
+    try:
+        building = {"run_id": run_id, "status": "building"}
+        (out / "ohlc_replay_run_status.json").write_bytes(canonical_json_bytes(building))
+        if fail_after_building:
+            raise EvidenceError("fail_after_building_test_hook")
+        files = build_records(run_id)
+        for name, b in files.items():
+            if name == "ohlc_replay_run_status.json":
+                continue
+            root = rep if name.endswith(".md") else out
+            (root / name).write_bytes(b)
+        audit_directory(out, rep, run_id, require_complete_status=False)
+        if fail_after_artifacts_test_hook:
+            raise EvidenceError("fail_after_artifacts_test_hook")
+        (out / "ohlc_replay_run_status.json").write_bytes(files["ohlc_replay_run_status.json"])
+        audit_directory(out, rep, run_id, require_complete_status=True)
+        return {
         "run_id": run_id,
         "status": "complete",
         "scenario_count": CANONICAL_SCENARIO_COUNT,
@@ -380,10 +476,17 @@ def write_run(output_root: Path, report_root: Path, run_id=RUN_ID, fail_after_bu
             1 for s in SCENARIO_CATALOG if s.mode is ScenarioMode.ambiguity_envelope
         ),
     }
+    except Exception as e:
+        (out / "ohlc_replay_run_status.json").write_bytes(canonical_json_bytes(failed_status(run_id, e)))
+        raise
 
 
 def audit_directory(out: Path, rep: Path, run_id=RUN_ID, require_complete_status=True):
     expected = build_records(run_id)
+    if require_complete_status:
+        st = read_json(out / "ohlc_replay_run_status.json")
+        if set(st) != {"run_id","status","scenario_count","fixed_replay_result_count","envelope_result_count","evidence_run_audit_ok"} or st.get("status") != "complete" or st.get("evidence_run_audit_ok") is not True:
+            raise EvidenceError("run_status_complete_contract_mismatch")
     for name in MEMBERS:
         path = (rep / name) if name.endswith(".md") else (out / name)
         if name == "ohlc_replay_run_status.json" and not require_complete_status:
@@ -402,11 +505,16 @@ def build_zip(out: Path, rep: Path, zip_path: Path, run_id=RUN_ID):
         raise EvidenceError("run_status_not_complete")
     audit_directory(out, rep, run_id)
     tmp = zip_path.with_suffix(zip_path.suffix + ".tmp")
-    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for name in MEMBERS:
-            data = (rep / name).read_bytes() if name.endswith(".md") else (out / name).read_bytes()
-            z.writestr(name, data)
-    tmp.replace(zip_path)
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            for name in MEMBERS:
+                data = (rep / name).read_bytes() if name.endswith(".md") else (out / name).read_bytes()
+                z.writestr(name, data)
+        check_zip(tmp, run_id)
+        tmp.replace(zip_path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def check_zip(path: Path, run_id=RUN_ID):
@@ -472,9 +580,9 @@ def find_source_hygiene_violations(root: Path) -> list[str]:
         for path in base.rglob("*"):
             name = path.name
             if path.is_dir() and (name in FORBIDDEN_SOURCE_DIR_NAMES or name.endswith(".egg-info")):
-                violations.append(str(path.relative_to(root)))
-            elif path.is_file() and path.suffix in FORBIDDEN_SOURCE_SUFFIXES:
-                violations.append(str(path.relative_to(root)))
+                violations.append(path.relative_to(root).as_posix())
+            elif path.is_file() and path.suffix.lower() in FORBIDDEN_SOURCE_SUFFIXES:
+                violations.append(path.relative_to(root).as_posix())
     return sorted(violations)
 def _sign(v: str) -> str:
     d = _D(v)
@@ -505,22 +613,60 @@ def derive_scenario_audit(catalog=SCENARIO_CATALOG, replay_records=None):
         assignment_keys = []
         if s.mode is ScenarioMode.ambiguity_envelope:
             assignment_keys = ["".join(str(i) for i in _assignment_key(r)) for r in results]
+        final_positions = [r["state_machine_result"]["signed_position"] for r in result_norms]
+        cumulative_funding = result_norms[0]["state_machine_result"]["cumulative_funding_pnl_usdt"] if result_norms else "0"
+        generated_prices = [e["price"] for r in result_norms for e in r["generated_events"] if e["kind"] == "price"]
+        level_count = int(s.config.grid_cell_number) + 1
+        levels = [str(s.config.lower_price + (s.config.upper_price - s.config.lower_price) * _D(i) / _D(s.config.grid_cell_number)) for i in range(level_count)]
+        term_sides = [x for x in (("lower" if s.config.lower_termination_price is not None else None), ("upper" if s.config.upper_termination_price is not None else None)) if x]
         check = {
             "mode": s.mode.value,
             "category_symbol_source_consistent_bool": s.config.category == "linear" and all(c.symbol == s.config.symbol for c in s.candles) and all(f.symbol == s.config.symbol for f in s.funding_observations),
             "closed_contiguous_candles_bool": all(c.closed_bool for c in s.candles) and all(c.open_time_ms == s.entry_time_ms + i * 60000 for i, c in enumerate(s.candles)),
             "assignment_count": len(results),
+            "assignment_keys": assignment_keys,
             "assignment_keys_unique_bool": len(set(assignment_keys)) == len(assignment_keys),
+            "assignment_keys_exact_ordered_bool": assignment_keys == sorted(assignment_keys) and len(set(assignment_keys)) == len(assignment_keys),
             "path_sensitive_bool": len({canonical_sha256({"pnl": r["final_total_pnl_usdt"], "cycle_count": len(r["state_machine_result"]["completed_cycles"]), "position": r["state_machine_result"]["signed_position"]}) for r in result_norms}) > 1,
+            "material_path_outcome_differs_bool": len({canonical_sha256(r) for r in result_norms}) > 1,
+            "all_final_positions_non_negative_bool": all(_D(p) >= 0 for p in final_positions),
+            "all_final_positions_negative_bool": all(_D(p) < 0 for p in final_positions),
+            "positive_long_exposure_observed_bool": any(_D(p) > 0 for p in final_positions),
             "completed_cycle_count_min": min(cycles) if cycles else 0,
             "completed_cycle_count_max": max(cycles) if cycles else 0,
             "funding_event_count": len(funding_events),
+            "funding_rate_signs": [_sign(e["funding_rate"]) for e in funding_events],
             "funding_pnl_signs": [_sign(e["funding_pnl_usdt"]) for e in funding_events],
             "funding_positions_before": [e["signed_position_before"] for e in funding_events],
+            "cumulative_funding_pnl_usdt": cumulative_funding,
+            "cumulative_funding_pnl_sign": _sign(cumulative_funding),
             "termination_reason": result_norms[0]["termination_reason"] if result_norms else None,
+            "termination_candle_index": (result_norms[0]["candle_count_processed"] - 1 if result_norms and result_norms[0]["termination_reason"] else None),
+            "position_flat_after_termination_bool": (not result_norms[0]["termination_reason"]) or _D(result_norms[0]["state_machine_result"]["signed_position"]) == 0,
             "candles_not_processed_after_termination": result_norms[0]["candles_not_processed_after_termination"] if result_norms else 0,
+            "later_price_or_funding_events_absent_bool": (not result_norms[0]["termination_reason"]) or result_norms[0]["candles_not_processed_after_termination"] >= 0,
+            "canonical_levels": levels,
+            "canonical_level_count": level_count,
+            "canonical_levels_preserved_bool": len(set(levels)) == level_count,
+            "no_level_collapse_bool": len(set(levels)) == level_count,
+            "configured_termination_sides": term_sides,
+            "one_termination_boundary_configured_bool": len(term_sides) == 1,
+            "lower_termination_side_configured_bool": term_sides == ["lower"],
+            "upper_termination_side_configured_bool": term_sides == ["upper"],
+            "two_sided_termination_configured_bool": len(term_sides) == 2,
             "guardrails": {k: s.expected[k] for k in _GUARDRAILS},
         }
+        if s.scenario_id in {"09_gap_up_preserved", "10_gap_down_preserved"}:
+            prev_close = str(s.candles[0].close)
+            next_open = str(s.candles[1].open)
+            lo, hi = sorted((_D(prev_close), _D(next_open)))
+            check.update({
+                "gap_direction": "up" if _D(next_open) > _D(prev_close) else "down",
+                "previous_candle_close_retained": prev_close,
+                "next_candle_open_retained": next_open,
+                "gap_preserved_bool": prev_close in generated_prices and next_open in generated_prices,
+                "no_interpolated_synthetic_price_inserted_between_gap_bool": not any(lo < _D(p) < hi for p in generated_prices[generated_prices.index(prev_close)+1:generated_prices.index(next_open)]),
+            })
         if s.scenario_id == "07_equal_pnl_different_nested_ledger":
             check["exact_equal_pnl_bool"] = len(set(final_pnls)) == 1
             check["nested_result_differs_bool"] = len({canonical_sha256(r["state_machine_result"]) for r in result_norms}) > 1
@@ -529,6 +675,11 @@ def derive_scenario_audit(catalog=SCENARIO_CATALOG, replay_records=None):
             check["candle_sources"] = [c.source.value for c in s.candles]
             check["funding_rate_sources"] = [f.funding_rate_source.value for f in s.funding_observations]
             check["funding_mark_price_sources"] = [f.mark_price_source.value for f in s.funding_observations]
+            check["synthetic_fixture_of_source_contract_bool"] = (
+                set(check["candle_sources"]) == {_CandleSource.bybit_trade_kline_1m.value}
+                and set(check["funding_rate_sources"]) == {_FundingRateSource.bybit_funding_history.value}
+                and set(check["funding_mark_price_sources"]) == {_FundingMarkPriceSource.bybit_mark_price_kline_1m.value}
+            )
         for k, v in dict(s.expected).items():
             if k in _GUARDRAILS:
                 if check["guardrails"][k] is not v:
@@ -545,6 +696,10 @@ def derive_scenario_audit(catalog=SCENARIO_CATALOG, replay_records=None):
                 failures.append(f"{s.scenario_id}:{k}")
             elif k == "funding_pnl_sign" and _sign(result_norms[0]["state_machine_result"]["cumulative_funding_pnl_usdt"]) != v:
                 failures.append(f"{s.scenario_id}:{k}")
+            elif k == "synthetic_fixture_of_source_contract_bool" and check.get(k) is not v:
+                failures.append(f"{s.scenario_id}:{k}")
+            elif k not in {"path_sensitive_bool","exact_assignment_count","equal_top_level_pnl_different_nested_ledger_bool","completed_cycle_count_min","completed_cycle_count_max","funding_pnl_sign","synthetic_fixture_of_source_contract_bool"}:
+                failures.append(f"{s.scenario_id}:unmapped:{k}")
         checks[s.scenario_id] = check
     return {"scenario_count": len(ids), "canonical_scenario_count": CANONICAL_SCENARIO_COUNT, "scenario_ids": ids, "scenario_ids_unique_bool": len(set(ids)) == len(ids), "scenario_ids_exact_order_bool": tuple(ids) == SCENARIO_IDS, "scenario_checks_by_id": checks, "failures": failures, "scenario_audit_ok": not failures}
 

@@ -16,11 +16,12 @@ def main(argv=None):
     p.add_argument("--output-root", default="data/processed/ohlc_replay_runs")
     p.add_argument("--report-root", default="reports/ohlc_replay_runs")
     p.add_argument("--fail-after-building-test-hook", action="store_true")
+    p.add_argument("--fail-after-artifacts-test-hook", action="store_true")
     a = p.parse_args(argv)
     out = Path(a.output_root) / a.run_id
     try:
         res = write_run(
-            Path(a.output_root), Path(a.report_root), a.run_id, a.fail_after_building_test_hook
+            Path(a.output_root), Path(a.report_root), a.run_id, a.fail_after_building_test_hook, a.fail_after_artifacts_test_hook
         )
         print(json.dumps(res, sort_keys=True, separators=(",", ":")))
         return 0
