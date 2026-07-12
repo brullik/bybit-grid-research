@@ -81,3 +81,36 @@ quantity, native termination, liquidation, funding coverage, real Bybit batch in
 true worst/best case, risk budget 5 USDT, parameter selection, profitability, live execution, and
 live authorization are not proven. The only readiness flag advanced by this synthetic gate is that
 the deterministic evidence is sufficient for the next real Bybit batch-integration step.
+
+## Sprint 06.2B.1 v2 semantic replay addendum
+
+The v2 frozen evidence identifiers are `ohlc_minimal_path_replay_contract_v2`,
+`ohlc_minimal_path_scenarios_v2`, `ohlc_minimal_v2_synthetic`, and
+`ohlc_minimal_path_review_pack_v2_semantic_replay`. The 24 scenario IDs remain in
+canonical order, but the frozen definitions now self-validate exact dataclass and enum
+identity and store expected semantics in an immutable canonical-serializable mapping.
+
+Pytest is intentionally not a Git-dependent audit. Git and `.git` may be absent in the
+owner environment, so source hygiene is checked by a pure filesystem helper over only
+source-controlled deterministic roots (`src/`, `scripts/`, `tests/`, `docs/`, and
+`config/`). Root-level operator artifacts, `data/`, and `reports/` are not scanned by
+that test.
+
+Persisted replay evidence is checked by deserializing each canonical
+`scenario_inputs.jsonl` row back into an `OhlcReplayScenario`, verifying exact key sets,
+canonical decimal strings, enum values, scenario input hashes, ID order, and normalized
+scenario byte identity. The reconstructed scenarios are freshly replayed and audited so
+persisted inputs, fixed results, envelopes, events, ledgers, completed cycles,
+assignment keys, and hashes are reconciled against replayed semantics instead of only
+trusting the in-memory catalog.
+
+The run status lifecycle is fail-closed: `building` is written first, non-status
+artifacts are written and read back, persisted scenarios are reconstructed, fresh replay
+and semantic audit are performed, reproducibility/report checks are derived, and only
+then is `complete` written last. Normal exceptions write `failed` and must not leave a
+`complete` status behind.
+
+All risk, profitability, parameter-selection, native/private API, Telegram, and live
+execution guardrails remain false. The minimal OHLC/OLHC paths are a deterministic replay
+contract and are not proof of complete intrabar bounds, arbitrary oscillation bounds, or
+global true best/worst cases.

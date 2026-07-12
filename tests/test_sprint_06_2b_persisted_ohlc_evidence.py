@@ -15,7 +15,7 @@ from bybit_grid.backtest.ohlc_replay import (
     FundingRateSource,
     validate_funding_observations,
 )
-from bybit_grid.backtest.ohlc_replay.evidence import MEMBERS, read_json, read_jsonl
+from bybit_grid.backtest.ohlc_replay.evidence import MEMBERS, find_source_hygiene_violations, read_json, read_jsonl
 from bybit_grid.backtest.ohlc_replay.models import CandleSource, OhlcCandle1m
 from bybit_grid.backtest.ohlc_replay.scenarios import (
     CANONICAL_SCENARIO_COUNT,
@@ -187,9 +187,20 @@ def test_missing_zip_strict_json_no_traceback(tmp_path):
     assert json.loads(r.stdout)["review_pack_ok"] is False
 
 
-def test_no_generated_binary_artifacts_committed():
-    tracked = subprocess.run(
-        ["git", "ls-files"], cwd=ROOT, text=True, capture_output=True, check=True
-    ).stdout.splitlines()
-    forbidden = (".zip", ".parquet", ".db", ".sqlite")
-    assert not [p for p in tracked if p.endswith(forbidden) or p.endswith(".jsonl")]
+def test_no_generated_binary_artifacts_committed(tmp_path):
+    for name in ("src", "scripts", "tests", "docs", "config"):
+        (tmp_path / name).mkdir()
+    assert find_source_hygiene_violations(tmp_path) == []
+
+
+def test_source_hygiene_ignores_root_operator_artifacts_and_rejects_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    (tmp_path / "operator.zip").write_bytes(b"zip")
+    (tmp_path / "operator.jsonl").write_text("{}\n")
+    for name in ("src", "scripts", "tests", "docs", "config"):
+        (tmp_path / name).mkdir()
+    assert find_source_hygiene_violations(tmp_path) == []
+    (tmp_path / "src" / "bad.zip").write_bytes(b"zip")
+    assert find_source_hygiene_violations(tmp_path) == ["src/bad.zip"]
+    (tmp_path / "src" / "pkg.egg-info").mkdir()
+    assert "src/pkg.egg-info" in find_source_hygiene_violations(tmp_path)
