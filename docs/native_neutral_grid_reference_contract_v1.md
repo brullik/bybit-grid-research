@@ -59,3 +59,74 @@ The core audit verifies emitted-ledger accounting, canonical order provenance, a
 The public audit boundary fails closed for malformed result snapshots. It returns a failed audit result rather than allowing expected tamper classes such as malformed order IDs, invalid level indices, bad enum values, invalid Decimal values, malformed termination fields, bad cycle references, or unexpected ledger structures to traceback.
 
 The synthetic scenario evidence catalog is deterministic and input-event complete for the packaged 33 canonical synthetic scenarios only. This separate pack-level evidence does not change standalone result proof flags: `event_path_completeness_proven_bool`, native equivalence, native quantity mapping, native termination mapping, liquidation modeling, OHLC replay support, risk-budget proof, parameter-selection authorization, profitability claims, and live-execution flags remain false.
+
+## Sprint 06.1B.2 evidence contract closure
+
+The state-machine economic semantics above remain unchanged. Sprint 06.1B.2 corrects only the frozen synthetic scenario catalog and review-pack evidence contract.
+
+### Scenario catalog v2
+
+The corrected scenario catalog version is `neutral_grid_synthetic_scenario_v2`. The `01_initial_exact_base` scenario now derives its grid levels with `geometric_grid_levels_decimal(Decimal("80"), Decimal("125"), 4)` and uses the generated canonical Decimal level at index `2` as `base_price`. It does not use a rounded literal such as `Decimal("100")`, and it does not snap or quantize the generated level. The exact-base scenario must have exactly one canonical level equal to the base, no initialization order at that level, BUY initialization orders below that level, SELL initialization orders above that level, and exactly `N` active initialization orders for `N` grid cells.
+
+The `02_initial_between_levels` scenario remains a between-level scenario: its base price is not a canonical level, its canonical grid levels are unchanged, and initialization orders are derived strictly from canonical levels below and above the base. Low-price and tight-high-price catalog scenarios continue to preserve their canonical generated levels.
+
+### Evidence pack v2 identifiers
+
+Corrected synthetic evidence uses these identifiers:
+
+- `RUN_ID = neutral_sm_v1_synthetic_v2`
+- `SCENARIO_VERSION = neutral_grid_synthetic_scenario_v2`
+- `REVIEW_PACK_SCHEMA_VERSION = neutral_grid_state_machine_review_pack_v2`
+- `DEFAULT_PACK = pm_review_pack_state_machine_neutral_sm_v1_synthetic_v2.zip`
+
+The state-machine contract version remains `native_neutral_grid_reference_contract_v1`, canonical serialization remains `neutral_grid_canonical_json_v1`, and the manifest hash policy remains `self_excluded_v1`.
+
+### Canonical persisted bytes and duplicate-key rejection
+
+Evidence v2 requires persisted JSON and JSONL bytes to be canonical, not merely semantically equivalent after parsing. The checker and builder reject non-canonical JSON whitespace, non-canonical JSON key ordering, JSONL blank lines, missing final JSONL newlines, extra JSONL rows or fields, and any payload whose bytes differ from the canonical serialization of the parsed object or expected rows.
+
+All JSON documents and JSONL rows are parsed with duplicate-key rejection. Standard last-value JSON parsing is not sufficient for review evidence. Duplicate keys in `review_pack_manifest.json`, any JSON artifact, or any JSONL row fail validation.
+
+### Exact self-excluded manifest contract
+
+Because the manifest is self-excluded from its own `sha256` map, evidence v2 requires the manifest to contain exactly these keys and no others:
+
+```text
+review_pack_schema_version
+manifest_hash_policy
+review_phase
+run_id
+state_machine_contract_version
+canonical_serialization_version
+scenario_version
+canonical_scenario_count
+risk_budget_proven_bool
+parameter_selection_authorized_bool
+live_authorized_bool
+members
+sha256
+```
+
+Missing keys, extra keys, wrong types, wrong values, a self-hash entry, or a `sha256` key set other than the exact 11 non-manifest members fail validation. The manifest bytes must also equal the canonical JSON serialization of the parsed manifest.
+
+### Canonical reports
+
+The synthetic scenario report and risk budget readiness report are exact canonical evidence bytes. They are not substring-validated prose. Runner, builder, and checker use the same report builders, so duplicate guardrail lines, contradictory true/false lines, omitted lines, extra live/profitability claims, unexpected trailing text, or altered counts fail validation after rehashing.
+
+### Preserved false guardrails
+
+All native/risk/live guardrails remain false unless explicitly proven by a later approved sprint:
+
+```text
+native_equivalence_proven_bool = false
+native_quantity_mapping_proven_bool = false
+native_termination_mapping_proven_bool = false
+liquidation_modeled_bool = false
+ohlc_replay_supported_bool = false
+risk_budget_proven_bool = false
+sufficient_for_parameter_selection_bool = false
+profitability_claims_present_bool = false
+live_execution_present_bool = false
+parameter_selection_authorized_bool = false
+live_authorized_bool = false
+```

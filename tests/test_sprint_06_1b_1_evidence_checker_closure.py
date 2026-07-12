@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 from bybit_grid.backtest.neutral_grid.evidence import MEMBERS
 
-RUN = "neutral_sm_v1_synthetic"
+RUN = "neutral_sm_v1_synthetic_v2"
 
 
 def _run(tmp_path: Path):

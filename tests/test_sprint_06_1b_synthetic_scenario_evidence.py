@@ -145,7 +145,7 @@ def test_runner_pack_checker_tmp(tmp_path: Path):
         sys.executable,
         "scripts/run_neutral_grid_synthetic_matrix.py",
         "--run-id",
-        "neutral_sm_v1_synthetic",
+        "neutral_sm_v1_synthetic_v2",
         "--output-root",
         str(out),
         "--report-root",
@@ -153,14 +153,14 @@ def test_runner_pack_checker_tmp(tmp_path: Path):
     ]
     assert subprocess.run(cmd, check=False).returncode == 0
     status = json.loads(
-        (out / "neutral_sm_v1_synthetic" / "state_machine_run_status.json").read_text()
+        (out / "neutral_sm_v1_synthetic_v2" / "state_machine_run_status.json").read_text()
     )
     assert status["status"] == "complete"
     build = [
         sys.executable,
         "scripts/make_state_machine_review_pack.py",
         "--run-id",
-        "neutral_sm_v1_synthetic",
+        "neutral_sm_v1_synthetic_v2",
         "--output-root",
         str(out),
         "--report-root",
