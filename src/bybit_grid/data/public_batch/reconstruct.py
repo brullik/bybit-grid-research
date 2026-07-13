@@ -369,9 +369,8 @@ def derive_and_validate_page_invariants(audits):
         "server_time_snapshot_response_count": len(sizes["server_time_snapshot"]),
     }
 
-def _build_core_derived_artifacts(
-    e, *, run_id, symbol="BTCUSDT", base_url="https://api.bybit.com", timeout_seconds=30
-):
+
+def _derive_common_models(e, *, run_id, symbol, base_url, timeout_seconds):
     if base_url not in ALLOWED_BASE_URLS:
         raise PublicBatchError("base_url_not_approved")
     req = e["request_audits"]
@@ -394,7 +393,7 @@ def _build_core_derived_artifacts(
     if set(eq) != required_eq or any(eq[k] is not True for k in required_eq):
         raise PublicBatchError("cross_plan_equality_false")
     cross = {"run_id": run_id, "symbol": symbol, **page, **eq, "funding_coverage_proven_bool": False}
-    summary = {
+    base_summary = {
         "run_id": run_id,
         "base_url": base_url,
         "timeout_seconds": timeout_seconds,
@@ -423,10 +422,57 @@ def _build_core_derived_artifacts(
         "actual_funding_observation_times": list(actual_obs),
         "funding_observation_times_equal_bool": actual_obs == expected_obs,
     }
-    report = (
-        f"# Bybit Public Batch Report\n\n- run_id: {run_id}\n- base_url: {base_url}\n- symbol: {symbol}\n- Bybit server time: {e['server_time'].server_time_ms}\n- last closed cutoff: {e['server_time'].last_closed_open_time_ms}\n- window start/end/count: {e['window'].start_open_time_ms}/{e['window'].end_open_time_ms}/{e['window'].row_count}\n- instrument_primary_page_count: {cross['instrument_primary_page_count']}\n- instrument_alternate_page_count: {cross['instrument_alternate_page_count']}\n- trade_primary_page_sizes: {cross['trade_primary_page_sizes']}\n- trade_alternate_page_sizes: {cross['trade_alternate_page_sizes']}\n- mark_primary_page_sizes: {cross['mark_primary_page_sizes']}\n- mark_alternate_page_sizes: {cross['mark_alternate_page_sizes']}\n- funding_primary_page_count: {cross['funding_primary_page_count']}\n- funding_alternate_chunk_count: {cross['funding_alternate_chunk_count']}\n- server_time_snapshot_response_count: {cross['server_time_snapshot_response_count']}\n- instrument count: {summary['instrument_count']}\n- replay-eligible count: {summary['replay_eligible_count']}\n- trade row count: {summary['trade_row_count']}\n- mark row count: {summary['mark_row_count']}\n- funding row count: {summary['funding_row_count']}\n- funding observation count: {summary['funding_observation_count']}\n- instrument_primary_alternate_equal_bool: {str(eq["instrument_primary_alternate_equal_bool"]).lower()}\n- trade_primary_alternate_equal_bool: {str(eq["trade_primary_alternate_equal_bool"]).lower()}\n- mark_primary_alternate_equal_bool: {str(eq["mark_primary_alternate_equal_bool"]).lower()}\n- funding_primary_alternate_equal_bool: {str(eq["funding_primary_alternate_equal_bool"]).lower()}\n- funding_observation_times_equal_bool: {str(funding_audit["funding_observation_times_equal_bool"]).lower()}\n- public batch audit result: {str(summary['public_batch_audit_ok']).lower()}\n- contains_credentials=false\n"
-    ).encode()
-    risk = ("# Risk Budget Readiness Report\n\n" + "".join(f"- {k}: {str(v).lower()}\n" for k, v in GUARDRAILS.items()) + "\nFrozen guardrails: public Bybit GET /v5/market/* only; no API keys; no private/account/order/grid/position/wallet endpoints; no live execution; no Telegram; no parameter selection; no profitability or live-readiness claims; funding_coverage_proven_bool=false.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n").encode()
+    return cross, base_summary, funding_audit
+
+
+def build_public_batch_report(summary, cross, funding_audit, reproducibility_audit) -> bytes:
+    lines = [
+        "# Bybit Public Batch Report", "",
+        f"- run_id: {summary['run_id']}",
+        f"- base_url: {summary['base_url']}",
+        f"- symbol: {summary['symbol']}",
+        f"- Bybit server time: {summary['server_time_ms']}",
+        f"- last closed cutoff: {summary['last_closed_open_time_ms']}",
+        f"- window start/end/count: {summary['window_start_open_time_ms']}/{summary['window_end_open_time_ms']}/{summary['kline_row_count']}",
+        f"- instrument_primary_page_count: {cross['instrument_primary_page_count']}",
+        f"- instrument_alternate_page_count: {cross['instrument_alternate_page_count']}",
+        f"- trade_primary_page_sizes: {cross['trade_primary_page_sizes']}",
+        f"- trade_alternate_page_sizes: {cross['trade_alternate_page_sizes']}",
+        f"- mark_primary_page_sizes: {cross['mark_primary_page_sizes']}",
+        f"- mark_alternate_page_sizes: {cross['mark_alternate_page_sizes']}",
+        f"- funding_primary_page_count: {cross['funding_primary_page_count']}",
+        f"- funding_alternate_chunk_count: {cross['funding_alternate_chunk_count']}",
+        f"- server_time_snapshot_response_count: {cross['server_time_snapshot_response_count']}",
+        f"- instrument count: {summary['instrument_count']}",
+        f"- replay-eligible count: {summary['replay_eligible_count']}",
+        f"- trade row count: {summary['trade_row_count']}",
+        f"- mark row count: {summary['mark_row_count']}",
+        f"- funding row count: {summary['funding_row_count']}",
+        f"- funding observation count: {summary['funding_observation_count']}",
+        f"- instrument_primary_alternate_equal_bool: {str(cross['instrument_primary_alternate_equal_bool']).lower()}",
+        f"- trade_primary_alternate_equal_bool: {str(cross['trade_primary_alternate_equal_bool']).lower()}",
+        f"- mark_primary_alternate_equal_bool: {str(cross['mark_primary_alternate_equal_bool']).lower()}",
+        f"- funding_primary_alternate_equal_bool: {str(cross['funding_primary_alternate_equal_bool']).lower()}",
+        f"- funding_observation_times_equal_bool: {str(funding_audit['funding_observation_times_equal_bool']).lower()}",
+        f"- public batch audit result: {str(summary['public_batch_audit_ok']).lower()}",
+        f"- source_artifact_count: {reproducibility_audit['source_artifact_count']}",
+        f"- derived_artifact_count: {reproducibility_audit['derived_artifact_count']}",
+        f"- non_status_artifact_count: {reproducibility_audit['non_status_artifact_count']}",
+        f"- reproducibility_audit_ok: {str(reproducibility_audit['reproducibility_audit_ok']).lower()}",
+        f"- rebuilt_derived_artifacts_twice_bool: {str(reproducibility_audit['rebuilt_derived_artifacts_twice_bool']).lower()}",
+        "- contains_credentials=false",
+    ]
+    return ("\n".join(lines) + "\n").encode()
+
+
+def build_risk_budget_readiness_report() -> bytes:
+    return ("# Risk Budget Readiness Report\n\n" + "".join(f"- {k}: {str(v).lower()}\n" for k, v in GUARDRAILS.items()) + "\nFrozen guardrails: public Bybit GET /v5/market/* only; no API keys; no private/account/order/grid/position/wallet endpoints; no live execution; no Telegram; no parameter selection; no profitability or live-readiness claims; funding_coverage_proven_bool=false.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n").encode()
+
+
+def _build_core_derived_artifacts(
+    e, *, run_id, symbol="BTCUSDT", base_url="https://api.bybit.com", timeout_seconds=30
+):
+    cross, _summary, funding_audit = _derive_common_models(e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
     return {
         "capture_plan.json": canonical_json_bytes(
             build_capture_plan(run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
@@ -449,11 +495,29 @@ def _build_core_derived_artifacts(
         "request_page_audits.jsonl": canonical_jsonl_bytes(e["request_audits"]),
         "public_batch_audit.json": canonical_json_bytes(e["public_audit"]),
         "cross_plan_reconciliation_audit.json": canonical_json_bytes({**cross, **funding_audit}),
-        "capture_summary.json": canonical_json_bytes(summary),
-        "public_batch_report.md": report,
-        "risk_budget_readiness_report.md": risk,
+        "risk_budget_readiness_report.md": build_risk_budget_readiness_report(),
     }
 
+
+def _build_final_derived_artifacts(
+    e, reproducibility_audit, *, run_id, symbol="BTCUSDT", base_url="https://api.bybit.com", timeout_seconds=30
+):
+    core = _build_core_derived_artifacts(e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
+    cross, base_summary, funding_audit = _derive_common_models(e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
+    summary = {
+        **base_summary,
+        "source_artifact_count": reproducibility_audit["source_artifact_count"],
+        "derived_artifact_count": reproducibility_audit["derived_artifact_count"],
+        "non_status_artifact_count": reproducibility_audit["non_status_artifact_count"],
+        "reproducibility_audit_ok": reproducibility_audit["reproducibility_audit_ok"],
+        "rebuilt_derived_artifacts_twice_bool": reproducibility_audit["rebuilt_derived_artifacts_twice_bool"],
+    }
+    return {
+        **core,
+        "reproducibility_audit.json": canonical_json_bytes(reproducibility_audit),
+        "capture_summary.json": canonical_json_bytes(summary),
+        "public_batch_report.md": build_public_batch_report(summary, cross, funding_audit, reproducibility_audit),
+    }
 
 def validate_run_directory(run_dir: Path, run_id: str):
     result = validate_persisted_public_batch_evidence(
@@ -462,23 +526,68 @@ def validate_run_directory(run_dir: Path, run_id: str):
     return {"ok": result.ok, "rebuilt_derived_artifact_count": result.rebuilt_derived_artifact_count}
 
 
-def artifact_bytes(e, *, run_id, symbol="BTCUSDT", base_url="https://api.bybit.com", timeout_seconds=30):
-    core1 = _build_core_derived_artifacts(e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
-    core2 = _build_core_derived_artifacts(e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
-    if core1.keys() != set(DERIVED_ARTIFACT_MEMBERS) - {"reproducibility_audit.json"}:
+def artifact_bytes(
+    e,
+    *,
+    run_id,
+    symbol="BTCUSDT",
+    base_url="https://api.bybit.com",
+    timeout_seconds=30,
+    mutate_second_build=None,
+):
+    post_comparison_artifacts = {
+        "reproducibility_audit.json",
+        "capture_summary.json",
+        "public_batch_report.md",
+    }
+    expected_core_names = set(DERIVED_ARTIFACT_MEMBERS) - post_comparison_artifacts
+
+    core_a = _build_core_derived_artifacts(
+        e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds
+    )
+    core_b = _build_core_derived_artifacts(
+        e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds
+    )
+    if mutate_second_build is not None:
+        core_b = mutate_second_build("core", dict(core_b))
+    if set(core_a) != expected_core_names:
         raise PublicBatchError("core_derived_artifact_set_invalid")
-    if core1.keys() != core2.keys() or any(core1[k] != core2[k] for k in core1):
+
+    core_key_sets_equal_bool = set(core_a) == set(core_b)
+    core_bytes_equal_bool = core_key_sets_equal_bool and all(core_a[name] == core_b[name] for name in core_a)
+    reproducibility_audit_ok = core_key_sets_equal_bool and core_bytes_equal_bool
+    rebuilt_derived_artifacts_twice_bool = reproducibility_audit_ok
+    if not reproducibility_audit_ok:
         raise PublicBatchError("core_derived_artifact_mismatch")
-    repro = canonical_json_bytes({
+
+    reproducibility_audit = {
         "run_id": run_id,
-        "reproducibility_audit_ok": True,
-        "rebuilt_derived_artifacts_twice_bool": True,
+        "reproducibility_audit_ok": reproducibility_audit_ok,
+        "rebuilt_derived_artifacts_twice_bool": rebuilt_derived_artifacts_twice_bool,
         "source_artifact_count": SOURCE_ARTIFACT_COUNT,
         "derived_artifact_count": DERIVED_ARTIFACT_COUNT,
         "non_status_artifact_count": NON_STATUS_ARTIFACT_COUNT,
-    })
-    final1 = {**core1, "reproducibility_audit.json": repro}
-    final2 = {**core2, "reproducibility_audit.json": repro}
-    if final1.keys() != set(DERIVED_ARTIFACT_MEMBERS) or final1 != final2:
+    }
+    final_a = _build_final_derived_artifacts(
+        e,
+        reproducibility_audit,
+        run_id=run_id,
+        symbol=symbol,
+        base_url=base_url,
+        timeout_seconds=timeout_seconds,
+    )
+    final_b = _build_final_derived_artifacts(
+        e,
+        reproducibility_audit,
+        run_id=run_id,
+        symbol=symbol,
+        base_url=base_url,
+        timeout_seconds=timeout_seconds,
+    )
+    if mutate_second_build is not None:
+        final_b = mutate_second_build("final", dict(final_b))
+    final_key_sets_equal_bool = set(final_a) == set(final_b) == set(DERIVED_ARTIFACT_MEMBERS)
+    final_bytes_equal_bool = final_key_sets_equal_bool and all(final_a[name] == final_b[name] for name in final_a)
+    if not final_key_sets_equal_bool or not final_bytes_equal_bool:
         raise PublicBatchError("final_derived_artifact_mismatch")
-    return final1
+    return final_a

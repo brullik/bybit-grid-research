@@ -34,7 +34,7 @@ Canonical evidence objects require exact non-empty string keys. Non-string keys 
 
 ## Reproducibility and audits
 
-Cross-plan booleans and page counts are derived from reconstructed primary and alternate plans. Reproducibility compares independently built derived artifact maps and requires exact key-set and byte equality before persisting `reproducibility_audit.json`, `capture_summary.json`, and `public_batch_report.md` values. Funding observations are one-to-one with funding rates whose timestamps fall inside the kline window; expected and actual timestamp tuples must match exactly.
+Cross-plan booleans and page counts are derived from reconstructed primary and alternate plans. Reproducibility first builds immutable core candidate A and independently rebuilds immutable core candidate B from the same reconstructed raw responses. The pre-comparison core excludes `reproducibility_audit.json`, `capture_summary.json`, and `public_batch_report.md`. The implementation compares exact core key sets, compares exact core bytes, derives named booleans from those comparisons, and fails closed before publication if either comparison is false. Only then does it build the final reproducibility model and post-comparison `reproducibility_audit.json`, `capture_summary.json`, and `public_batch_report.md`; final derived candidate A and final derived candidate B are independently rebuilt and all 15 derived artifact names and bytes are compared before persistence. Funding observations are one-to-one with funding rates whose timestamps fall inside the kline window; expected and actual timestamp tuples must match exactly.
 
 ## Closed guardrails
 
