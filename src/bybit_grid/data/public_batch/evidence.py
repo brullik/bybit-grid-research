@@ -9,7 +9,6 @@ from dataclasses import dataclass, fields, is_dataclass
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from types import MappingProxyType
 from typing import Protocol
 
 from .models import PublicBatchError
@@ -119,16 +118,13 @@ def _plain(obj):
         return {f.name: _plain(getattr(obj, f.name)) for f in fields(obj)}
     if isinstance(obj, Mapping):
         out = {}
-        for k in sorted(obj.keys(), key=lambda x: str(x)):
-            if type(k) is str and k:
-                key = k
-            elif isinstance(obj, MappingProxyType) and type(k) is int and type(k) is not bool:
-                key = str(k)
-            else:
+        for k in obj.keys():
+            if type(k) is not str or not k:
                 raise PublicBatchError("mapping_key_type_invalid")
-            if key in out:
+        for k in sorted(obj.keys()):
+            if k in out:
                 raise PublicBatchError("mapping_key_collision")
-            out[key] = _plain(obj[k])
+            out[k] = _plain(obj[k])
         return out
     if type(obj) in (tuple, list):
         return [_plain(v) for v in obj]
@@ -253,13 +249,15 @@ def validate_persisted_public_batch_evidence(
     reader: EvidenceReader, *, expected_run_id: str, require_complete_status: bool
 ) -> ValidationResult:
     names = reader.names()
-    if names != CANONICAL_MEMBERS or len(names) != len(set(names)):
-        raise PublicBatchError("evidence_member_set_invalid")
-    if any(n.startswith("/") or ".." in Path(n).parts or "\\" in n for n in names):
+    if len(names) != len(set(names)):
+        raise PublicBatchError("evidence_member_duplicate")
+    if any(n.startswith("/") or ".." in Path(n).parts or "\\" in n or n.endswith("/") for n in names):
         raise PublicBatchError("evidence_unsafe_path")
-    data = {n: reader.read_bytes(n) for n in names}
-    objs = {n: parse_canonical_json_bytes(n, data[n]) for n in names if n.endswith(".json")}
-    for n in names:
+    if set(names) != set(CANONICAL_MEMBERS) or len(names) != len(CANONICAL_MEMBERS):
+        raise PublicBatchError("evidence_member_set_invalid")
+    data = {n: reader.read_bytes(n) for n in CANONICAL_MEMBERS}
+    objs = {n: parse_canonical_json_bytes(n, data[n]) for n in CANONICAL_MEMBERS if n.endswith(".json")}
+    for n in CANONICAL_MEMBERS:
         if n.endswith(".jsonl"):
             parse_canonical_jsonl_bytes(n, data[n])
     _validate_status(objs["public_batch_run_status.json"], expected_run_id, require_complete_status)
@@ -376,9 +374,17 @@ def validate_persisted_public_batch_evidence(
         base_url=plan["base_url"],
         timeout_seconds=plan["timeout_seconds"],
     )
-    # reproducibility: build same deterministic map twice
-    rebuilt2 = dict(rebuilt)
-    if rebuilt != rebuilt2:
+    # reproducibility: independently invoke the deterministic builder twice from immutable reconstructed evidence.
+    rebuilt2 = artifact_bytes(
+        reconstruct_from_records(
+            records, symbol="BTCUSDT", kline_row_count=1001, funding_lookback_days=100
+        ),
+        run_id=expected_run_id,
+        symbol="BTCUSDT",
+        base_url=plan["base_url"],
+        timeout_seconds=plan["timeout_seconds"],
+    )
+    if rebuilt.keys() != rebuilt2.keys() or any(rebuilt[k] != rebuilt2[k] for k in rebuilt):
         raise PublicBatchError("reproducibility_rebuild_mismatch")
     for n, b in rebuilt.items():
         if data[n] != b:

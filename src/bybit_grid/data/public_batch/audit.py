@@ -14,6 +14,20 @@ def _frozen_counts(values):
     return MappingProxyType(dict(sorted(Counter(values).items(), key=lambda kv: kv[0])))
 
 
+def _frozen_positive_int_counts_as_strings(values):
+    out = {}
+    for k, v in sorted(Counter(values).items(), key=lambda kv: kv[0]):
+        if type(k) is not int or type(k) is bool or k < 0:
+            raise ValueError("funding_interval_key_invalid")
+        if type(v) is not int or v <= 0:
+            raise ValueError("funding_interval_count_invalid")
+        sk = f"{k}"
+        if sk in out:
+            raise ValueError("funding_interval_key_collision")
+        out[sk] = v
+    return MappingProxyType(out)
+
+
 def _is_replay_candidate(row):
     return (
         type(row) is BybitInstrumentMeta
@@ -58,7 +72,7 @@ def audit_instrument_universe(instruments):
         status_counts=_frozen_counts(row.status for row in valid),
         quote_coin_counts=_frozen_counts(row.quote_coin for row in valid),
         settle_coin_counts=_frozen_counts(row.settle_coin for row in valid),
-        funding_interval_counts=_frozen_counts(row.funding_interval_minutes for row in valid),
+        funding_interval_counts=_frozen_positive_int_counts_as_strings(row.funding_interval_minutes for row in valid),
         zero_funding_interval_count=len(zero_rows),
         zero_funding_interval_symbols=zero_symbols,
         zero_funding_interval_by_contract_type=zero_by_contract,

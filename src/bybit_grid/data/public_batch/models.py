@@ -270,7 +270,7 @@ class BybitInstrumentUniverseAudit:
     status_counts: Mapping[str, int]
     quote_coin_counts: Mapping[str, int]
     settle_coin_counts: Mapping[str, int]
-    funding_interval_counts: Mapping[int, int]
+    funding_interval_counts: Mapping[str, int]
     zero_funding_interval_count: int
     zero_funding_interval_symbols: tuple[str, ...]
     zero_funding_interval_by_contract_type: Mapping[str, int]
