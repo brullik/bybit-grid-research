@@ -115,9 +115,15 @@ def test_capture_plan_timeout_invalid_values(timeout):
         records_from_jsonl(b"", capture_plan=plan)
 
 
-@pytest.mark.parametrize("index", range(37))
-def test_closure_matrix_case_count_regression(index):
-    # Each parametrized case is an executed regression that protects the focused
-    # closure suite from collapsing back to a handful of helper-only assertions.
-    assert NON_STATUS_ARTIFACT_COUNT == len(CANONICAL_MEMBERS) - 2
-    assert index >= 0
+def test_source_derived_non_status_counts_are_truthful():
+    from bybit_grid.data.public_batch.evidence import (
+        DERIVED_ARTIFACT_COUNT,
+        DERIVED_ARTIFACT_MEMBERS,
+        SOURCE_ARTIFACT_COUNT,
+        SOURCE_ARTIFACT_MEMBERS,
+    )
+
+    assert SOURCE_ARTIFACT_MEMBERS == ("recorded_public_responses.jsonl",)
+    assert SOURCE_ARTIFACT_COUNT == len(SOURCE_ARTIFACT_MEMBERS) == 1
+    assert DERIVED_ARTIFACT_COUNT == len(DERIVED_ARTIFACT_MEMBERS) == 15
+    assert NON_STATUS_ARTIFACT_COUNT == SOURCE_ARTIFACT_COUNT + DERIVED_ARTIFACT_COUNT == 16
