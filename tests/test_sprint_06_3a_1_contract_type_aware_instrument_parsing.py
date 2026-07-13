@@ -112,7 +112,7 @@ def test_universe_audit_counts_are_deterministic_and_futures_zero_does_not_fail(
     audit = audit_instrument_universe(rows)
     assert audit.universe_audit_ok
     assert dict(audit.contract_type_counts) == {"LinearFutures": 1, "LinearPerpetual": 2}
-    assert dict(audit.funding_interval_counts) == {0: 1, 480: 2}
+    assert dict(audit.funding_interval_counts) == {"0": 1, "480": 2}
     assert audit.zero_funding_interval_symbols == ("BTCUSDTZ26",)
     assert dict(audit.zero_funding_interval_by_contract_type) == {"LinearFutures": 1}
     assert audit.linear_perpetual_count == 2

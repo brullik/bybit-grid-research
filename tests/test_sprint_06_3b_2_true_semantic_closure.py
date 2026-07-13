@@ -25,8 +25,9 @@ def test_non_string_plain_mapping_keys_fail_without_collision():
             canonical_json_bytes(obj)
 
 
-def test_mapping_proxy_int_keys_are_lossless_for_model_counts():
-    assert canonical_json_bytes(MappingProxyType({480: 1})) == b'{"480":1}'
+def test_mapping_proxy_int_keys_are_rejected():
+    with pytest.raises(PublicBatchError):
+        canonical_json_bytes(MappingProxyType({480: 1}))
 
 
 def test_jsonl_canonical_enforcement():

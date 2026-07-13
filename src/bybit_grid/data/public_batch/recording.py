@@ -133,6 +133,15 @@ class RecordedPublicResponse:
             raise PublicBatchError("http_status_not_int")
         if type(self.content_type) is not str:
             raise PublicBatchError("content_type_not_str")
+        if self.http_status != 200:
+            raise PublicBatchError("http_status_not_success")
+        media_type = self.content_type.split(";", 1)[0].strip().lower()
+        if not media_type or media_type != "application/json":
+            raise PublicBatchError("content_type_not_json")
+        if type(self.raw_body_text) is not str:
+            raise PublicBatchError("raw_body_text_not_str")
+        if type(self.parsed_payload) is not dict:
+            raise PublicBatchError("parsed_payload_not_dict")
         expected = hashlib.sha256(self.raw_body_text.encode("utf-8")).hexdigest()
         if (
             self.raw_body_sha256 != expected
@@ -205,11 +214,14 @@ class RecordingPublicClient:
             except HTTPError as e:
                 status = int(e.code)
                 ctype = str(e.headers.get("content-type", ""))
-                body = e.read().decode("utf-8")
+                try:
+                    body = e.read().decode("utf-8", "strict")
+                except UnicodeDecodeError as ue:
+                    raise PublicBatchError(f"response_utf8_invalid:plan_id={plan_id}:endpoint={endpoint}:status={status}") from ue
                 if hasattr(e, "close"):
                     e.close()
             except UnicodeDecodeError as e:
-                raise PublicBatchError("response_utf8_invalid") from e
+                raise PublicBatchError(f"response_utf8_invalid:plan_id={plan_id}:endpoint={endpoint}") from e
             except (URLError, TimeoutError, OSError) as e:
                 raise PublicBatchError(f"transport_error:{type(e).__name__}:plan_id={plan_id}:endpoint={endpoint}:attempt={attempt}") from e
             finally:
