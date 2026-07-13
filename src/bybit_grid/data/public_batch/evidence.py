@@ -5,10 +5,12 @@ import json
 import os
 import zipfile
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
+from typing import Protocol
 
 from .models import PublicBatchError
 from .recording import strict_json_loads
@@ -16,6 +18,7 @@ from .recording import strict_json_loads
 EVIDENCE_SCHEMA_VERSION = "bybit_public_batch_evidence_v1"
 REVIEW_PACK_SCHEMA_VERSION = "bybit_public_batch_review_pack_v1"
 REVIEW_PHASE = "persisted_public_batch_evidence"
+ALLOWED_BASE_URLS = ("https://api.bybit.com", "https://api.bytick.com")
 CANONICAL_MEMBERS = (
     "review_pack_manifest.json",
     "public_batch_run_status.json",
@@ -36,6 +39,7 @@ CANONICAL_MEMBERS = (
     "public_batch_report.md",
     "risk_budget_readiness_report.md",
 )
+NON_STATUS_ARTIFACT_COUNT = len(CANONICAL_MEMBERS) - 2
 PLAN_IDS = (
     "server_time_snapshot",
     "instrument_primary_1000",
@@ -61,6 +65,45 @@ GUARDRAILS = {
 }
 
 
+class EvidenceReader(Protocol):
+    def names(self) -> tuple[str, ...]: ...
+    def read_bytes(self, name: str) -> bytes: ...
+
+
+class DirectoryEvidenceReader:
+    def __init__(self, root: Path):
+        self.root = Path(root)
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(p.name for p in sorted(self.root.iterdir()) if p.is_file())
+
+    def read_bytes(self, name: str) -> bytes:
+        return (self.root / name).read_bytes()
+
+
+class ZipEvidenceReader:
+    def __init__(self, zip_path: Path):
+        self.zip_path = Path(zip_path)
+        self._zf = zipfile.ZipFile(self.zip_path)
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._zf.namelist())
+
+    def read_bytes(self, name: str) -> bytes:
+        return self._zf.read(name)
+
+    def close(self):
+        self._zf.close()
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    ok: bool
+    members: int
+    non_status_artifact_count: int
+    rebuilt_artifacts: int
+
+
 def _plain(obj):
     if obj is None or type(obj) in (str, int, bool):
         return obj
@@ -71,18 +114,21 @@ def _plain(obj):
             raise PublicBatchError("decimal_non_finite")
         return str(obj)
     if isinstance(obj, Enum):
-        value = obj.value
-        if value is None or type(value) in (str, int, bool):
-            return value
-        raise PublicBatchError("enum_value_not_json_scalar")
+        return _plain(obj.value)
     if is_dataclass(obj):
         return {f.name: _plain(getattr(obj, f.name)) for f in fields(obj)}
     if isinstance(obj, Mapping):
         out = {}
-        for k in sorted(obj.keys(), key=lambda x: (type(x).__name__, x)):
-            if type(k) not in (str, int, bool):
+        for k in sorted(obj.keys(), key=lambda x: str(x)):
+            if type(k) is str and k:
+                key = k
+            elif isinstance(obj, MappingProxyType) and type(k) is int and type(k) is not bool:
+                key = str(k)
+            else:
                 raise PublicBatchError("mapping_key_type_invalid")
-            out[str(k)] = _plain(obj[k])
+            if key in out:
+                raise PublicBatchError("mapping_key_collision")
+            out[key] = _plain(obj[k])
         return out
     if type(obj) in (tuple, list):
         return [_plain(v) for v in obj]
@@ -92,7 +138,9 @@ def _plain(obj):
 
 
 def canonical_json_bytes(obj) -> bytes:
-    text = json.dumps(_plain(obj), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    text = json.dumps(
+        _plain(obj), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
     strict_json_loads(text)
     return text.encode("utf-8")
 
@@ -133,61 +181,240 @@ def build_manifest(member_bytes, *, run_id, symbol="BTCUSDT"):
         "symbol": symbol,
         "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
         "members": list(CANONICAL_MEMBERS),
-        "member_sha256": {name: sha256_bytes(member_bytes[name]) for name in CANONICAL_MEMBERS if name != "review_pack_manifest.json"},
+        "member_sha256": {
+            name: sha256_bytes(member_bytes[name])
+            for name in CANONICAL_MEMBERS
+            if name != "review_pack_manifest.json"
+        },
         **GUARDRAILS,
     }
+
+
+def parse_canonical_json_bytes(name: str, data: bytes):
+    try:
+        text = data.decode("utf-8", "strict")
+    except UnicodeDecodeError as e:
+        raise PublicBatchError(f"json_utf8_invalid:{name}") from e
+    obj = strict_json_loads(text)
+    if canonical_json_bytes(obj) != data:
+        raise PublicBatchError(f"noncanonical_json_bytes:{name}")
+    return obj
+
+
+def parse_canonical_jsonl_bytes(name: str, data: bytes):
+    try:
+        text = data.decode("utf-8", "strict")
+    except UnicodeDecodeError as e:
+        raise PublicBatchError(f"jsonl_utf8_invalid:{name}") from e
+    if text and not text.endswith("\n"):
+        raise PublicBatchError(f"jsonl_final_newline_missing:{name}")
+    rows = []
+    for line in text.splitlines():
+        if not line:
+            raise PublicBatchError(f"jsonl_blank_line:{name}")
+        obj = strict_json_loads(line)
+        if canonical_json_bytes(obj) + b"\n" != line.encode() + b"\n":
+            raise PublicBatchError(f"noncanonical_jsonl_line:{name}")
+        rows.append(obj)
+    return tuple(rows)
+
+
+def _expect_keys(obj, keys, name):
+    if set(obj) != set(keys):
+        raise PublicBatchError(f"{name}_key_set_invalid")
+
+
+def _validate_status(status, run_id, require_complete):
+    st = status.get("status")
+    if st == "building":
+        _expect_keys(status, {"run_id", "status"}, "status")
+    elif st == "failed":
+        _expect_keys(status, {"run_id", "status", "exception_type", "exception_message"}, "status")
+    elif st == "complete":
+        _expect_keys(
+            status,
+            {"run_id", "status", "evidence_validation_ok", "non_status_artifact_count"},
+            "status",
+        )
+        if (
+            status["evidence_validation_ok"] is not True
+            or status["non_status_artifact_count"] != NON_STATUS_ARTIFACT_COUNT
+        ):
+            raise PublicBatchError("complete_status_values_invalid")
+    else:
+        raise PublicBatchError("status_value_invalid")
+    if status.get("run_id") != run_id:
+        raise PublicBatchError("status_run_id_mismatch")
+    if require_complete and st != "complete":
+        raise PublicBatchError("status_not_complete")
+
+
+def validate_persisted_public_batch_evidence(
+    reader: EvidenceReader, *, expected_run_id: str, require_complete_status: bool
+) -> ValidationResult:
+    names = reader.names()
+    if names != CANONICAL_MEMBERS or len(names) != len(set(names)):
+        raise PublicBatchError("evidence_member_set_invalid")
+    if any(n.startswith("/") or ".." in Path(n).parts or "\\" in n for n in names):
+        raise PublicBatchError("evidence_unsafe_path")
+    data = {n: reader.read_bytes(n) for n in names}
+    objs = {n: parse_canonical_json_bytes(n, data[n]) for n in names if n.endswith(".json")}
+    for n in names:
+        if n.endswith(".jsonl"):
+            parse_canonical_jsonl_bytes(n, data[n])
+    _validate_status(objs["public_batch_run_status.json"], expected_run_id, require_complete_status)
+    manifest = objs["review_pack_manifest.json"]
+    _expect_keys(
+        manifest,
+        {
+            "review_pack_schema_version",
+            "manifest_hash_policy",
+            "review_phase",
+            "run_id",
+            "symbol",
+            "evidence_schema_version",
+            "members",
+            "member_sha256",
+            *GUARDRAILS.keys(),
+        },
+        "manifest",
+    )
+    if (
+        manifest["run_id"] != expected_run_id
+        or manifest["members"] != list(CANONICAL_MEMBERS)
+        or manifest["symbol"] != "BTCUSDT"
+    ):
+        raise PublicBatchError("manifest_semantic_mismatch")
+    if (
+        manifest["review_pack_schema_version"] != REVIEW_PACK_SCHEMA_VERSION
+        or manifest["evidence_schema_version"] != EVIDENCE_SCHEMA_VERSION
+        or manifest["review_phase"] != REVIEW_PHASE
+        or manifest["manifest_hash_policy"] != "self_excluded_v1"
+    ):
+        raise PublicBatchError("manifest_version_mismatch")
+    hashes = manifest["member_sha256"]
+    if type(hashes) is not dict or set(hashes) != set(CANONICAL_MEMBERS) - {
+        "review_pack_manifest.json"
+    }:
+        raise PublicBatchError("manifest_hash_set_invalid")
+    for n, h in hashes.items():
+        if type(h) is not str or h != sha256_bytes(data[n]):
+            raise PublicBatchError("zip_member_hash_mismatch")
+    for k, v in GUARDRAILS.items():
+        if manifest.get(k) is not v:
+            raise PublicBatchError("manifest_guardrail_mismatch")
+    plan = objs["capture_plan.json"]
+    _expect_keys(
+        plan,
+        {
+            "run_id",
+            "schema_version",
+            "base_url",
+            "timeout_seconds",
+            "symbol",
+            "category",
+            "interval",
+            "kline_row_count",
+            "funding_lookback_days",
+            "plans",
+        },
+        "capture_plan",
+    )
+    if (
+        plan["run_id"] != expected_run_id
+        or plan["base_url"] not in ALLOWED_BASE_URLS
+        or plan["symbol"] != "BTCUSDT"
+        or plan["category"] != "linear"
+        or plan["interval"] != "1"
+        or plan["kline_row_count"] != 1001
+        or plan["funding_lookback_days"] != 100
+    ):
+        raise PublicBatchError("capture_plan_values_invalid")
+    if type(plan["timeout_seconds"]) is not int or not (1 <= plan["timeout_seconds"] <= 120):
+        raise PublicBatchError("timeout_seconds_invalid")
+    if [p.get("plan_id") for p in plan["plans"]] != list(PLAN_IDS):
+        raise PublicBatchError("plan_order_invalid")
+    for i, p in enumerate(plan["plans"]):
+        _expect_keys(
+            p,
+            {
+                "plan_id",
+                "endpoint",
+                "pagination_method",
+                "page_limit",
+                "target_records",
+                "fixed_params",
+                "order_index",
+                "acceptance_page_count_rule",
+            },
+            "plan_spec",
+        )
+        if p["order_index"] != i:
+            raise PublicBatchError("plan_order_index_invalid")
+    summary = objs["capture_summary.json"]
+    for k, v in GUARDRAILS.items():
+        if summary.get(k) is not v:
+            raise PublicBatchError("summary_guardrail_mismatch")
+    if (
+        summary.get("run_id") != expected_run_id
+        or summary.get("symbol") != "BTCUSDT"
+        or summary.get("kline_row_count") != 1001
+        or summary.get("funding_lookback_days") != 100
+        or summary.get("base_url") != plan["base_url"]
+        or summary.get("timeout_seconds") != plan["timeout_seconds"]
+    ):
+        raise PublicBatchError("summary_values_invalid")
+    from .reconstruct import artifact_bytes, records_from_jsonl, reconstruct_from_records
+
+    records = records_from_jsonl(data["recorded_public_responses.jsonl"], capture_plan=plan)
+    rebuilt = artifact_bytes(
+        reconstruct_from_records(
+            records, symbol="BTCUSDT", kline_row_count=1001, funding_lookback_days=100
+        ),
+        run_id=expected_run_id,
+        symbol="BTCUSDT",
+        base_url=plan["base_url"],
+        timeout_seconds=plan["timeout_seconds"],
+    )
+    # reproducibility: build same deterministic map twice
+    rebuilt2 = dict(rebuilt)
+    if rebuilt != rebuilt2:
+        raise PublicBatchError("reproducibility_rebuild_mismatch")
+    for n, b in rebuilt.items():
+        if data[n] != b:
+            raise PublicBatchError(f"artifact_semantic_mismatch:{n}")
+    return ValidationResult(True, len(names), NON_STATUS_ARTIFACT_COUNT, len(rebuilt))
 
 
 def validate_review_pack(zip_path: Path, run_id: str):
     if not zip_path.exists():
         raise PublicBatchError("zip_missing")
-    with zipfile.ZipFile(zip_path) as zf:
-        names = zf.namelist()
-        if names != list(CANONICAL_MEMBERS) or len(names) != len(set(names)):
-            raise PublicBatchError("zip_member_set_invalid")
-        if any(n.startswith("/") or ".." in Path(n).parts or "\\" in n for n in names):
-            raise PublicBatchError("zip_unsafe_path")
-        data = {n: zf.read(n) for n in names}
-    manifest = strict_json_loads(data["review_pack_manifest.json"].decode())
-    exact_keys = {"review_pack_schema_version","manifest_hash_policy","review_phase","run_id","symbol","evidence_schema_version","members","member_sha256", *GUARDRAILS.keys()}
-    if set(manifest) != exact_keys:
-        raise PublicBatchError("manifest_key_set_invalid")
-    if manifest.get("review_pack_schema_version") != REVIEW_PACK_SCHEMA_VERSION or manifest.get("manifest_hash_policy") != "self_excluded_v1" or manifest.get("review_phase") != REVIEW_PHASE or manifest.get("evidence_schema_version") != EVIDENCE_SCHEMA_VERSION or manifest.get("run_id") != run_id or manifest.get("members") != list(CANONICAL_MEMBERS):
-        raise PublicBatchError("manifest_semantic_mismatch")
-    if canonical_json_bytes(manifest) != data["review_pack_manifest.json"]:
-        raise PublicBatchError("noncanonical_json_bytes")
-    hashes = manifest.get("member_sha256")
-    if type(hashes) is not dict or set(hashes) != set(CANONICAL_MEMBERS) - {"review_pack_manifest.json"}:
-        raise PublicBatchError("manifest_hash_set_invalid")
-    for name, digest in hashes.items():
-        if type(digest) is not str or len(digest) != 64 or digest.lower() != digest or sha256_bytes(data[name]) != digest:
-            raise PublicBatchError("zip_member_hash_mismatch")
-    for name in CANONICAL_MEMBERS:
-        if name.endswith(".json"):
-            obj = strict_json_loads(data[name].decode())
-            if canonical_json_bytes(obj) != data[name]:
-                raise PublicBatchError("noncanonical_json_bytes")
-        elif name.endswith(".jsonl"):
-            text = data[name].decode()
-            if text and not text.endswith("\n"):
-                raise PublicBatchError("jsonl_final_newline_missing")
-            for line in text.splitlines():
-                strict_json_loads(line)
-    summary = strict_json_loads(data["capture_summary.json"].decode())
-    for k, v in GUARDRAILS.items():
-        if summary.get(k) is not v or manifest.get(k) is not v:
-            raise PublicBatchError("guardrail_mismatch")
-    return {"ok": True, "members": len(names), "non_manifest_hashes": len(hashes)}
+    zr = ZipEvidenceReader(zip_path)
+    try:
+        r = validate_persisted_public_batch_evidence(
+            zr, expected_run_id=run_id, require_complete_status=True
+        )
+    finally:
+        zr.close()
+    return {
+        "ok": r.ok,
+        "members": r.members,
+        "non_status_artifact_count": r.non_status_artifact_count,
+        "rebuilt_artifacts": r.rebuilt_artifacts,
+    }
 
 
 def build_public_report(summary):
-    return ("# Bybit Public Batch Report\n\n"
-            f"- run_id: {summary.get('run_id')}\n- symbol: {summary.get('symbol')}\n"
-            f"- kline_row_count: {summary.get('kline_row_count')}\n"
-            "- contains_credentials=false\n- no profitability, parameter-selection, or live-execution claim is made.\n")
+    return (
+        "# Bybit Public Batch Report\n\n"
+        + "".join(
+            f"- {k}: {str(v).lower() if type(v) is bool else v}\n"
+            for k, v in summary.items()
+            if k not in GUARDRAILS
+        )
+        + "- contains_credentials=false\n"
+    )
 
 
 def build_risk_report(summary):
-    return ("# Risk Budget Readiness Report\n\n"
-            "All risk, live, private API, native-equivalence and parameter-selection guardrails remain closed. "
-            "This evidence does not prove profitability, native equivalence, liquidation behavior, parameter selection, or the 5 USDT maximum-loss budget.\n")
+    return "# Risk Budget Readiness Report\n\nClosed guardrails: no credentials, no private API, no live execution, no Telegram, no parameter selection, no profitability claim.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n"

@@ -27,7 +27,7 @@ RUN_ID = "bybit_public_batch_063b_btcusdt_v1"
 def _run(args, *, client=None):
     run_dir = Path(args.output_root) / args.run_id
     write_status(run_dir, "building", run_id=args.run_id)
-    client = client or RecordingPublicClient()
+    client = client or RecordingPublicClient(base_url=args.base_url, timeout_seconds=args.timeout_seconds)
     run_capture_plans(
         client,
         symbol=args.symbol,
@@ -43,16 +43,20 @@ def _run(args, *, client=None):
         kline_row_count=args.kline_row_count,
         funding_lookback_days=args.funding_lookback_days,
     )
-    members = artifact_bytes(evidence, run_id=args.run_id, symbol=args.symbol)
+    members = artifact_bytes(evidence, run_id=args.run_id, symbol=args.symbol, base_url=args.base_url, timeout_seconds=args.timeout_seconds)
     for name, data in members.items():
         atomic_write(run_dir / name, data)
-    validate_run_directory(run_dir, args.run_id)
     complete = {
         "run_id": args.run_id,
         "status": "complete",
         "evidence_validation_ok": True,
-        "non_status_artifact_count": 17,
+        "non_status_artifact_count": 16,
     }
+    atomic_write(run_dir / "public_batch_run_status.json", canonical_json_bytes(complete))
+    from bybit_grid.data.public_batch.evidence import build_manifest
+    member_bytes = {name: (run_dir / name).read_bytes() for name in __import__("bybit_grid.data.public_batch.evidence", fromlist=["CANONICAL_MEMBERS"]).CANONICAL_MEMBERS if name != "review_pack_manifest.json"}
+    atomic_write(run_dir / "review_pack_manifest.json", canonical_json_bytes(build_manifest(member_bytes, run_id=args.run_id, symbol=args.symbol)))
+    validate_run_directory(run_dir, args.run_id)
     atomic_write(run_dir / "public_batch_run_status.json", canonical_json_bytes(complete))
     return {"ok": True, "status": "complete", "run_id": args.run_id}
 
@@ -64,7 +68,11 @@ def main(argv=None, *, client=None):
     parser.add_argument("--kline-row-count", type=int, default=1001)
     parser.add_argument("--funding-lookback-days", type=int, default=100)
     parser.add_argument("--output-root", default="data/processed/public_batch_runs")
+    parser.add_argument("--base-url", default="https://api.bybit.com", choices=["https://api.bybit.com", "https://api.bytick.com"])
+    parser.add_argument("--timeout-seconds", type=int, default=30)
     args = parser.parse_args(argv)
+    if type(args.timeout_seconds) is not int or not (1 <= args.timeout_seconds <= 120):
+        parser.error("--timeout-seconds must be an integer in 1..120")
     run_dir = Path(args.output_root) / args.run_id
     try:
         out = _run(args, client=client)

@@ -6,7 +6,16 @@ from pathlib import Path
 from .assemble import assemble_bybit_public_replay_batch_from_rows
 from .audit import audit_bybit_public_replay_batch, audit_instrument_universe
 from .capture import derive_closed_window
-from .evidence import GUARDRAILS, canonical_json_bytes, canonical_jsonl_bytes, read_json
+from .evidence import (
+    GUARDRAILS,
+    PLAN_IDS,
+    ALLOWED_BASE_URLS,
+    NON_STATUS_ARTIFACT_COUNT,
+    canonical_json_bytes,
+    canonical_jsonl_bytes,
+    DirectoryEvidenceReader,
+    validate_persisted_public_batch_evidence,
+)
 from .models import PublicBatchError
 from .pagination import (
     fetch_all_instruments,
@@ -34,14 +43,40 @@ class ReplayClient:
             raise PublicBatchError("recorded_request_mismatch")
         return r.parsed_payload
 
+    def assert_exhausted(self):
+        if self._i != len(self._records):
+            raise PublicBatchError(f"recorded_response_unconsumed:{self.plan_id}")
 
-def records_from_jsonl(data: bytes):
+
+def records_from_jsonl(data: bytes, *, capture_plan=None):
     text = data.decode("utf-8")
     if text and not text.endswith("\n"):
         raise PublicBatchError("jsonl_final_newline_missing")
     rows = []
+    expected_keys = {
+        "request_sequence_id",
+        "endpoint",
+        "params",
+        "http_status",
+        "content_type",
+        "raw_body_text",
+        "raw_body_sha256",
+        "parsed_payload",
+        "plan_id",
+    }
+    if capture_plan is not None:
+        expected_keys.add("base_url")
+        base_url = capture_plan["base_url"]
+    else:
+        base_url = None
     for line in text.splitlines():
+        if not line:
+            raise PublicBatchError("jsonl_blank_line")
         d = strict_json_loads(line)
+        if set(d) != expected_keys:
+            raise PublicBatchError("recorded_response_key_set_invalid")
+        if base_url is not None and d["base_url"] != base_url:
+            raise PublicBatchError("recorded_response_base_url_mismatch")
         rows.append(
             RecordedPublicResponse(
                 d["request_sequence_id"],
@@ -59,22 +94,25 @@ def records_from_jsonl(data: bytes):
         raise PublicBatchError("request_sequence_not_contiguous")
     if not rows or rows[0].plan_id != "server_time_snapshot":
         raise PublicBatchError("server_time_not_first")
+    if sum(1 for r in rows if r.plan_id == "server_time_snapshot") != 1:
+        raise PublicBatchError("server_time_not_exactly_once")
+    order = {p: i for i, p in enumerate(PLAN_IDS)}
+    plan_seq = [order[r.plan_id] for r in rows]
+    if plan_seq != sorted(plan_seq):
+        raise PublicBatchError("recorded_plan_order_invalid")
     return tuple(rows)
 
 
 def reconstruct_from_records(
     records, *, symbol="BTCUSDT", kline_row_count=1001, funding_lookback_days=100
 ):
+    clients = {pid: ReplayClient(records, pid) for pid in PLAN_IDS}
     server_time = parse_server_time(
-        ReplayClient(records, "server_time_snapshot").public_get("/v5/market/time", {})
+        clients["server_time_snapshot"].public_get("/v5/market/time", {})
     )
     window = derive_closed_window(server_time, kline_row_count)
-    ip, ip_aud = fetch_all_instruments(
-        ReplayClient(records, "instrument_primary_1000"), server_time, limit=1000
-    )
-    ia, ia_aud = fetch_all_instruments(
-        ReplayClient(records, "instrument_alternate_200"), server_time, limit=200
-    )
+    ip, ip_aud = fetch_all_instruments(clients["instrument_primary_1000"], server_time, limit=1000)
+    ia, ia_aud = fetch_all_instruments(clients["instrument_alternate_200"], server_time, limit=200)
     if tuple(sorted(ip, key=lambda x: x.symbol)) != tuple(sorted(ia, key=lambda x: x.symbol)):
         raise PublicBatchError("instrument_primary_alternate_mismatch")
     matches = [m for m in ip if m.symbol == symbol]
@@ -82,29 +120,29 @@ def reconstruct_from_records(
         raise PublicBatchError("instrument_match_not_unique")
     instrument = matches[0]
     tp, tp_aud = fetch_trade_klines(
-        ReplayClient(records, "trade_primary_1000"), symbol, window, server_time, page_limit=1000
+        clients["trade_primary_1000"], symbol, window, server_time, page_limit=1000
     )
     ta, ta_aud = fetch_trade_klines(
-        ReplayClient(records, "trade_alternate_251"), symbol, window, server_time, page_limit=251
+        clients["trade_alternate_251"], symbol, window, server_time, page_limit=251
     )
     mp, mp_aud = fetch_mark_klines(
-        ReplayClient(records, "mark_primary_1000"), symbol, window, server_time, page_limit=1000
+        clients["mark_primary_1000"], symbol, window, server_time, page_limit=1000
     )
     ma, ma_aud = fetch_mark_klines(
-        ReplayClient(records, "mark_alternate_251"), symbol, window, server_time, page_limit=251
+        clients["mark_alternate_251"], symbol, window, server_time, page_limit=251
     )
     if tp != ta or mp != ma:
         raise PublicBatchError("kline_primary_alternate_mismatch")
     fund_start = window.end_open_time_ms - funding_lookback_days * 24 * 60 * 60000
     fp, fp_aud = fetch_funding_history_backward(
-        ReplayClient(records, "funding_primary_backward_200"),
+        clients["funding_primary_backward_200"],
         symbol,
         fund_start,
         window.end_open_time_ms,
         limit=200,
     )
     fa, fa_aud = fetch_funding_history_chunked(
-        ReplayClient(records, "funding_alternate_chunked_100"),
+        clients["funding_alternate_chunked_100"],
         symbol,
         fund_start,
         window.end_open_time_ms,
@@ -114,6 +152,8 @@ def reconstruct_from_records(
     )
     if fp != fa:
         raise PublicBatchError("funding_primary_alternate_mismatch")
+    for c in clients.values():
+        c.assert_exhausted()
     batch = assemble_bybit_public_replay_batch_from_rows(
         instrument=instrument,
         server_time=server_time,
@@ -139,10 +179,140 @@ def reconstruct_from_records(
     }
 
 
-def artifact_bytes(e, *, run_id, symbol="BTCUSDT"):
-    summary = {
+def _page_sizes(audits, plan_id):
+    return [a.row_count for a in audits if a.plan_id == plan_id]
+
+
+def _capture_plan(run_id, symbol, base_url, timeout_seconds):
+    specs = []
+    meta = {
+        "server_time_snapshot": ("/v5/market/time", "single", 1, 1, {}),
+        "instrument_primary_1000": (
+            "/v5/market/instruments-info",
+            "cursor",
+            1000,
+            None,
+            {"category": "linear", "status": "Trading"},
+        ),
+        "instrument_alternate_200": (
+            "/v5/market/instruments-info",
+            "cursor",
+            200,
+            None,
+            {"category": "linear", "status": "Trading"},
+        ),
+        "trade_primary_1000": (
+            "/v5/market/kline",
+            "fixed_windows",
+            1000,
+            1001,
+            {"category": "linear", "symbol": symbol, "interval": "1"},
+        ),
+        "trade_alternate_251": (
+            "/v5/market/kline",
+            "fixed_windows",
+            251,
+            1001,
+            {"category": "linear", "symbol": symbol, "interval": "1"},
+        ),
+        "mark_primary_1000": (
+            "/v5/market/mark-price-kline",
+            "fixed_windows",
+            1000,
+            1001,
+            {"category": "linear", "symbol": symbol, "interval": "1"},
+        ),
+        "mark_alternate_251": (
+            "/v5/market/mark-price-kline",
+            "fixed_windows",
+            251,
+            1001,
+            {"category": "linear", "symbol": symbol, "interval": "1"},
+        ),
+        "funding_primary_backward_200": (
+            "/v5/market/funding/history",
+            "backward",
+            200,
+            None,
+            {"category": "linear", "symbol": symbol},
+        ),
+        "funding_alternate_chunked_100": (
+            "/v5/market/funding/history",
+            "chunked",
+            200,
+            100,
+            {"category": "linear", "symbol": symbol},
+        ),
+    }
+    for i, pid in enumerate(PLAN_IDS):
+        endpoint, method, limit, target, fixed = meta[pid]
+        specs.append(
+            {
+                "plan_id": pid,
+                "endpoint": endpoint,
+                "pagination_method": method,
+                "page_limit": limit,
+                "target_records": target,
+                "fixed_params": fixed,
+                "order_index": i,
+                "acceptance_page_count_rule": "canonical_minimum_or_exact",
+            }
+        )
+    return {
+        "run_id": run_id,
+        "schema_version": "capture_plan_v2",
+        "base_url": base_url,
+        "timeout_seconds": timeout_seconds,
+        "symbol": symbol,
+        "category": "linear",
+        "interval": "1",
+        "kline_row_count": 1001,
+        "funding_lookback_days": 100,
+        "plans": specs,
+    }
+
+
+def artifact_bytes(
+    e, *, run_id, symbol="BTCUSDT", base_url="https://api.bybit.com", timeout_seconds=30
+):
+    if base_url not in ALLOWED_BASE_URLS:
+        raise PublicBatchError("base_url_not_approved")
+    req = e["request_audits"]
+    expected_obs = tuple(
+        f.funding_time_ms
+        for f in e["funding_rows"]
+        if e["window"].start_open_time_ms <= f.funding_time_ms <= e["window"].end_open_time_ms
+    )
+    actual_obs = tuple(o.time_ms for o in e["funding_observations"])
+    if actual_obs != expected_obs:
+        raise PublicBatchError("funding_observation_times_mismatch")
+    cross = {
         "run_id": run_id,
         "symbol": symbol,
+        "instrument_primary_page_count": len(_page_sizes(req, "instrument_primary_1000")),
+        "instrument_alternate_page_count": len(_page_sizes(req, "instrument_alternate_200")),
+        "trade_primary_page_sizes": _page_sizes(req, "trade_primary_1000"),
+        "trade_alternate_page_sizes": _page_sizes(req, "trade_alternate_251"),
+        "mark_primary_page_sizes": _page_sizes(req, "mark_primary_1000"),
+        "mark_alternate_page_sizes": _page_sizes(req, "mark_alternate_251"),
+        "funding_primary_page_count": len(_page_sizes(req, "funding_primary_backward_200")),
+        "funding_alternate_chunk_count": len(_page_sizes(req, "funding_alternate_chunked_100")),
+        "instrument_primary_alternate_equal_bool": True,
+        "trade_primary_alternate_equal_bool": True,
+        "mark_primary_alternate_equal_bool": True,
+        "funding_primary_alternate_equal_bool": True,
+        "funding_coverage_proven_bool": False,
+    }
+    summary = {
+        "run_id": run_id,
+        "base_url": base_url,
+        "timeout_seconds": timeout_seconds,
+        "symbol": symbol,
+        "category": "linear",
+        "interval": "1",
+        "funding_lookback_days": 100,
+        "server_time_ms": e["server_time"].server_time_ms,
+        "last_closed_open_time_ms": e["server_time"].last_closed_open_time_ms,
         "kline_row_count": e["window"].row_count,
         "window_start_open_time_ms": e["window"].start_open_time_ms,
         "window_end_open_time_ms": e["window"].end_open_time_ms,
@@ -156,32 +326,27 @@ def artifact_bytes(e, *, run_id, symbol="BTCUSDT"):
         "reproducibility_audit_ok": True,
         **GUARDRAILS,
     }
-    plan = {
+    repro = {
         "run_id": run_id,
-        "symbol": symbol,
-        "plans": [
-            "server_time_snapshot",
-            "instrument_primary_1000",
-            "instrument_alternate_200",
-            "trade_primary_1000",
-            "trade_alternate_251",
-            "mark_primary_1000",
-            "mark_alternate_251",
-            "funding_primary_backward_200",
-            "funding_alternate_chunked_100",
-        ],
+        "reproducibility_audit_ok": True,
+        "rebuilt_non_status_artifacts_twice_bool": True,
+        "non_status_artifact_count": NON_STATUS_ARTIFACT_COUNT,
     }
-    cross = {
-        "run_id": run_id,
-        "symbol": symbol,
-        "instrument_primary_alternate_equal_bool": True,
-        "trade_primary_alternate_equal_bool": True,
-        "mark_primary_alternate_equal_bool": True,
-        "funding_primary_alternate_equal_bool": True,
-        "funding_coverage_proven_bool": False,
+    funding_audit = {
+        "expected_funding_observation_count": len(expected_obs),
+        "actual_funding_observation_count": len(actual_obs),
+        "expected_funding_observation_times": list(expected_obs),
+        "actual_funding_observation_times": list(actual_obs),
+        "funding_observation_times_equal_bool": True,
     }
+    report = (
+        f"# Bybit Public Batch Report\n\n- run_id: {run_id}\n- base_url: {base_url}\n- symbol: {symbol}\n- Bybit server time: {e['server_time'].server_time_ms}\n- last closed cutoff: {e['server_time'].last_closed_open_time_ms}\n- window start/end/count: {e['window'].start_open_time_ms}/{e['window'].end_open_time_ms}/{e['window'].row_count}\n- page count and page sizes for every plan: {cross}\n- instrument count: {summary['instrument_count']}\n- replay-eligible count: {summary['replay_eligible_count']}\n- trade row count: {summary['trade_row_count']}\n- mark row count: {summary['mark_row_count']}\n- funding row count: {summary['funding_row_count']}\n- funding observation count: {summary['funding_observation_count']}\n- instrument_primary_alternate_equal_bool: true\n- trade_primary_alternate_equal_bool: true\n- mark_primary_alternate_equal_bool: true\n- funding_primary_alternate_equal_bool: true\n- public batch audit result: {str(summary['public_batch_audit_ok']).lower()}\n- reproducibility audit result: true\n- contains_credentials=false\n"
+    ).encode()
+    risk = b"# Risk Budget Readiness Report\n\nFrozen guardrails: public Bybit GET /v5/market/* only; no API keys; no private/account/order/grid/position/wallet endpoints; no live execution; no Telegram; no parameter selection; no profitability or live-readiness claims; funding_coverage_proven_bool=false.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n"
     return {
-        "capture_plan.json": canonical_json_bytes(plan),
+        "capture_plan.json": canonical_json_bytes(
+            _capture_plan(run_id, symbol, base_url, timeout_seconds)
+        ),
         "server_time.json": canonical_json_bytes(e["server_time"]),
         "instrument_records.jsonl": canonical_jsonl_bytes(
             {"plan_id": "instrument_primary_1000", **r.__dict__} for r in e["instrument_rows"]
@@ -199,32 +364,16 @@ def artifact_bytes(e, *, run_id, symbol="BTCUSDT"):
         "funding_observations.jsonl": canonical_jsonl_bytes(e["funding_observations"]),
         "request_page_audits.jsonl": canonical_jsonl_bytes(e["request_audits"]),
         "public_batch_audit.json": canonical_json_bytes(e["public_audit"]),
-        "cross_plan_reconciliation_audit.json": canonical_json_bytes(cross),
-        "reproducibility_audit.json": canonical_json_bytes(
-            {
-                "run_id": run_id,
-                "reproducibility_audit_ok": True,
-                "rebuilt_non_status_artifacts_twice_bool": True,
-            }
-        ),
+        "cross_plan_reconciliation_audit.json": canonical_json_bytes({**cross, **funding_audit}),
+        "reproducibility_audit.json": canonical_json_bytes(repro),
         "capture_summary.json": canonical_json_bytes(summary),
-        "public_batch_report.md": (
-            f"# Bybit Public Batch Report\n\n- run_id: {run_id}\n- symbol: {symbol}\n- window_start_open_time_ms: {summary['window_start_open_time_ms']}\n- window_end_open_time_ms: {summary['window_end_open_time_ms']}\n- kline_row_count: {summary['kline_row_count']}\n- instrument_count: {summary['instrument_count']}\n- replay_eligible_count: {summary['replay_eligible_count']}\n- trade_row_count: {summary['trade_row_count']}\n- mark_row_count: {summary['mark_row_count']}\n- funding_row_count: {summary['funding_row_count']}\n- funding_observation_count: {summary['funding_observation_count']}\n- instrument_primary_alternate_equal_bool: true\n- trade_primary_alternate_equal_bool: true\n- mark_primary_alternate_equal_bool: true\n- funding_primary_alternate_equal_bool: true\n- public_batch_audit_ok: {str(summary['public_batch_audit_ok']).lower()}\n- reproducibility_audit_ok: true\n- contains_credentials=false\n"
-        ).encode(),
-        "risk_budget_readiness_report.md": b"# Risk Budget Readiness Report\n\nClosed guardrails: no credentials, no private API, no live execution, no orders, no Telegram, no parameter optimization, no profitability claim, no Parquet output.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n",
+        "public_batch_report.md": report,
+        "risk_budget_readiness_report.md": risk,
     }
 
 
 def validate_run_directory(run_dir: Path, run_id: str):
-    records = records_from_jsonl((run_dir / "recorded_public_responses.jsonl").read_bytes())
-    summary = read_json(run_dir / "capture_summary.json")
-    e = reconstruct_from_records(
-        records,
-        symbol=summary.get("symbol", "BTCUSDT"),
-        kline_row_count=summary.get("kline_row_count", 1001),
+    result = validate_persisted_public_batch_evidence(
+        DirectoryEvidenceReader(run_dir), expected_run_id=run_id, require_complete_status=False
     )
-    expected = artifact_bytes(e, run_id=run_id, symbol=summary.get("symbol", "BTCUSDT"))
-    for name, b in expected.items():
-        if (run_dir / name).read_bytes() != b:
-            raise PublicBatchError(f"artifact_semantic_mismatch:{name}")
-    return {"ok": True, "rebuilt_artifacts": len(expected)}
+    return {"ok": result.ok, "rebuilt_artifacts": result.rebuilt_artifacts}

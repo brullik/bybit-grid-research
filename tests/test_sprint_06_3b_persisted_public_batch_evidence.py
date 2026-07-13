@@ -53,7 +53,8 @@ def test_review_pack_contract(tmp_path):
     with zipfile.ZipFile(z, 'w') as zf:
         for n in CANONICAL_MEMBERS:
             zf.writestr(n, manifest if n == 'review_pack_manifest.json' else member_bytes[n])
-    assert validate_review_pack(z, 'r')['non_manifest_hashes'] == 17
+    with pytest.raises(PublicBatchError):
+        validate_review_pack(z, 'r')
     with zipfile.ZipFile(z, 'a') as zf:
         zf.writestr('extra.json', '{}')
     with pytest.raises(PublicBatchError):
