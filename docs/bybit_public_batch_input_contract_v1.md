@@ -79,3 +79,53 @@ private API, no live execution, no native grid operations, no Telegram, no param
 optimization, no PnL/EV/ROI/profitability claim, and no Parquet evidence output in this
 sprint. It is sufficient only for the next engineering stage: Parquet storage, resume,
 and gap-repair design.
+
+## Sprint 06.3B.1 closure: owner capture and semantic review-pack validation
+
+The owner capture command is a real public-only lifecycle, not a placeholder. It writes
+`public_batch_run_status.json` with `status=building` before constructing the import-safe
+recording client, fetches Bybit public server time once via `GET /v5/market/time`, derives the
+closed 1001-row BTCUSDT one-minute window from that snapshot, executes every primary and
+alternate public `GET /v5/market/*` retrieval plan, persists raw responses first, reads those
+persisted responses back, reconstructs normalized evidence from raw response bodies, reconciles
+primary/alternate plans, audits the replay-ready primary batch, writes deterministic artifacts,
+validates the directory from persisted files, and writes `status=complete` last. Failures write
+`status=failed` last with stable exception type and message.
+
+Every raw response record carries a stripped frozen plan id and a contiguous sequence id. The
+frozen plan ids are `server_time_snapshot`, `instrument_primary_1000`,
+`instrument_alternate_200`, `trade_primary_1000`, `trade_alternate_251`, `mark_primary_1000`,
+`mark_alternate_251`, `funding_primary_backward_200`, and
+`funding_alternate_chunked_100`. Plan-scoped client views share one underlying sequence and
+record store; mutable global plan state is not part of the contract.
+
+The instrument universe is captured with 1000-row and 200-row pagination plans and reconciled by
+canonical normalized rows. Trade and mark one-minute klines use the exact same 1001-row closed
+window with 1000-row and 251-row plans. Funding history covers the preceding 100 days with a
+200-row backward plan and non-overlapping chunked plan derived from the parsed BTCUSDT funding
+interval. Cross-plan equality proves deterministic equivalence of these public retrieval plans
+within the requested windows only; it does not prove complete historical funding coverage.
+
+Persisted-input-first reconstruction begins at `recorded_public_responses.jsonl`. The validator
+checks canonical JSON/JSONL encoding, sequence ids, raw-body SHA-256 values, strict JSON parsing,
+plan ids, endpoint/parameter identity, parser output, primary/alternate row equality, replay
+assembly, funding observations, cross-plan summary fields, reports, and byte-for-byte artifact
+identity. A review pack with recomputed hashes but semantically fabricated raw responses or
+normalized rows is outside the accepted contract and must be rejected by semantic validation.
+
+The review-pack manifest uses the self-excluded hash policy: `review_pack_manifest.json` is not
+listed in `member_sha256`, while the other 17 members have exact lowercase SHA-256 hashes in the
+frozen 18-member order. Extra or missing keys, stale hashes, unsafe paths, duplicate ZIP members,
+non-canonical JSON/JSONL, or a complete status without validated evidence are invalid.
+
+Funding observations use an inclusive in-window rule. Every funding rate whose timestamp satisfies
+`requested_window.start_open_time_ms <= funding_time_ms <= requested_window.end_open_time_ms` must
+produce exactly one observation joined to the mark-price candle with the same open timestamp. The
+minute-data mark-open join remains an approximation and is documented as such.
+
+All closed guardrails remain closed: no credentials, no private endpoints, no order/create/close/
+cancel/position/account/wallet operations, no native grid operations, no Telegram, no parameter
+optimization, no profitability claim, no Parquet output in this closure, no native-grid
+equivalence, no native quantity mapping, no liquidation-behavior proof, no funding-history
+completeness proof, no 5 USDT maximum-loss proof, and no live-readiness authorization. After this
+closure is accepted, the next stage remains Parquet storage, resume behavior, and gap repair only.

@@ -60,6 +60,7 @@ def fetch_all_instruments(client, server_time, category="linear", max_pages=20, 
                 limit,
                 len(page),
                 nextc,
+                getattr(client, "plan_id", ""),
             )
         )
         if not nextc:
@@ -111,6 +112,7 @@ def fetch_trade_klines(client, symbol, requested_window, server_time, page_limit
                 page_limit,
                 len(page),
                 None,
+                getattr(client, "plan_id", ""),
             )
         )
     return _merge(pages, requested_window), tuple(audits)
@@ -147,6 +149,7 @@ def fetch_mark_klines(client, symbol, requested_window, server_time, page_limit=
                 page_limit,
                 len(page),
                 None,
+                getattr(client, "plan_id", ""),
             )
         )
     return _merge(pages, requested_window), tuple(audits)
@@ -186,6 +189,7 @@ def fetch_funding_history_backward(client, symbol, start_ms, end_ms, limit=200):
                 limit,
                 len(page),
                 None,
+                getattr(client, "plan_id", ""),
             )
         )
         if not page:
@@ -257,6 +261,7 @@ def fetch_funding_history_chunked(
                 page_limit,
                 len(page),
                 None,
+                getattr(client, "plan_id", ""),
             )
         )
         for row in page:

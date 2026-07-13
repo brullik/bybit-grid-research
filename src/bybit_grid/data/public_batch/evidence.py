@@ -4,8 +4,10 @@ import hashlib
 import json
 import os
 import zipfile
-from dataclasses import asdict, is_dataclass
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 
 from .models import PublicBatchError
@@ -35,6 +37,7 @@ CANONICAL_MEMBERS = (
     "risk_budget_readiness_report.md",
 )
 PLAN_IDS = (
+    "server_time_snapshot",
     "instrument_primary_1000",
     "instrument_alternate_200",
     "trade_primary_1000",
@@ -59,17 +62,33 @@ GUARDRAILS = {
 
 
 def _plain(obj):
+    if obj is None or type(obj) in (str, int, bool):
+        return obj
+    if type(obj) is float:
+        raise PublicBatchError("json_float_forbidden")
     if isinstance(obj, Decimal):
+        if not obj.is_finite():
+            raise PublicBatchError("decimal_non_finite")
         return str(obj)
+    if isinstance(obj, Enum):
+        value = obj.value
+        if value is None or type(value) in (str, int, bool):
+            return value
+        raise PublicBatchError("enum_value_not_json_scalar")
     if is_dataclass(obj):
-        return _plain(asdict(obj))
-    if isinstance(obj, dict):
-        return {str(k): _plain(v) for k, v in obj.items()}
-    if isinstance(obj, (tuple, list)):
+        return {f.name: _plain(getattr(obj, f.name)) for f in fields(obj)}
+    if isinstance(obj, Mapping):
+        out = {}
+        for k in sorted(obj.keys(), key=lambda x: (type(x).__name__, x)):
+            if type(k) not in (str, int, bool):
+                raise PublicBatchError("mapping_key_type_invalid")
+            out[str(k)] = _plain(obj[k])
+        return out
+    if type(obj) in (tuple, list):
         return [_plain(v) for v in obj]
-    if hasattr(obj, "value"):
-        return obj.value
-    return obj
+    if type(obj) in (set, frozenset, bytes, bytearray) or isinstance(obj, Path):
+        raise PublicBatchError("json_type_forbidden")
+    raise PublicBatchError(f"json_type_unknown:{type(obj).__name__}")
 
 
 def canonical_json_bytes(obj) -> bytes:
@@ -126,21 +145,28 @@ def validate_review_pack(zip_path: Path, run_id: str):
         names = zf.namelist()
         if names != list(CANONICAL_MEMBERS) or len(names) != len(set(names)):
             raise PublicBatchError("zip_member_set_invalid")
-        if any(n.startswith("/") or ".." in Path(n).parts for n in names):
+        if any(n.startswith("/") or ".." in Path(n).parts or "\\" in n for n in names):
             raise PublicBatchError("zip_unsafe_path")
         data = {n: zf.read(n) for n in names}
     manifest = strict_json_loads(data["review_pack_manifest.json"].decode())
-    if manifest.get("run_id") != run_id or manifest.get("members") != list(CANONICAL_MEMBERS):
+    exact_keys = {"review_pack_schema_version","manifest_hash_policy","review_phase","run_id","symbol","evidence_schema_version","members","member_sha256", *GUARDRAILS.keys()}
+    if set(manifest) != exact_keys:
+        raise PublicBatchError("manifest_key_set_invalid")
+    if manifest.get("review_pack_schema_version") != REVIEW_PACK_SCHEMA_VERSION or manifest.get("manifest_hash_policy") != "self_excluded_v1" or manifest.get("review_phase") != REVIEW_PHASE or manifest.get("evidence_schema_version") != EVIDENCE_SCHEMA_VERSION or manifest.get("run_id") != run_id or manifest.get("members") != list(CANONICAL_MEMBERS):
         raise PublicBatchError("manifest_semantic_mismatch")
+    if canonical_json_bytes(manifest) != data["review_pack_manifest.json"]:
+        raise PublicBatchError("noncanonical_json_bytes")
     hashes = manifest.get("member_sha256")
     if type(hashes) is not dict or set(hashes) != set(CANONICAL_MEMBERS) - {"review_pack_manifest.json"}:
         raise PublicBatchError("manifest_hash_set_invalid")
     for name, digest in hashes.items():
-        if sha256_bytes(data[name]) != digest:
+        if type(digest) is not str or len(digest) != 64 or digest.lower() != digest or sha256_bytes(data[name]) != digest:
             raise PublicBatchError("zip_member_hash_mismatch")
     for name in CANONICAL_MEMBERS:
         if name.endswith(".json"):
-            strict_json_loads(data[name].decode())
+            obj = strict_json_loads(data[name].decode())
+            if canonical_json_bytes(obj) != data[name]:
+                raise PublicBatchError("noncanonical_json_bytes")
         elif name.endswith(".jsonl"):
             text = data[name].decode()
             if text and not text.endswith("\n"):

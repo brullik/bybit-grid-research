@@ -68,7 +68,7 @@ def assemble_bybit_public_replay_batch_from_rows(
     obs = []
     final_close = requested_window.end_open_time_ms + MINUTE_MS
     for f in funding:
-        if requested_window.start_open_time_ms < f.funding_time_ms < final_close:
+        if requested_window.start_open_time_ms <= f.funding_time_ms < final_close:
             if f.funding_time_ms not in mark_by_time:
                 raise PublicBatchError("funding_boundary_mark_missing")
             obs.append(f.to_observation(mark_by_time[f.funding_time_ms].open))
