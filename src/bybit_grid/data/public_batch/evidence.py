@@ -39,6 +39,21 @@ CANONICAL_MEMBERS = (
     "risk_budget_readiness_report.md",
 )
 NON_STATUS_ARTIFACT_COUNT = len(CANONICAL_MEMBERS) - 2
+SOURCE_ARTIFACT_MEMBERS = ("recorded_public_responses.jsonl",)
+DERIVED_ARTIFACT_MEMBERS = tuple(
+    name
+    for name in CANONICAL_MEMBERS
+    if name not in {
+        "review_pack_manifest.json",
+        "public_batch_run_status.json",
+        *SOURCE_ARTIFACT_MEMBERS,
+    }
+)
+SOURCE_ARTIFACT_COUNT = len(SOURCE_ARTIFACT_MEMBERS)
+DERIVED_ARTIFACT_COUNT = len(DERIVED_ARTIFACT_MEMBERS)
+assert SOURCE_ARTIFACT_COUNT == 1
+assert DERIVED_ARTIFACT_COUNT == 15
+assert NON_STATUS_ARTIFACT_COUNT == SOURCE_ARTIFACT_COUNT + DERIVED_ARTIFACT_COUNT == 16
 PLAN_IDS = (
     "server_time_snapshot",
     "instrument_primary_1000",
@@ -74,7 +89,11 @@ class DirectoryEvidenceReader:
         self.root = Path(root)
 
     def names(self) -> tuple[str, ...]:
-        return tuple(p.name for p in sorted(self.root.iterdir()) if p.is_file())
+        entries = tuple(sorted(self.root.iterdir(), key=lambda p: p.name))
+        for p in entries:
+            if p.name in (".", "..") or p.is_symlink() or not p.is_file():
+                raise PublicBatchError(f"evidence_non_regular_entry:{p.name}")
+        return tuple(p.name for p in entries)
 
     def read_bytes(self, name: str) -> bytes:
         return (self.root / name).read_bytes()
@@ -100,7 +119,8 @@ class ValidationResult:
     ok: bool
     members: int
     non_status_artifact_count: int
-    rebuilt_artifacts: int
+    source_artifact_count: int
+    rebuilt_derived_artifact_count: int
 
 
 def _plain(obj):
@@ -389,7 +409,7 @@ def validate_persisted_public_batch_evidence(
     for n, b in rebuilt.items():
         if data[n] != b:
             raise PublicBatchError(f"artifact_semantic_mismatch:{n}")
-    return ValidationResult(True, len(names), NON_STATUS_ARTIFACT_COUNT, len(rebuilt))
+    return ValidationResult(True, len(names), NON_STATUS_ARTIFACT_COUNT, SOURCE_ARTIFACT_COUNT, len(rebuilt))
 
 
 def validate_review_pack(zip_path: Path, run_id: str):
@@ -406,7 +426,8 @@ def validate_review_pack(zip_path: Path, run_id: str):
         "ok": r.ok,
         "members": r.members,
         "non_status_artifact_count": r.non_status_artifact_count,
-        "rebuilt_artifacts": r.rebuilt_artifacts,
+        "source_artifact_count": r.source_artifact_count,
+        "rebuilt_derived_artifact_count": r.rebuilt_derived_artifact_count,
     }
 
 
@@ -423,4 +444,5 @@ def build_public_report(summary):
 
 
 def build_risk_report(summary):
-    return "# Risk Budget Readiness Report\n\nClosed guardrails: no credentials, no private API, no live execution, no Telegram, no parameter selection, no profitability claim.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n"
+    guardrail_lines = "".join(f"- {k}: {str(v).lower()}\n" for k, v in GUARDRAILS.items())
+    return "# Risk Budget Readiness Report\n\n" + guardrail_lines + "\nClosed guardrails: no credentials, no private API, no live execution, no Telegram, no parameter selection, no profitability claim.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n"

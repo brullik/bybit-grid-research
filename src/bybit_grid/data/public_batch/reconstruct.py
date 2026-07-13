@@ -11,6 +11,9 @@ from .evidence import (
     PLAN_IDS,
     ALLOWED_BASE_URLS,
     NON_STATUS_ARTIFACT_COUNT,
+    SOURCE_ARTIFACT_COUNT,
+    DERIVED_ARTIFACT_COUNT,
+    DERIVED_ARTIFACT_MEMBERS,
     canonical_json_bytes,
     canonical_jsonl_bytes,
     DirectoryEvidenceReader,
@@ -292,7 +295,47 @@ def build_capture_plan(*, run_id: str, symbol: str, base_url: str, timeout_secon
 
 
 def derive_and_validate_page_invariants(audits):
-    sizes = {pid: _page_sizes(audits, pid) for pid in PLAN_IDS}
+    if type(audits) is not tuple or not all(type(a) is PublicRequestPageAudit for a in audits):
+        raise PublicBatchError("page_audit_type_invalid")
+    by_plan = {pid: [] for pid in PLAN_IDS}
+    for a in audits:
+        if a.plan_id not in by_plan:
+            raise PublicBatchError(f"page_audit_unknown_plan:{a.plan_id}")
+        if type(a.row_count) is not int or a.row_count < 0 or a.row_count > a.limit:
+            raise PublicBatchError(f"page_audit_row_count_invalid:{a.plan_id}")
+        by_plan[a.plan_id].append(a)
+    expected_meta = {p["plan_id"]: p for p in build_capture_plan(run_id="bybit_public_batch_063b_btcusdt_v1", symbol="BTCUSDT", base_url="https://api.bybit.com", timeout_seconds=30)["plans"]}
+    for pid, rows in by_plan.items():
+        if not rows:
+            raise PublicBatchError(f"page_audit_missing:{pid}")
+        meta = expected_meta[pid]
+        for a in rows:
+            if a.endpoint != meta["endpoint"] or a.limit != meta["page_limit"]:
+                raise PublicBatchError(f"page_audit_plan_mismatch:{pid}")
+            fixed = meta["fixed_params"]
+            if fixed.get("category", a.category) != a.category or fixed.get("symbol", a.symbol) != a.symbol:
+                raise PublicBatchError(f"page_audit_fixed_param_mismatch:{pid}")
+    if len(by_plan["server_time_snapshot"]) != 1:
+        raise PublicBatchError("server_time_audit_count_invalid")
+    for pid in ("instrument_primary_1000", "instrument_alternate_200"):
+        expected = None
+        for a in by_plan[pid]:
+            if a.cursor != expected:
+                raise PublicBatchError(f"instrument_cursor_chain_invalid:{pid}")
+            expected = a.next_cursor
+        if expected is not None:
+            raise PublicBatchError(f"instrument_cursor_chain_unclosed:{pid}")
+    prev_end = None
+    for a in by_plan["funding_primary_backward_200"]:
+        if prev_end is not None and a.end_ms is not None and a.end_ms >= prev_end:
+            raise PublicBatchError("funding_backward_progression_invalid")
+        prev_end = a.end_ms
+    prev_chunk_end = None
+    for a in by_plan["funding_alternate_chunked_100"]:
+        if prev_chunk_end is not None and a.start_ms != prev_chunk_end + 1:
+            raise PublicBatchError("funding_chunk_progression_invalid")
+        prev_chunk_end = a.end_ms
+    sizes = {pid: [a.row_count for a in rows] for pid, rows in by_plan.items()}
     expected_exact = {
         "server_time_snapshot": [1],
         "trade_primary_1000": [1000, 1],
@@ -326,7 +369,7 @@ def derive_and_validate_page_invariants(audits):
         "server_time_snapshot_response_count": len(sizes["server_time_snapshot"]),
     }
 
-def artifact_bytes(
+def _build_core_derived_artifacts(
     e, *, run_id, symbol="BTCUSDT", base_url="https://api.bybit.com", timeout_seconds=30
 ):
     if base_url not in ALLOWED_BASE_URLS:
@@ -371,26 +414,19 @@ def artifact_bytes(
         "funding_row_count": len(e["funding_rows"]),
         "funding_observation_count": len(e["funding_observations"]),
         "public_batch_audit_ok": e["public_audit"].public_batch_audit_ok,
-        "reproducibility_audit_ok": True,
         **GUARDRAILS,
-    }
-    repro = {
-        "run_id": run_id,
-        "reproducibility_audit_ok": True,
-        "rebuilt_non_status_artifacts_twice_bool": True,
-        "non_status_artifact_count": NON_STATUS_ARTIFACT_COUNT,
     }
     funding_audit = {
         "expected_funding_observation_count": len(expected_obs),
         "actual_funding_observation_count": len(actual_obs),
         "expected_funding_observation_times": list(expected_obs),
         "actual_funding_observation_times": list(actual_obs),
-        "funding_observation_times_equal_bool": True,
+        "funding_observation_times_equal_bool": actual_obs == expected_obs,
     }
     report = (
-        f"# Bybit Public Batch Report\n\n- run_id: {run_id}\n- base_url: {base_url}\n- symbol: {symbol}\n- Bybit server time: {e['server_time'].server_time_ms}\n- last closed cutoff: {e['server_time'].last_closed_open_time_ms}\n- window start/end/count: {e['window'].start_open_time_ms}/{e['window'].end_open_time_ms}/{e['window'].row_count}\n- instrument_primary_page_count: {cross['instrument_primary_page_count']}\n- instrument_alternate_page_count: {cross['instrument_alternate_page_count']}\n- trade_primary_page_sizes: {cross['trade_primary_page_sizes']}\n- trade_alternate_page_sizes: {cross['trade_alternate_page_sizes']}\n- mark_primary_page_sizes: {cross['mark_primary_page_sizes']}\n- mark_alternate_page_sizes: {cross['mark_alternate_page_sizes']}\n- funding_primary_page_count: {cross['funding_primary_page_count']}\n- funding_alternate_chunk_count: {cross['funding_alternate_chunk_count']}\n- server_time_snapshot_response_count: {cross['server_time_snapshot_response_count']}\n- instrument count: {summary['instrument_count']}\n- replay-eligible count: {summary['replay_eligible_count']}\n- trade row count: {summary['trade_row_count']}\n- mark row count: {summary['mark_row_count']}\n- funding row count: {summary['funding_row_count']}\n- funding observation count: {summary['funding_observation_count']}\n- instrument_primary_alternate_equal_bool: true\n- trade_primary_alternate_equal_bool: true\n- mark_primary_alternate_equal_bool: true\n- funding_primary_alternate_equal_bool: true\n- public batch audit result: {str(summary['public_batch_audit_ok']).lower()}\n- reproducibility audit result: true\n- contains_credentials=false\n"
+        f"# Bybit Public Batch Report\n\n- run_id: {run_id}\n- base_url: {base_url}\n- symbol: {symbol}\n- Bybit server time: {e['server_time'].server_time_ms}\n- last closed cutoff: {e['server_time'].last_closed_open_time_ms}\n- window start/end/count: {e['window'].start_open_time_ms}/{e['window'].end_open_time_ms}/{e['window'].row_count}\n- instrument_primary_page_count: {cross['instrument_primary_page_count']}\n- instrument_alternate_page_count: {cross['instrument_alternate_page_count']}\n- trade_primary_page_sizes: {cross['trade_primary_page_sizes']}\n- trade_alternate_page_sizes: {cross['trade_alternate_page_sizes']}\n- mark_primary_page_sizes: {cross['mark_primary_page_sizes']}\n- mark_alternate_page_sizes: {cross['mark_alternate_page_sizes']}\n- funding_primary_page_count: {cross['funding_primary_page_count']}\n- funding_alternate_chunk_count: {cross['funding_alternate_chunk_count']}\n- server_time_snapshot_response_count: {cross['server_time_snapshot_response_count']}\n- instrument count: {summary['instrument_count']}\n- replay-eligible count: {summary['replay_eligible_count']}\n- trade row count: {summary['trade_row_count']}\n- mark row count: {summary['mark_row_count']}\n- funding row count: {summary['funding_row_count']}\n- funding observation count: {summary['funding_observation_count']}\n- instrument_primary_alternate_equal_bool: {str(eq["instrument_primary_alternate_equal_bool"]).lower()}\n- trade_primary_alternate_equal_bool: {str(eq["trade_primary_alternate_equal_bool"]).lower()}\n- mark_primary_alternate_equal_bool: {str(eq["mark_primary_alternate_equal_bool"]).lower()}\n- funding_primary_alternate_equal_bool: {str(eq["funding_primary_alternate_equal_bool"]).lower()}\n- funding_observation_times_equal_bool: {str(funding_audit["funding_observation_times_equal_bool"]).lower()}\n- public batch audit result: {str(summary['public_batch_audit_ok']).lower()}\n- contains_credentials=false\n"
     ).encode()
-    risk = b"# Risk Budget Readiness Report\n\nFrozen guardrails: public Bybit GET /v5/market/* only; no API keys; no private/account/order/grid/position/wallet endpoints; no live execution; no Telegram; no parameter selection; no profitability or live-readiness claims; funding_coverage_proven_bool=false.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n"
+    risk = ("# Risk Budget Readiness Report\n\n" + "".join(f"- {k}: {str(v).lower()}\n" for k, v in GUARDRAILS.items()) + "\nFrozen guardrails: public Bybit GET /v5/market/* only; no API keys; no private/account/order/grid/position/wallet endpoints; no live execution; no Telegram; no parameter selection; no profitability or live-readiness claims; funding_coverage_proven_bool=false.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n").encode()
     return {
         "capture_plan.json": canonical_json_bytes(
             build_capture_plan(run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
@@ -413,7 +449,6 @@ def artifact_bytes(
         "request_page_audits.jsonl": canonical_jsonl_bytes(e["request_audits"]),
         "public_batch_audit.json": canonical_json_bytes(e["public_audit"]),
         "cross_plan_reconciliation_audit.json": canonical_json_bytes({**cross, **funding_audit}),
-        "reproducibility_audit.json": canonical_json_bytes(repro),
         "capture_summary.json": canonical_json_bytes(summary),
         "public_batch_report.md": report,
         "risk_budget_readiness_report.md": risk,
@@ -424,4 +459,26 @@ def validate_run_directory(run_dir: Path, run_id: str):
     result = validate_persisted_public_batch_evidence(
         DirectoryEvidenceReader(run_dir), expected_run_id=run_id, require_complete_status=False
     )
-    return {"ok": result.ok, "rebuilt_artifacts": result.rebuilt_artifacts}
+    return {"ok": result.ok, "rebuilt_derived_artifact_count": result.rebuilt_derived_artifact_count}
+
+
+def artifact_bytes(e, *, run_id, symbol="BTCUSDT", base_url="https://api.bybit.com", timeout_seconds=30):
+    core1 = _build_core_derived_artifacts(e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
+    core2 = _build_core_derived_artifacts(e, run_id=run_id, symbol=symbol, base_url=base_url, timeout_seconds=timeout_seconds)
+    if core1.keys() != set(DERIVED_ARTIFACT_MEMBERS) - {"reproducibility_audit.json"}:
+        raise PublicBatchError("core_derived_artifact_set_invalid")
+    if core1.keys() != core2.keys() or any(core1[k] != core2[k] for k in core1):
+        raise PublicBatchError("core_derived_artifact_mismatch")
+    repro = canonical_json_bytes({
+        "run_id": run_id,
+        "reproducibility_audit_ok": True,
+        "rebuilt_derived_artifacts_twice_bool": True,
+        "source_artifact_count": SOURCE_ARTIFACT_COUNT,
+        "derived_artifact_count": DERIVED_ARTIFACT_COUNT,
+        "non_status_artifact_count": NON_STATUS_ARTIFACT_COUNT,
+    })
+    final1 = {**core1, "reproducibility_audit.json": repro}
+    final2 = {**core2, "reproducibility_audit.json": repro}
+    if final1.keys() != set(DERIVED_ARTIFACT_MEMBERS) or final1 != final2:
+        raise PublicBatchError("final_derived_artifact_mismatch")
+    return final1
