@@ -15,6 +15,7 @@ from bybit_grid.data.public_batch.evidence import (
     read_json,
     validate_review_pack,
 )
+from bybit_grid.data.public_batch.reconstruct import validate_run_directory
 
 
 def main(argv=None):
@@ -26,6 +27,7 @@ def main(argv=None):
     tmp = None
     try:
         run_dir = Path(args.input_root) / args.run_id
+        validate_run_directory(run_dir, args.run_id)
         status = read_json(run_dir / "public_batch_run_status.json")
         if status.get("status") != "complete":
             raise ValueError("run_not_complete")
@@ -35,20 +37,33 @@ def main(argv=None):
                 member_bytes[name] = (run_dir / name).read_bytes()
         summary = read_json(run_dir / "capture_summary.json")
         manifest = canonical_json_bytes(
-            build_manifest(member_bytes, run_id=args.run_id, symbol=summary.get("symbol", "BTCUSDT"))
+            build_manifest(
+                member_bytes, run_id=args.run_id, symbol=summary.get("symbol", "BTCUSDT")
+            )
         )
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(args.output).with_suffix(Path(args.output).suffix + ".tmp")
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for name in CANONICAL_MEMBERS:
-                zf.writestr(name, manifest if name == "review_pack_manifest.json" else member_bytes[name])
+                zf.writestr(
+                    name, manifest if name == "review_pack_manifest.json" else member_bytes[name]
+                )
         validate_review_pack(tmp, args.run_id)
         os.replace(tmp, args.output)
-        print(json.dumps({"ok": True, "output": args.output}, sort_keys=True, separators=(",", ":")))
+        print(
+            json.dumps({"ok": True, "output": args.output}, sort_keys=True, separators=(",", ":"))
+        )
         return 0
     except Exception as exc:
         if tmp is not None and tmp.exists():
             tmp.unlink()
-        print(json.dumps({"ok": False, "exception_type": type(exc).__name__, "exception_message": str(exc)}, sort_keys=True, separators=(",", ":")))
+        print(
+            json.dumps(
+                {"ok": False, "exception_type": type(exc).__name__, "exception_message": str(exc)},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
         return 1
 
 

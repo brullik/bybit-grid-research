@@ -310,6 +310,7 @@ class PublicRequestPageAudit:
     limit: int
     row_count: int
     next_cursor: str | None
+    plan_id: str = ""
 
 
 @dataclass(frozen=True)
