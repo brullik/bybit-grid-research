@@ -370,6 +370,29 @@ def validate_persisted_public_batch_evidence(
         if p["order_index"] != i:
             raise PublicBatchError("plan_order_index_invalid")
     summary = objs["capture_summary.json"]
+
+    repro = objs["reproducibility_audit.json"]
+    _expect_keys(
+        repro,
+        {
+            "run_id",
+            "reproducibility_audit_ok",
+            "rebuilt_derived_artifacts_twice_bool",
+            "source_artifact_count",
+            "derived_artifact_count",
+            "non_status_artifact_count",
+        },
+        "reproducibility_audit",
+    )
+    if (
+        repro["run_id"] != expected_run_id
+        or repro["reproducibility_audit_ok"] is not True
+        or repro["rebuilt_derived_artifacts_twice_bool"] is not True
+        or repro["source_artifact_count"] != SOURCE_ARTIFACT_COUNT
+        or repro["derived_artifact_count"] != DERIVED_ARTIFACT_COUNT
+        or repro["non_status_artifact_count"] != NON_STATUS_ARTIFACT_COUNT
+    ):
+        raise PublicBatchError("reproducibility_audit_values_invalid")
     for k, v in GUARDRAILS.items():
         if summary.get(k) is not v:
             raise PublicBatchError("summary_guardrail_mismatch")
@@ -380,6 +403,12 @@ def validate_persisted_public_batch_evidence(
         or summary.get("funding_lookback_days") != 100
         or summary.get("base_url") != plan["base_url"]
         or summary.get("timeout_seconds") != plan["timeout_seconds"]
+        or summary.get("source_artifact_count") != SOURCE_ARTIFACT_COUNT
+        or summary.get("derived_artifact_count") != DERIVED_ARTIFACT_COUNT
+        or summary.get("non_status_artifact_count") != NON_STATUS_ARTIFACT_COUNT
+        or summary.get("reproducibility_audit_ok") is not True
+        or summary.get("rebuilt_derived_artifacts_twice_bool") is not True
+        or "rebuilt_non_status_artifacts_twice_bool" in summary
     ):
         raise PublicBatchError("summary_values_invalid")
     from .reconstruct import artifact_bytes, records_from_jsonl, reconstruct_from_records
@@ -432,17 +461,10 @@ def validate_review_pack(zip_path: Path, run_id: str):
 
 
 def build_public_report(summary):
-    return (
-        "# Bybit Public Batch Report\n\n"
-        + "".join(
-            f"- {k}: {str(v).lower() if type(v) is bool else v}\n"
-            for k, v in summary.items()
-            if k not in GUARDRAILS
-        )
-        + "- contains_credentials=false\n"
-    )
+    raise PublicBatchError("public_report_requires_reconstructed_models")
 
 
-def build_risk_report(summary):
-    guardrail_lines = "".join(f"- {k}: {str(v).lower()}\n" for k, v in GUARDRAILS.items())
-    return "# Risk Budget Readiness Report\n\n" + guardrail_lines + "\nClosed guardrails: no credentials, no private API, no live execution, no Telegram, no parameter selection, no profitability claim.\n\nThis pack does not prove profitability, parameter suitability, native grid equivalence, native quantity mapping, liquidation behavior, funding-history completeness, 5 USDT maximum-loss budget, or live readiness.\n"
+def build_risk_report(summary=None):
+    from .reconstruct import build_risk_budget_readiness_report
+
+    return build_risk_budget_readiness_report().decode("utf-8")
