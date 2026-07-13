@@ -34,3 +34,48 @@ Funding observations join a funding timestamp to the mark-price one-minute candl
 * no profitability claim
 * no live readiness
 * Public Bybit GET endpoints only; no private endpoints, credentials, native grid calls, orders, positions, wallets, accounts, Telegram code, Parquet, ZIP, database, JSONL, or generated reports are committed by this contract.
+
+## Sprint 06.3B persisted public-batch evidence contract
+
+Sprint 06.3B persists public-only Bybit market responses as reproducible evidence rather
+than owner-local logs. The canonical owner capture uses one Bybit server-time snapshot to
+set a closed one-minute candle window of exactly 1001 rows for `BTCUSDT`: the end open
+minute is `server_time.last_closed_open_time_ms` and the start open minute is 1000 minutes
+earlier.
+
+### Retrieval plans
+
+- Instrument universe is captured through a primary `/v5/market/instruments-info` plan
+  with `limit=1000` and an alternate cursor-pagination plan with `limit=200`.
+- Trade klines are captured for the same closed 1001-row window through primary
+  `limit=1000` pages and alternate `limit=251` pages.
+- Mark-price klines use the same primary and alternate page sizes as trade klines.
+- Funding history covers the preceding 100 days for `BTCUSDT` through primary backward
+  pagination with `limit=200` and an alternate deterministic chunk plan derived from the
+  parsed instrument `fundingInterval` with a target of 100 records per window.
+
+### Raw response provenance and canonical persistence
+
+Every public response is recorded with a monotonically increasing request sequence,
+public `/v5/market/` endpoint, deterministically sorted parameters, HTTP status,
+content type, exact UTF-8 JSON body text, SHA-256 of that body, and a strict JSON object
+payload. Strict parsing rejects duplicate object keys, float tokens, and non-finite JSON
+constants. Canonical persisted JSON uses sorted keys and compact separators; canonical
+JSONL has one strict JSON object per line and a final newline. Decimal values are emitted
+as strings.
+
+### Cross-plan equality
+
+Primary/alternate equality proves only that the two retrieval plans normalized to the
+same records for the accepted recorded window. It does not prove that Bybit supplied all
+multi-year historical funding records, does not prove strategy profitability, does not
+prove native grid equivalence, and does not authorize parameter selection or live trading.
+`funding_coverage_proven_bool` therefore remains `false`.
+
+### Safety guardrails
+
+The persisted evidence contract keeps these guardrails closed: no credentials, no
+private API, no live execution, no native grid operations, no Telegram, no parameter
+optimization, no PnL/EV/ROI/profitability claim, and no Parquet evidence output in this
+sprint. It is sufficient only for the next engineering stage: Parquet storage, resume,
+and gap-repair design.
