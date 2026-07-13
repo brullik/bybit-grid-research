@@ -77,7 +77,13 @@ def _freeze(v):
     if isinstance(v, MappingProxyType):
         return v
     if type(v) is dict:
-        return MappingProxyType({str(k): _freeze(vv) for k, vv in sorted(v.items())})
+
+        out = {}
+        for k, vv in sorted(v.items()):
+            if type(k) is not str or not k:
+                raise PublicBatchError("mapping_key_type_invalid")
+            out[k] = _freeze(vv)
+        return MappingProxyType(out)
     if type(v) is list or type(v) is tuple:
         return tuple(_freeze(x) for x in v)
     return v
@@ -113,11 +119,15 @@ class RecordedPublicResponse:
     raw_body_sha256: str
     parsed_payload: dict
     plan_id: str = "server_time_snapshot"
+    base_url: str = "https://api.bybit.com"
 
     def __post_init__(self):
         if type(self.request_sequence_id) is not int or self.request_sequence_id < 1:
             raise PublicBatchError("request_sequence_id_invalid")
         _validate_plan_id(self.plan_id)
+        if type(self.base_url) is not str or self.base_url.rstrip("/") not in {"https://api.bybit.com", "https://api.bytick.com"}:
+            raise PublicBatchError("base_url_not_approved")
+        object.__setattr__(self, "base_url", self.base_url.rstrip("/"))
         _validate_public(self.endpoint, self.params)
         if type(self.http_status) is not int:
             raise PublicBatchError("http_status_not_int")
@@ -143,6 +153,7 @@ class RecordingPublicClient:
         max_attempts=3,
         backoff_seconds=Decimal("0.25"),
         opener=None,
+        timeout_seconds=30,
     ):
         if type(base_url) is not str or base_url.rstrip("/") not in {
             "https://api.bybit.com",
@@ -161,6 +172,9 @@ class RecordingPublicClient:
             raise PublicBatchError("backoff_seconds_invalid")
         self.base_url = base_url.rstrip("/")
         self.max_attempts = max_attempts
+        if type(timeout_seconds) is not int or not (1 <= timeout_seconds <= 120):
+            raise PublicBatchError("timeout_seconds_invalid")
+        self.timeout_seconds = timeout_seconds
         self.backoff_seconds = backoff_seconds
         self._opener = opener
         self.records = []
@@ -184,7 +198,7 @@ class RecordingPublicClient:
                     raise PublicBatchError("forbidden_header")
             res = None
             try:
-                res = (self._opener or urlopen)(req, timeout=10)
+                res = (self._opener or urlopen)(req, timeout=self.timeout_seconds)
                 status = int(getattr(res, "status", res.getcode()))
                 ctype = str(res.headers.get("content-type", ""))
                 body = res.read().decode("utf-8")
@@ -192,10 +206,12 @@ class RecordingPublicClient:
                 status = int(e.code)
                 ctype = str(e.headers.get("content-type", ""))
                 body = e.read().decode("utf-8")
+                if hasattr(e, "close"):
+                    e.close()
             except UnicodeDecodeError as e:
                 raise PublicBatchError("response_utf8_invalid") from e
             except (URLError, TimeoutError, OSError) as e:
-                raise PublicBatchError(f"transport_error:{type(e).__name__}") from e
+                raise PublicBatchError(f"transport_error:{type(e).__name__}:plan_id={plan_id}:endpoint={endpoint}:attempt={attempt}") from e
             finally:
                 if res is not None and hasattr(res, "close"):
                     res.close()
@@ -217,6 +233,7 @@ class RecordingPublicClient:
             hashlib.sha256(body.encode("utf-8")).hexdigest(),
             payload,
             plan_id,
+            self.base_url,
         )
         self.records.append(rec)
         return payload
