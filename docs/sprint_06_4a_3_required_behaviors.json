@@ -1,0 +1,371 @@
+{
+  "behaviors": [
+    {
+      "behavior_id": "GOV-EXACT-ID-SET",
+      "expected": "stable fail-closed result for GOV-EXACT-ID-SET",
+      "material": "production CLI/store semantic regression for GOV-EXACT-ID-SET",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[GOV-EXACT-ID-SET]"
+    },
+    {
+      "behavior_id": "GOV-MISSING-NODE",
+      "expected": "stable fail-closed result for GOV-MISSING-NODE",
+      "material": "production CLI/store semantic regression for GOV-MISSING-NODE",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[GOV-MISSING-NODE]"
+    },
+    {
+      "behavior_id": "GOV-NOOP-REJECTED",
+      "expected": "stable fail-closed result for GOV-NOOP-REJECTED",
+      "material": "production CLI/store semantic regression for GOV-NOOP-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[GOV-NOOP-REJECTED]"
+    },
+    {
+      "behavior_id": "CLI-HELP-ALL",
+      "expected": "stable fail-closed result for CLI-HELP-ALL",
+      "material": "production CLI/store semantic regression for CLI-HELP-ALL",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CLI-HELP-ALL]"
+    },
+    {
+      "behavior_id": "CLI-MISSING-ARGS-ALL",
+      "expected": "stable fail-closed result for CLI-MISSING-ARGS-ALL",
+      "material": "production CLI/store semantic regression for CLI-MISSING-ARGS-ALL",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CLI-MISSING-ARGS-ALL]"
+    },
+    {
+      "behavior_id": "DECIMAL-MAX-BOUNDARY",
+      "expected": "stable fail-closed result for DECIMAL-MAX-BOUNDARY",
+      "material": "production CLI/store semantic regression for DECIMAL-MAX-BOUNDARY",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DECIMAL-MAX-BOUNDARY]"
+    },
+    {
+      "behavior_id": "DECIMAL-MIN-BOUNDARY",
+      "expected": "stable fail-closed result for DECIMAL-MIN-BOUNDARY",
+      "material": "production CLI/store semantic regression for DECIMAL-MIN-BOUNDARY",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DECIMAL-MIN-BOUNDARY]"
+    },
+    {
+      "behavior_id": "DECIMAL-ROUNDING-REJECTED",
+      "expected": "stable fail-closed result for DECIMAL-ROUNDING-REJECTED",
+      "material": "production CLI/store semantic regression for DECIMAL-ROUNDING-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DECIMAL-ROUNDING-REJECTED]"
+    },
+    {
+      "behavior_id": "PLAN-INSTRUMENT-SNAPSHOT",
+      "expected": "stable fail-closed result for PLAN-INSTRUMENT-SNAPSHOT",
+      "material": "production CLI/store semantic regression for PLAN-INSTRUMENT-SNAPSHOT",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PLAN-INSTRUMENT-SNAPSHOT]"
+    },
+    {
+      "behavior_id": "PLAN-KLINE-CROSS-MONTH",
+      "expected": "stable fail-closed result for PLAN-KLINE-CROSS-MONTH",
+      "material": "production CLI/store semantic regression for PLAN-KLINE-CROSS-MONTH",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PLAN-KLINE-CROSS-MONTH]"
+    },
+    {
+      "behavior_id": "PLAN-FUNDING-FOUR-MONTHS",
+      "expected": "stable fail-closed result for PLAN-FUNDING-FOUR-MONTHS",
+      "material": "production CLI/store semantic regression for PLAN-FUNDING-FOUR-MONTHS",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PLAN-FUNDING-FOUR-MONTHS]"
+    },
+    {
+      "behavior_id": "PLAN-MULTI-SYMBOL-REJECTED",
+      "expected": "stable fail-closed result for PLAN-MULTI-SYMBOL-REJECTED",
+      "material": "production CLI/store semantic regression for PLAN-MULTI-SYMBOL-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PLAN-MULTI-SYMBOL-REJECTED]"
+    },
+    {
+      "behavior_id": "PREFLIGHT-INVALID-ROW-ZERO-WRITES",
+      "expected": "stable fail-closed result for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
+      "material": "production CLI/store semantic regression for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PREFLIGHT-INVALID-ROW-ZERO-WRITES]"
+    },
+    {
+      "behavior_id": "PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
+      "expected": "stable fail-closed result for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
+      "material": "production CLI/store semantic regression for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES]"
+    },
+    {
+      "behavior_id": "PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
+      "expected": "stable fail-closed result for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
+      "material": "production CLI/store semantic regression for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES]"
+    },
+    {
+      "behavior_id": "CHUNK-EARLY-CLEANUP",
+      "expected": "stable fail-closed result for CHUNK-EARLY-CLEANUP",
+      "material": "production CLI/store semantic regression for CHUNK-EARLY-CLEANUP",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-EARLY-CLEANUP]"
+    },
+    {
+      "behavior_id": "CHUNK-MID-CLEANUP",
+      "expected": "stable fail-closed result for CHUNK-MID-CLEANUP",
+      "material": "production CLI/store semantic regression for CHUNK-MID-CLEANUP",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-MID-CLEANUP]"
+    },
+    {
+      "behavior_id": "CHUNK-LATE-CLEANUP",
+      "expected": "stable fail-closed result for CHUNK-LATE-CLEANUP",
+      "material": "production CLI/store semantic regression for CHUNK-LATE-CLEANUP",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-LATE-CLEANUP]"
+    },
+    {
+      "behavior_id": "CHUNK-CANONICAL-MANIFEST",
+      "expected": "stable fail-closed result for CHUNK-CANONICAL-MANIFEST",
+      "material": "production CLI/store semantic regression for CHUNK-CANONICAL-MANIFEST",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-CANONICAL-MANIFEST]"
+    },
+    {
+      "behavior_id": "CHUNK-ACTUAL-PATH-MATCH",
+      "expected": "stable fail-closed result for CHUNK-ACTUAL-PATH-MATCH",
+      "material": "production CLI/store semantic regression for CHUNK-ACTUAL-PATH-MATCH",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-ACTUAL-PATH-MATCH]"
+    },
+    {
+      "behavior_id": "CHUNK-PK-SCHEMA-MATCH",
+      "expected": "stable fail-closed result for CHUNK-PK-SCHEMA-MATCH",
+      "material": "production CLI/store semantic regression for CHUNK-PK-SCHEMA-MATCH",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-PK-SCHEMA-MATCH]"
+    },
+    {
+      "behavior_id": "CHUNK-EXISTING-CORRUPTION-REJECTED",
+      "expected": "stable fail-closed result for CHUNK-EXISTING-CORRUPTION-REJECTED",
+      "material": "production CLI/store semantic regression for CHUNK-EXISTING-CORRUPTION-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-EXISTING-CORRUPTION-REJECTED]"
+    },
+    {
+      "behavior_id": "IMPORT-SYNTHETIC-REAL-SHAPE",
+      "expected": "stable fail-closed result for IMPORT-SYNTHETIC-REAL-SHAPE",
+      "material": "production CLI/store semantic regression for IMPORT-SYNTHETIC-REAL-SHAPE",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-SYNTHETIC-REAL-SHAPE]"
+    },
+    {
+      "behavior_id": "IMPORT-SOURCE-BYTES-IMMUTABLE",
+      "expected": "stable fail-closed result for IMPORT-SOURCE-BYTES-IMMUTABLE",
+      "material": "production CLI/store semantic regression for IMPORT-SOURCE-BYTES-IMMUTABLE",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-SOURCE-BYTES-IMMUTABLE]"
+    },
+    {
+      "behavior_id": "IMPORT-RECEIPT-LAST",
+      "expected": "stable fail-closed result for IMPORT-RECEIPT-LAST",
+      "material": "production CLI/store semantic regression for IMPORT-RECEIPT-LAST",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-RECEIPT-LAST]"
+    },
+    {
+      "behavior_id": "IMPORT-NOOP-TYPED",
+      "expected": "stable fail-closed result for IMPORT-NOOP-TYPED",
+      "material": "production CLI/store semantic regression for IMPORT-NOOP-TYPED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-NOOP-TYPED]"
+    },
+    {
+      "behavior_id": "IMPORT-NOOP-ZERO-MUTATION",
+      "expected": "stable fail-closed result for IMPORT-NOOP-ZERO-MUTATION",
+      "material": "production CLI/store semantic regression for IMPORT-NOOP-ZERO-MUTATION",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-NOOP-ZERO-MUTATION]"
+    },
+    {
+      "behavior_id": "IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
+      "expected": "stable fail-closed result for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
+      "material": "production CLI/store semantic regression for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-NOOP-CORRUPT-CHUNK-REJECTED]"
+    },
+    {
+      "behavior_id": "IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
+      "expected": "stable fail-closed result for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
+      "material": "production CLI/store semantic regression for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-EMPTY-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-EMPTY-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-EMPTY-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-EMPTY-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-VERSION-TAMPER-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-VERSION-TAMPER-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-VERSION-TAMPER-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-VERSION-TAMPER-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-ORPHAN-CHUNK-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-ORPHAN-CHUNK-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-ORPHAN-CHUNK-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-ORPHAN-CHUNK-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-ORPHAN-EVIDENCE-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-ORPHAN-EVIDENCE-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-ORPHAN-EVIDENCE-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-ORPHAN-EVIDENCE-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-RECEIPT-TAMPER-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-RECEIPT-TAMPER-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-RECEIPT-TAMPER-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-RECEIPT-TAMPER-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-GLOBAL-DUPLICATE-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-GLOBAL-DUPLICATE-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-GLOBAL-DUPLICATE-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-GLOBAL-DUPLICATE-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-GLOBAL-CONFLICT-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-GLOBAL-CONFLICT-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-GLOBAL-CONFLICT-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-GLOBAL-CONFLICT-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-UNEXPECTED-ENTRY-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-UNEXPECTED-ENTRY-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-UNEXPECTED-ENTRY-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-UNEXPECTED-ENTRY-REJECTED]"
+    },
+    {
+      "behavior_id": "AUDIT-STALE-STAGING-REJECTED",
+      "expected": "stable fail-closed result for AUDIT-STALE-STAGING-REJECTED",
+      "material": "production CLI/store semantic regression for AUDIT-STALE-STAGING-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-STALE-STAGING-REJECTED]"
+    },
+    {
+      "behavior_id": "REPLAY-SNAPSHOT-REQUIRED",
+      "expected": "stable fail-closed result for REPLAY-SNAPSHOT-REQUIRED",
+      "material": "production CLI/store semantic regression for REPLAY-SNAPSHOT-REQUIRED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-SNAPSHOT-REQUIRED]"
+    },
+    {
+      "behavior_id": "REPLAY-SNAPSHOT-ROW-RETURNED",
+      "expected": "stable fail-closed result for REPLAY-SNAPSHOT-ROW-RETURNED",
+      "material": "production CLI/store semantic regression for REPLAY-SNAPSHOT-ROW-RETURNED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-SNAPSHOT-ROW-RETURNED]"
+    },
+    {
+      "behavior_id": "REPLAY-COMPLETE-TRADE-MARK",
+      "expected": "stable fail-closed result for REPLAY-COMPLETE-TRADE-MARK",
+      "material": "production CLI/store semantic regression for REPLAY-COMPLETE-TRADE-MARK",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-COMPLETE-TRADE-MARK]"
+    },
+    {
+      "behavior_id": "REPLAY-FUNDING-MARK-JOIN",
+      "expected": "stable fail-closed result for REPLAY-FUNDING-MARK-JOIN",
+      "material": "production CLI/store semantic regression for REPLAY-FUNDING-MARK-JOIN",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-FUNDING-MARK-JOIN]"
+    },
+    {
+      "behavior_id": "REPLAY-MISSING-MARK-JOIN-REJECTED",
+      "expected": "stable fail-closed result for REPLAY-MISSING-MARK-JOIN-REJECTED",
+      "material": "production CLI/store semantic regression for REPLAY-MISSING-MARK-JOIN-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-MISSING-MARK-JOIN-REJECTED]"
+    },
+    {
+      "behavior_id": "COVERAGE-STRICT-INPUTS",
+      "expected": "stable fail-closed result for COVERAGE-STRICT-INPUTS",
+      "material": "production CLI/store semantic regression for COVERAGE-STRICT-INPUTS",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[COVERAGE-STRICT-INPUTS]"
+    },
+    {
+      "behavior_id": "COVERAGE-OUT-OF-WINDOW-REJECTED",
+      "expected": "stable fail-closed result for COVERAGE-OUT-OF-WINDOW-REJECTED",
+      "material": "production CLI/store semantic regression for COVERAGE-OUT-OF-WINDOW-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[COVERAGE-OUT-OF-WINDOW-REJECTED]"
+    },
+    {
+      "behavior_id": "COVERAGE-GAP-WINDOWS",
+      "expected": "stable fail-closed result for COVERAGE-GAP-WINDOWS",
+      "material": "production CLI/store semantic regression for COVERAGE-GAP-WINDOWS",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[COVERAGE-GAP-WINDOWS]"
+    },
+    {
+      "behavior_id": "RESUME-INCLUSIVE-1000",
+      "expected": "stable fail-closed result for RESUME-INCLUSIVE-1000",
+      "material": "production CLI/store semantic regression for RESUME-INCLUSIVE-1000",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[RESUME-INCLUSIVE-1000]"
+    },
+    {
+      "behavior_id": "RESUME-MONTH-YEAR-LEAP",
+      "expected": "stable fail-closed result for RESUME-MONTH-YEAR-LEAP",
+      "material": "production CLI/store semantic regression for RESUME-MONTH-YEAR-LEAP",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[RESUME-MONTH-YEAR-LEAP]"
+    },
+    {
+      "behavior_id": "FUNDING-STRICT-TIMESTAMPS",
+      "expected": "stable fail-closed result for FUNDING-STRICT-TIMESTAMPS",
+      "material": "production CLI/store semantic regression for FUNDING-STRICT-TIMESTAMPS",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[FUNDING-STRICT-TIMESTAMPS]"
+    },
+    {
+      "behavior_id": "DUCKDB-FOUR-VIEWS",
+      "expected": "stable fail-closed result for DUCKDB-FOUR-VIEWS",
+      "material": "production CLI/store semantic regression for DUCKDB-FOUR-VIEWS",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DUCKDB-FOUR-VIEWS]"
+    },
+    {
+      "behavior_id": "DUCKDB-DECIMAL-TYPES",
+      "expected": "stable fail-closed result for DUCKDB-DECIMAL-TYPES",
+      "material": "production CLI/store semantic regression for DUCKDB-DECIMAL-TYPES",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DUCKDB-DECIMAL-TYPES]"
+    },
+    {
+      "behavior_id": "DUCKDB-CONNECTION-CLOSED",
+      "expected": "stable fail-closed result for DUCKDB-CONNECTION-CLOSED",
+      "material": "production CLI/store semantic regression for DUCKDB-CONNECTION-CLOSED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DUCKDB-CONNECTION-CLOSED]"
+    },
+    {
+      "behavior_id": "PACK-BUILDER-BAD-STORE-REJECTED",
+      "expected": "stable fail-closed result for PACK-BUILDER-BAD-STORE-REJECTED",
+      "material": "production CLI/store semantic regression for PACK-BUILDER-BAD-STORE-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-BUILDER-BAD-STORE-REJECTED]"
+    },
+    {
+      "behavior_id": "PACK-EXACT-MEMBER-SET",
+      "expected": "stable fail-closed result for PACK-EXACT-MEMBER-SET",
+      "material": "production CLI/store semantic regression for PACK-EXACT-MEMBER-SET",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-EXACT-MEMBER-SET]"
+    },
+    {
+      "behavior_id": "PACK-EMPTY-MANIFEST-REJECTED",
+      "expected": "stable fail-closed result for PACK-EMPTY-MANIFEST-REJECTED",
+      "material": "production CLI/store semantic regression for PACK-EMPTY-MANIFEST-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-EMPTY-MANIFEST-REJECTED]"
+    },
+    {
+      "behavior_id": "PACK-REHASHED-FAKE-REJECTED",
+      "expected": "stable fail-closed result for PACK-REHASHED-FAKE-REJECTED",
+      "material": "production CLI/store semantic regression for PACK-REHASHED-FAKE-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-REHASHED-FAKE-REJECTED]"
+    },
+    {
+      "behavior_id": "PACK-NESTED-EVIDENCE-VALIDATED",
+      "expected": "stable fail-closed result for PACK-NESTED-EVIDENCE-VALIDATED",
+      "material": "production CLI/store semantic regression for PACK-NESTED-EVIDENCE-VALIDATED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-NESTED-EVIDENCE-VALIDATED]"
+    },
+    {
+      "behavior_id": "PACK-REPORT-TAMPER-REJECTED",
+      "expected": "stable fail-closed result for PACK-REPORT-TAMPER-REJECTED",
+      "material": "production CLI/store semantic regression for PACK-REPORT-TAMPER-REJECTED",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-REPORT-TAMPER-REJECTED]"
+    },
+    {
+      "behavior_id": "PACK-TEMP-CLEANUP",
+      "expected": "stable fail-closed result for PACK-TEMP-CLEANUP",
+      "material": "production CLI/store semantic regression for PACK-TEMP-CLEANUP",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-TEMP-CLEANUP]"
+    },
+    {
+      "behavior_id": "CLI-FULL-LIFECYCLE-BYBIT-HOST",
+      "expected": "stable fail-closed result for CLI-FULL-LIFECYCLE-BYBIT-HOST",
+      "material": "production CLI/store semantic regression for CLI-FULL-LIFECYCLE-BYBIT-HOST",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CLI-FULL-LIFECYCLE-BYBIT-HOST]"
+    },
+    {
+      "behavior_id": "CLI-FULL-LIFECYCLE-BYTICK-HOST",
+      "expected": "stable fail-closed result for CLI-FULL-LIFECYCLE-BYTICK-HOST",
+      "material": "production CLI/store semantic regression for CLI-FULL-LIFECYCLE-BYTICK-HOST",
+      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CLI-FULL-LIFECYCLE-BYTICK-HOST]"
+    }
+  ],
+  "schema": "sprint_06_4a_3_required_behaviors_v1"
+}
