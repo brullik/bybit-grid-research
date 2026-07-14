@@ -101,7 +101,9 @@ def ensure_decimal128_38_18(v):
         raise MarketStoreError("decimal_rounding_required") from e
     if qv != v:
         raise MarketStoreError("decimal_rounding_required")
-    as_int = abs(int(qv.scaleb(18)))
+    with localcontext() as ctx:
+        ctx.prec = 80
+        as_int = abs(int(qv.scaleb(18)))
     if as_int >= 10**38:
         raise MarketStoreError("decimal_precision_overflow")
     return v

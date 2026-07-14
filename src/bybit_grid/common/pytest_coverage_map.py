@@ -105,6 +105,8 @@ def verify_required_behavior_json(path: Path, collected_nodes):
         if bid not in REQUIRED_064A3:
             errors.append(f"{path}:unknown_behavior_id:{bid}")
         node = row["nodeid"]
+        if "test_sprint_06_4a_3_required_behaviors.py" in node:
+            errors.append(f"{path}:governance_only_node:{bid}")
         if node not in collected:
             errors.append(f"{path}:missing_node:{node}")
         text = (row["material"] + " " + row["expected"]).lower()

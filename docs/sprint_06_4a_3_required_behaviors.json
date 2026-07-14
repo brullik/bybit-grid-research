@@ -2,369 +2,369 @@
   "behaviors": [
     {
       "behavior_id": "GOV-EXACT-ID-SET",
-      "expected": "stable fail-closed result for GOV-EXACT-ID-SET",
-      "material": "production CLI/store semantic regression for GOV-EXACT-ID-SET",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[GOV-EXACT-ID-SET]"
+      "expected": "Exact fail-closed or success assertion for GOV-EXACT-ID-SET.",
+      "material": "Production regression invokes market-store or CLI path for GOV-EXACT-ID-SET with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_gov_exact_id_set"
     },
     {
       "behavior_id": "GOV-MISSING-NODE",
-      "expected": "stable fail-closed result for GOV-MISSING-NODE",
-      "material": "production CLI/store semantic regression for GOV-MISSING-NODE",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[GOV-MISSING-NODE]"
+      "expected": "Exact fail-closed or success assertion for GOV-MISSING-NODE.",
+      "material": "Production regression invokes market-store or CLI path for GOV-MISSING-NODE with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_gov_missing_node"
     },
     {
       "behavior_id": "GOV-NOOP-REJECTED",
-      "expected": "stable fail-closed result for GOV-NOOP-REJECTED",
-      "material": "production CLI/store semantic regression for GOV-NOOP-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[GOV-NOOP-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for GOV-NOOP-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for GOV-NOOP-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_gov_noop_rejected"
     },
     {
       "behavior_id": "CLI-HELP-ALL",
-      "expected": "stable fail-closed result for CLI-HELP-ALL",
-      "material": "production CLI/store semantic regression for CLI-HELP-ALL",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CLI-HELP-ALL]"
+      "expected": "Exact fail-closed or success assertion for CLI-HELP-ALL.",
+      "material": "Production regression invokes market-store or CLI path for CLI-HELP-ALL with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_cli_help_all"
     },
     {
       "behavior_id": "CLI-MISSING-ARGS-ALL",
-      "expected": "stable fail-closed result for CLI-MISSING-ARGS-ALL",
-      "material": "production CLI/store semantic regression for CLI-MISSING-ARGS-ALL",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CLI-MISSING-ARGS-ALL]"
+      "expected": "Exact fail-closed or success assertion for CLI-MISSING-ARGS-ALL.",
+      "material": "Production regression invokes market-store or CLI path for CLI-MISSING-ARGS-ALL with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_cli_missing_args_all"
     },
     {
       "behavior_id": "DECIMAL-MAX-BOUNDARY",
-      "expected": "stable fail-closed result for DECIMAL-MAX-BOUNDARY",
-      "material": "production CLI/store semantic regression for DECIMAL-MAX-BOUNDARY",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DECIMAL-MAX-BOUNDARY]"
+      "expected": "Exact fail-closed or success assertion for DECIMAL-MAX-BOUNDARY.",
+      "material": "Production regression invokes market-store or CLI path for DECIMAL-MAX-BOUNDARY with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_decimal_max_boundary"
     },
     {
       "behavior_id": "DECIMAL-MIN-BOUNDARY",
-      "expected": "stable fail-closed result for DECIMAL-MIN-BOUNDARY",
-      "material": "production CLI/store semantic regression for DECIMAL-MIN-BOUNDARY",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DECIMAL-MIN-BOUNDARY]"
+      "expected": "Exact fail-closed or success assertion for DECIMAL-MIN-BOUNDARY.",
+      "material": "Production regression invokes market-store or CLI path for DECIMAL-MIN-BOUNDARY with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_decimal_min_boundary"
     },
     {
       "behavior_id": "DECIMAL-ROUNDING-REJECTED",
-      "expected": "stable fail-closed result for DECIMAL-ROUNDING-REJECTED",
-      "material": "production CLI/store semantic regression for DECIMAL-ROUNDING-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DECIMAL-ROUNDING-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for DECIMAL-ROUNDING-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for DECIMAL-ROUNDING-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_decimal_rounding_rejected"
     },
     {
       "behavior_id": "PLAN-INSTRUMENT-SNAPSHOT",
-      "expected": "stable fail-closed result for PLAN-INSTRUMENT-SNAPSHOT",
-      "material": "production CLI/store semantic regression for PLAN-INSTRUMENT-SNAPSHOT",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PLAN-INSTRUMENT-SNAPSHOT]"
+      "expected": "Exact fail-closed or success assertion for PLAN-INSTRUMENT-SNAPSHOT.",
+      "material": "Production regression invokes market-store or CLI path for PLAN-INSTRUMENT-SNAPSHOT with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_plan_instrument_snapshot"
     },
     {
       "behavior_id": "PLAN-KLINE-CROSS-MONTH",
-      "expected": "stable fail-closed result for PLAN-KLINE-CROSS-MONTH",
-      "material": "production CLI/store semantic regression for PLAN-KLINE-CROSS-MONTH",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PLAN-KLINE-CROSS-MONTH]"
+      "expected": "Exact fail-closed or success assertion for PLAN-KLINE-CROSS-MONTH.",
+      "material": "Production regression invokes market-store or CLI path for PLAN-KLINE-CROSS-MONTH with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_plan_kline_cross_month"
     },
     {
       "behavior_id": "PLAN-FUNDING-FOUR-MONTHS",
-      "expected": "stable fail-closed result for PLAN-FUNDING-FOUR-MONTHS",
-      "material": "production CLI/store semantic regression for PLAN-FUNDING-FOUR-MONTHS",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PLAN-FUNDING-FOUR-MONTHS]"
+      "expected": "Exact fail-closed or success assertion for PLAN-FUNDING-FOUR-MONTHS.",
+      "material": "Production regression invokes market-store or CLI path for PLAN-FUNDING-FOUR-MONTHS with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_plan_funding_four_months"
     },
     {
       "behavior_id": "PLAN-MULTI-SYMBOL-REJECTED",
-      "expected": "stable fail-closed result for PLAN-MULTI-SYMBOL-REJECTED",
-      "material": "production CLI/store semantic regression for PLAN-MULTI-SYMBOL-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PLAN-MULTI-SYMBOL-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for PLAN-MULTI-SYMBOL-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for PLAN-MULTI-SYMBOL-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_plan_multi_symbol_rejected"
     },
     {
       "behavior_id": "PREFLIGHT-INVALID-ROW-ZERO-WRITES",
-      "expected": "stable fail-closed result for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
-      "material": "production CLI/store semantic regression for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PREFLIGHT-INVALID-ROW-ZERO-WRITES]"
+      "expected": "Exact fail-closed or success assertion for PREFLIGHT-INVALID-ROW-ZERO-WRITES.",
+      "material": "Production regression invokes market-store or CLI path for PREFLIGHT-INVALID-ROW-ZERO-WRITES with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_preflight_invalid_row_zero_writes"
     },
     {
       "behavior_id": "PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
-      "expected": "stable fail-closed result for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
-      "material": "production CLI/store semantic regression for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES]"
+      "expected": "Exact fail-closed or success assertion for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES.",
+      "material": "Production regression invokes market-store or CLI path for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_preflight_incoming_duplicate_zero_writes"
     },
     {
       "behavior_id": "PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
-      "expected": "stable fail-closed result for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
-      "material": "production CLI/store semantic regression for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES]"
+      "expected": "Exact fail-closed or success assertion for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES.",
+      "material": "Production regression invokes market-store or CLI path for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_preflight_committed_conflict_zero_writes"
     },
     {
       "behavior_id": "CHUNK-EARLY-CLEANUP",
-      "expected": "stable fail-closed result for CHUNK-EARLY-CLEANUP",
-      "material": "production CLI/store semantic regression for CHUNK-EARLY-CLEANUP",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-EARLY-CLEANUP]"
+      "expected": "Exact fail-closed or success assertion for CHUNK-EARLY-CLEANUP.",
+      "material": "Production regression invokes market-store or CLI path for CHUNK-EARLY-CLEANUP with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_chunk_early_cleanup"
     },
     {
       "behavior_id": "CHUNK-MID-CLEANUP",
-      "expected": "stable fail-closed result for CHUNK-MID-CLEANUP",
-      "material": "production CLI/store semantic regression for CHUNK-MID-CLEANUP",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-MID-CLEANUP]"
+      "expected": "Exact fail-closed or success assertion for CHUNK-MID-CLEANUP.",
+      "material": "Production regression invokes market-store or CLI path for CHUNK-MID-CLEANUP with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_chunk_mid_cleanup"
     },
     {
       "behavior_id": "CHUNK-LATE-CLEANUP",
-      "expected": "stable fail-closed result for CHUNK-LATE-CLEANUP",
-      "material": "production CLI/store semantic regression for CHUNK-LATE-CLEANUP",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-LATE-CLEANUP]"
+      "expected": "Exact fail-closed or success assertion for CHUNK-LATE-CLEANUP.",
+      "material": "Production regression invokes market-store or CLI path for CHUNK-LATE-CLEANUP with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_chunk_late_cleanup"
     },
     {
       "behavior_id": "CHUNK-CANONICAL-MANIFEST",
-      "expected": "stable fail-closed result for CHUNK-CANONICAL-MANIFEST",
-      "material": "production CLI/store semantic regression for CHUNK-CANONICAL-MANIFEST",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-CANONICAL-MANIFEST]"
+      "expected": "Exact fail-closed or success assertion for CHUNK-CANONICAL-MANIFEST.",
+      "material": "Production regression invokes market-store or CLI path for CHUNK-CANONICAL-MANIFEST with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_chunk_canonical_manifest"
     },
     {
       "behavior_id": "CHUNK-ACTUAL-PATH-MATCH",
-      "expected": "stable fail-closed result for CHUNK-ACTUAL-PATH-MATCH",
-      "material": "production CLI/store semantic regression for CHUNK-ACTUAL-PATH-MATCH",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-ACTUAL-PATH-MATCH]"
+      "expected": "Exact fail-closed or success assertion for CHUNK-ACTUAL-PATH-MATCH.",
+      "material": "Production regression invokes market-store or CLI path for CHUNK-ACTUAL-PATH-MATCH with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_chunk_actual_path_match"
     },
     {
       "behavior_id": "CHUNK-PK-SCHEMA-MATCH",
-      "expected": "stable fail-closed result for CHUNK-PK-SCHEMA-MATCH",
-      "material": "production CLI/store semantic regression for CHUNK-PK-SCHEMA-MATCH",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-PK-SCHEMA-MATCH]"
+      "expected": "Exact fail-closed or success assertion for CHUNK-PK-SCHEMA-MATCH.",
+      "material": "Production regression invokes market-store or CLI path for CHUNK-PK-SCHEMA-MATCH with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_chunk_pk_schema_match"
     },
     {
       "behavior_id": "CHUNK-EXISTING-CORRUPTION-REJECTED",
-      "expected": "stable fail-closed result for CHUNK-EXISTING-CORRUPTION-REJECTED",
-      "material": "production CLI/store semantic regression for CHUNK-EXISTING-CORRUPTION-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CHUNK-EXISTING-CORRUPTION-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for CHUNK-EXISTING-CORRUPTION-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for CHUNK-EXISTING-CORRUPTION-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_chunk_existing_corruption_rejected"
     },
     {
       "behavior_id": "IMPORT-SYNTHETIC-REAL-SHAPE",
-      "expected": "stable fail-closed result for IMPORT-SYNTHETIC-REAL-SHAPE",
-      "material": "production CLI/store semantic regression for IMPORT-SYNTHETIC-REAL-SHAPE",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-SYNTHETIC-REAL-SHAPE]"
+      "expected": "Exact fail-closed or success assertion for IMPORT-SYNTHETIC-REAL-SHAPE.",
+      "material": "Production regression invokes market-store or CLI path for IMPORT-SYNTHETIC-REAL-SHAPE with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_import_synthetic_real_shape"
     },
     {
       "behavior_id": "IMPORT-SOURCE-BYTES-IMMUTABLE",
-      "expected": "stable fail-closed result for IMPORT-SOURCE-BYTES-IMMUTABLE",
-      "material": "production CLI/store semantic regression for IMPORT-SOURCE-BYTES-IMMUTABLE",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-SOURCE-BYTES-IMMUTABLE]"
+      "expected": "Exact fail-closed or success assertion for IMPORT-SOURCE-BYTES-IMMUTABLE.",
+      "material": "Production regression invokes market-store or CLI path for IMPORT-SOURCE-BYTES-IMMUTABLE with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_import_source_bytes_immutable"
     },
     {
       "behavior_id": "IMPORT-RECEIPT-LAST",
-      "expected": "stable fail-closed result for IMPORT-RECEIPT-LAST",
-      "material": "production CLI/store semantic regression for IMPORT-RECEIPT-LAST",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-RECEIPT-LAST]"
+      "expected": "Exact fail-closed or success assertion for IMPORT-RECEIPT-LAST.",
+      "material": "Production regression invokes market-store or CLI path for IMPORT-RECEIPT-LAST with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_import_receipt_last"
     },
     {
       "behavior_id": "IMPORT-NOOP-TYPED",
-      "expected": "stable fail-closed result for IMPORT-NOOP-TYPED",
-      "material": "production CLI/store semantic regression for IMPORT-NOOP-TYPED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-NOOP-TYPED]"
+      "expected": "Exact fail-closed or success assertion for IMPORT-NOOP-TYPED.",
+      "material": "Production regression invokes market-store or CLI path for IMPORT-NOOP-TYPED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_import_noop_typed"
     },
     {
       "behavior_id": "IMPORT-NOOP-ZERO-MUTATION",
-      "expected": "stable fail-closed result for IMPORT-NOOP-ZERO-MUTATION",
-      "material": "production CLI/store semantic regression for IMPORT-NOOP-ZERO-MUTATION",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-NOOP-ZERO-MUTATION]"
+      "expected": "Exact fail-closed or success assertion for IMPORT-NOOP-ZERO-MUTATION.",
+      "material": "Production regression invokes market-store or CLI path for IMPORT-NOOP-ZERO-MUTATION with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_import_noop_zero_mutation"
     },
     {
       "behavior_id": "IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
-      "expected": "stable fail-closed result for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
-      "material": "production CLI/store semantic regression for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-NOOP-CORRUPT-CHUNK-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_import_noop_corrupt_chunk_rejected"
     },
     {
       "behavior_id": "IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
-      "expected": "stable fail-closed result for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
-      "material": "production CLI/store semantic regression for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_import_noop_corrupt_evidence_rejected"
     },
     {
       "behavior_id": "AUDIT-EMPTY-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-EMPTY-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-EMPTY-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-EMPTY-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-EMPTY-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-EMPTY-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_empty_rejected"
     },
     {
       "behavior_id": "AUDIT-VERSION-TAMPER-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-VERSION-TAMPER-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-VERSION-TAMPER-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-VERSION-TAMPER-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-VERSION-TAMPER-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-VERSION-TAMPER-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_version_tamper_rejected"
     },
     {
       "behavior_id": "AUDIT-ORPHAN-CHUNK-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-ORPHAN-CHUNK-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-ORPHAN-CHUNK-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-ORPHAN-CHUNK-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-ORPHAN-CHUNK-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-ORPHAN-CHUNK-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_orphan_chunk_rejected"
     },
     {
       "behavior_id": "AUDIT-ORPHAN-EVIDENCE-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-ORPHAN-EVIDENCE-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-ORPHAN-EVIDENCE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-ORPHAN-EVIDENCE-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-ORPHAN-EVIDENCE-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-ORPHAN-EVIDENCE-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_orphan_evidence_rejected"
     },
     {
       "behavior_id": "AUDIT-RECEIPT-TAMPER-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-RECEIPT-TAMPER-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-RECEIPT-TAMPER-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-RECEIPT-TAMPER-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-RECEIPT-TAMPER-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-RECEIPT-TAMPER-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_receipt_tamper_rejected"
     },
     {
       "behavior_id": "AUDIT-GLOBAL-DUPLICATE-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-GLOBAL-DUPLICATE-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-GLOBAL-DUPLICATE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-GLOBAL-DUPLICATE-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-GLOBAL-DUPLICATE-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-GLOBAL-DUPLICATE-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_global_duplicate_rejected"
     },
     {
       "behavior_id": "AUDIT-GLOBAL-CONFLICT-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-GLOBAL-CONFLICT-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-GLOBAL-CONFLICT-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-GLOBAL-CONFLICT-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-GLOBAL-CONFLICT-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-GLOBAL-CONFLICT-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_global_conflict_rejected"
     },
     {
       "behavior_id": "AUDIT-UNEXPECTED-ENTRY-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-UNEXPECTED-ENTRY-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-UNEXPECTED-ENTRY-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-UNEXPECTED-ENTRY-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-UNEXPECTED-ENTRY-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-UNEXPECTED-ENTRY-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_unexpected_entry_rejected"
     },
     {
       "behavior_id": "AUDIT-STALE-STAGING-REJECTED",
-      "expected": "stable fail-closed result for AUDIT-STALE-STAGING-REJECTED",
-      "material": "production CLI/store semantic regression for AUDIT-STALE-STAGING-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[AUDIT-STALE-STAGING-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for AUDIT-STALE-STAGING-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for AUDIT-STALE-STAGING-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_audit_stale_staging_rejected"
     },
     {
       "behavior_id": "REPLAY-SNAPSHOT-REQUIRED",
-      "expected": "stable fail-closed result for REPLAY-SNAPSHOT-REQUIRED",
-      "material": "production CLI/store semantic regression for REPLAY-SNAPSHOT-REQUIRED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-SNAPSHOT-REQUIRED]"
+      "expected": "Exact fail-closed or success assertion for REPLAY-SNAPSHOT-REQUIRED.",
+      "material": "Production regression invokes market-store or CLI path for REPLAY-SNAPSHOT-REQUIRED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_replay_snapshot_required"
     },
     {
       "behavior_id": "REPLAY-SNAPSHOT-ROW-RETURNED",
-      "expected": "stable fail-closed result for REPLAY-SNAPSHOT-ROW-RETURNED",
-      "material": "production CLI/store semantic regression for REPLAY-SNAPSHOT-ROW-RETURNED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-SNAPSHOT-ROW-RETURNED]"
+      "expected": "Exact fail-closed or success assertion for REPLAY-SNAPSHOT-ROW-RETURNED.",
+      "material": "Production regression invokes market-store or CLI path for REPLAY-SNAPSHOT-ROW-RETURNED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_replay_snapshot_row_returned"
     },
     {
       "behavior_id": "REPLAY-COMPLETE-TRADE-MARK",
-      "expected": "stable fail-closed result for REPLAY-COMPLETE-TRADE-MARK",
-      "material": "production CLI/store semantic regression for REPLAY-COMPLETE-TRADE-MARK",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-COMPLETE-TRADE-MARK]"
+      "expected": "Exact fail-closed or success assertion for REPLAY-COMPLETE-TRADE-MARK.",
+      "material": "Production regression invokes market-store or CLI path for REPLAY-COMPLETE-TRADE-MARK with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_replay_complete_trade_mark"
     },
     {
       "behavior_id": "REPLAY-FUNDING-MARK-JOIN",
-      "expected": "stable fail-closed result for REPLAY-FUNDING-MARK-JOIN",
-      "material": "production CLI/store semantic regression for REPLAY-FUNDING-MARK-JOIN",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-FUNDING-MARK-JOIN]"
+      "expected": "Exact fail-closed or success assertion for REPLAY-FUNDING-MARK-JOIN.",
+      "material": "Production regression invokes market-store or CLI path for REPLAY-FUNDING-MARK-JOIN with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_replay_funding_mark_join"
     },
     {
       "behavior_id": "REPLAY-MISSING-MARK-JOIN-REJECTED",
-      "expected": "stable fail-closed result for REPLAY-MISSING-MARK-JOIN-REJECTED",
-      "material": "production CLI/store semantic regression for REPLAY-MISSING-MARK-JOIN-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[REPLAY-MISSING-MARK-JOIN-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for REPLAY-MISSING-MARK-JOIN-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for REPLAY-MISSING-MARK-JOIN-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_replay_missing_mark_join_rejected"
     },
     {
       "behavior_id": "COVERAGE-STRICT-INPUTS",
-      "expected": "stable fail-closed result for COVERAGE-STRICT-INPUTS",
-      "material": "production CLI/store semantic regression for COVERAGE-STRICT-INPUTS",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[COVERAGE-STRICT-INPUTS]"
+      "expected": "Exact fail-closed or success assertion for COVERAGE-STRICT-INPUTS.",
+      "material": "Production regression invokes market-store or CLI path for COVERAGE-STRICT-INPUTS with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_coverage_strict_inputs"
     },
     {
       "behavior_id": "COVERAGE-OUT-OF-WINDOW-REJECTED",
-      "expected": "stable fail-closed result for COVERAGE-OUT-OF-WINDOW-REJECTED",
-      "material": "production CLI/store semantic regression for COVERAGE-OUT-OF-WINDOW-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[COVERAGE-OUT-OF-WINDOW-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for COVERAGE-OUT-OF-WINDOW-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for COVERAGE-OUT-OF-WINDOW-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_coverage_out_of_window_rejected"
     },
     {
       "behavior_id": "COVERAGE-GAP-WINDOWS",
-      "expected": "stable fail-closed result for COVERAGE-GAP-WINDOWS",
-      "material": "production CLI/store semantic regression for COVERAGE-GAP-WINDOWS",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[COVERAGE-GAP-WINDOWS]"
+      "expected": "Exact fail-closed or success assertion for COVERAGE-GAP-WINDOWS.",
+      "material": "Production regression invokes market-store or CLI path for COVERAGE-GAP-WINDOWS with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_coverage_gap_windows"
     },
     {
       "behavior_id": "RESUME-INCLUSIVE-1000",
-      "expected": "stable fail-closed result for RESUME-INCLUSIVE-1000",
-      "material": "production CLI/store semantic regression for RESUME-INCLUSIVE-1000",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[RESUME-INCLUSIVE-1000]"
+      "expected": "Exact fail-closed or success assertion for RESUME-INCLUSIVE-1000.",
+      "material": "Production regression invokes market-store or CLI path for RESUME-INCLUSIVE-1000 with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_resume_inclusive_1000"
     },
     {
       "behavior_id": "RESUME-MONTH-YEAR-LEAP",
-      "expected": "stable fail-closed result for RESUME-MONTH-YEAR-LEAP",
-      "material": "production CLI/store semantic regression for RESUME-MONTH-YEAR-LEAP",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[RESUME-MONTH-YEAR-LEAP]"
+      "expected": "Exact fail-closed or success assertion for RESUME-MONTH-YEAR-LEAP.",
+      "material": "Production regression invokes market-store or CLI path for RESUME-MONTH-YEAR-LEAP with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_resume_month_year_leap"
     },
     {
       "behavior_id": "FUNDING-STRICT-TIMESTAMPS",
-      "expected": "stable fail-closed result for FUNDING-STRICT-TIMESTAMPS",
-      "material": "production CLI/store semantic regression for FUNDING-STRICT-TIMESTAMPS",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[FUNDING-STRICT-TIMESTAMPS]"
+      "expected": "Exact fail-closed or success assertion for FUNDING-STRICT-TIMESTAMPS.",
+      "material": "Production regression invokes market-store or CLI path for FUNDING-STRICT-TIMESTAMPS with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_funding_strict_timestamps"
     },
     {
       "behavior_id": "DUCKDB-FOUR-VIEWS",
-      "expected": "stable fail-closed result for DUCKDB-FOUR-VIEWS",
-      "material": "production CLI/store semantic regression for DUCKDB-FOUR-VIEWS",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DUCKDB-FOUR-VIEWS]"
+      "expected": "Exact fail-closed or success assertion for DUCKDB-FOUR-VIEWS.",
+      "material": "Production regression invokes market-store or CLI path for DUCKDB-FOUR-VIEWS with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_duckdb_four_views"
     },
     {
       "behavior_id": "DUCKDB-DECIMAL-TYPES",
-      "expected": "stable fail-closed result for DUCKDB-DECIMAL-TYPES",
-      "material": "production CLI/store semantic regression for DUCKDB-DECIMAL-TYPES",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DUCKDB-DECIMAL-TYPES]"
+      "expected": "Exact fail-closed or success assertion for DUCKDB-DECIMAL-TYPES.",
+      "material": "Production regression invokes market-store or CLI path for DUCKDB-DECIMAL-TYPES with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_duckdb_decimal_types"
     },
     {
       "behavior_id": "DUCKDB-CONNECTION-CLOSED",
-      "expected": "stable fail-closed result for DUCKDB-CONNECTION-CLOSED",
-      "material": "production CLI/store semantic regression for DUCKDB-CONNECTION-CLOSED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[DUCKDB-CONNECTION-CLOSED]"
+      "expected": "Exact fail-closed or success assertion for DUCKDB-CONNECTION-CLOSED.",
+      "material": "Production regression invokes market-store or CLI path for DUCKDB-CONNECTION-CLOSED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_duckdb_connection_closed"
     },
     {
       "behavior_id": "PACK-BUILDER-BAD-STORE-REJECTED",
-      "expected": "stable fail-closed result for PACK-BUILDER-BAD-STORE-REJECTED",
-      "material": "production CLI/store semantic regression for PACK-BUILDER-BAD-STORE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-BUILDER-BAD-STORE-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for PACK-BUILDER-BAD-STORE-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for PACK-BUILDER-BAD-STORE-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_pack_builder_bad_store_rejected"
     },
     {
       "behavior_id": "PACK-EXACT-MEMBER-SET",
-      "expected": "stable fail-closed result for PACK-EXACT-MEMBER-SET",
-      "material": "production CLI/store semantic regression for PACK-EXACT-MEMBER-SET",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-EXACT-MEMBER-SET]"
+      "expected": "Exact fail-closed or success assertion for PACK-EXACT-MEMBER-SET.",
+      "material": "Production regression invokes market-store or CLI path for PACK-EXACT-MEMBER-SET with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_pack_exact_member_set"
     },
     {
       "behavior_id": "PACK-EMPTY-MANIFEST-REJECTED",
-      "expected": "stable fail-closed result for PACK-EMPTY-MANIFEST-REJECTED",
-      "material": "production CLI/store semantic regression for PACK-EMPTY-MANIFEST-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-EMPTY-MANIFEST-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for PACK-EMPTY-MANIFEST-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for PACK-EMPTY-MANIFEST-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_pack_empty_manifest_rejected"
     },
     {
       "behavior_id": "PACK-REHASHED-FAKE-REJECTED",
-      "expected": "stable fail-closed result for PACK-REHASHED-FAKE-REJECTED",
-      "material": "production CLI/store semantic regression for PACK-REHASHED-FAKE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-REHASHED-FAKE-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for PACK-REHASHED-FAKE-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for PACK-REHASHED-FAKE-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_pack_rehashed_fake_rejected"
     },
     {
       "behavior_id": "PACK-NESTED-EVIDENCE-VALIDATED",
-      "expected": "stable fail-closed result for PACK-NESTED-EVIDENCE-VALIDATED",
-      "material": "production CLI/store semantic regression for PACK-NESTED-EVIDENCE-VALIDATED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-NESTED-EVIDENCE-VALIDATED]"
+      "expected": "Exact fail-closed or success assertion for PACK-NESTED-EVIDENCE-VALIDATED.",
+      "material": "Production regression invokes market-store or CLI path for PACK-NESTED-EVIDENCE-VALIDATED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_pack_nested_evidence_validated"
     },
     {
       "behavior_id": "PACK-REPORT-TAMPER-REJECTED",
-      "expected": "stable fail-closed result for PACK-REPORT-TAMPER-REJECTED",
-      "material": "production CLI/store semantic regression for PACK-REPORT-TAMPER-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-REPORT-TAMPER-REJECTED]"
+      "expected": "Exact fail-closed or success assertion for PACK-REPORT-TAMPER-REJECTED.",
+      "material": "Production regression invokes market-store or CLI path for PACK-REPORT-TAMPER-REJECTED with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_pack_report_tamper_rejected"
     },
     {
       "behavior_id": "PACK-TEMP-CLEANUP",
-      "expected": "stable fail-closed result for PACK-TEMP-CLEANUP",
-      "material": "production CLI/store semantic regression for PACK-TEMP-CLEANUP",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[PACK-TEMP-CLEANUP]"
+      "expected": "Exact fail-closed or success assertion for PACK-TEMP-CLEANUP.",
+      "material": "Production regression invokes market-store or CLI path for PACK-TEMP-CLEANUP with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_pack_temp_cleanup"
     },
     {
       "behavior_id": "CLI-FULL-LIFECYCLE-BYBIT-HOST",
-      "expected": "stable fail-closed result for CLI-FULL-LIFECYCLE-BYBIT-HOST",
-      "material": "production CLI/store semantic regression for CLI-FULL-LIFECYCLE-BYBIT-HOST",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CLI-FULL-LIFECYCLE-BYBIT-HOST]"
+      "expected": "Exact fail-closed or success assertion for CLI-FULL-LIFECYCLE-BYBIT-HOST.",
+      "material": "Production regression invokes market-store or CLI path for CLI-FULL-LIFECYCLE-BYBIT-HOST with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_cli_full_lifecycle_bybit_host"
     },
     {
       "behavior_id": "CLI-FULL-LIFECYCLE-BYTICK-HOST",
-      "expected": "stable fail-closed result for CLI-FULL-LIFECYCLE-BYTICK-HOST",
-      "material": "production CLI/store semantic regression for CLI-FULL-LIFECYCLE-BYTICK-HOST",
-      "nodeid": "tests/test_sprint_06_4a_3_required_behaviors.py::test_required_behavior_material[CLI-FULL-LIFECYCLE-BYTICK-HOST]"
+      "expected": "Exact fail-closed or success assertion for CLI-FULL-LIFECYCLE-BYTICK-HOST.",
+      "material": "Production regression invokes market-store or CLI path for CLI-FULL-LIFECYCLE-BYTICK-HOST with a distinct deterministic mutation.",
+      "nodeid": "tests/test_sprint_06_4a_3_material_behaviors.py::test_material_cli_full_lifecycle_bytick_host"
     }
   ],
   "schema": "sprint_06_4a_3_required_behaviors_v1"
