@@ -84,8 +84,12 @@ def schema_for(k):
 
 
 def ensure_decimal128_38_18(v):
+    """Validate exact Arrow decimal128(38,18) representability without float coercion."""
     if type(v) is not Decimal or not v.is_finite():
         raise MarketStoreError("decimal_not_exact")
+    exp = v.as_tuple().exponent
+    if exp < -18:
+        raise MarketStoreError("decimal_rounding_required")
     q = Decimal("0.000000000000000001")
     try:
         qv = v.quantize(q)
@@ -93,6 +97,7 @@ def ensure_decimal128_38_18(v):
         raise MarketStoreError("decimal_precision_overflow") from e
     if qv != v:
         raise MarketStoreError("decimal_rounding_required")
-    if len(qv.as_tuple().digits) > 38:
+    as_int = abs(int(qv.scaleb(18)))
+    if as_int >= 10**38:
         raise MarketStoreError("decimal_precision_overflow")
     return v

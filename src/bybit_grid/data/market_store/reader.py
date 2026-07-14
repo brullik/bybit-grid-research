@@ -13,7 +13,15 @@ def _chunk_dirs(root, kind):
 
 
 def _read_chunk(d, kind):
+    kind = MarketDatasetKind(kind)
+    if sorted(p.name for p in Path(d).iterdir()) != ["chunk_manifest.json", "data.parquet"]:
+        raise MarketStoreError("chunk_dir_contract_invalid")
     mf = json.loads((d / "chunk_manifest.json").read_text())
+    required = {"dataset","relative_path","row_count","primary_key_columns","min_key","max_key","parquet_sha256","logical_rows_sha256","storage_schema_version"}
+    if set(mf) != required or mf["dataset"] != kind.value:
+        raise MarketStoreError("manifest_schema_invalid")
+    if type(mf["relative_path"]) is not str or not mf["relative_path"].startswith("datasets/"):
+        raise MarketStoreError("manifest_relative_path_invalid")
     data = d / "data.parquet"
     if hashlib.sha256(data.read_bytes()).hexdigest() != mf["parquet_sha256"]:
         raise MarketStoreError("parquet_sha256_mismatch")
@@ -21,6 +29,11 @@ def _read_chunk(d, kind):
     if t.schema != schema_for(kind):
         raise MarketStoreError("schema_mismatch")
     rows = tuple(t.to_pylist())
+    keys = tuple(row_key(kind, r) for r in rows)
+    if tuple(sorted(keys)) != keys or len(set(keys)) != len(keys):
+        raise MarketStoreError("primary_key_order_invalid")
+    if len(rows) != mf["row_count"] or list(keys[0]) != mf["min_key"] or list(keys[-1]) != mf["max_key"]:
+        raise MarketStoreError("manifest_row_bounds_invalid")
     if logical_rows_sha256(kind, rows) != mf["logical_rows_sha256"]:
         raise MarketStoreError("logical_hash_mismatch")
     return rows

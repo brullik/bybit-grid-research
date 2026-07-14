@@ -1,38 +1,30 @@
 #!/usr/bin/env python
 from __future__ import annotations
-
 import argparse
-import json
-import traceback
+import sys
+from pathlib import Path as _Path
+
+sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+from dataclasses import asdict
 from pathlib import Path
+from bybit_grid.data.market_store.audit import audit_market_store
+from _cli_common import emit, fail
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--debug", action="store_true")
-    parser.add_argument("paths", nargs="*")
-    args = parser.parse_args()
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--store-root", required=True)
+    ap.add_argument("--debug", action="store_true")
+    ns = ap.parse_args()
     try:
-        print(
-            json.dumps(
-                {"ok": True, "script": Path(__file__).name},
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
-        return 0
-    except Exception as exc:
-        if args.debug:
-            traceback.print_exc()
-        print(
-            json.dumps(
-                {"ok": False, "error": str(exc)},
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
-        return 1
+        if not Path(ns.store_root).exists():
+            raise FileNotFoundError("store_root_missing")
+        a = audit_market_store(ns.store_root)
+        emit({"audit": asdict(a), "ok": a.ok})
+        return 0 if a.ok else 1
+    except Exception as e:
+        return fail(e, ns.debug)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
