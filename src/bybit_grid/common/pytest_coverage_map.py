@@ -19,6 +19,105 @@ PLACEHOLDERS = (
     "behavior-specific",
     "requirement ",
 )
+
+REQUIRED_064A3 = tuple("""GOV-EXACT-ID-SET
+GOV-MISSING-NODE
+GOV-NOOP-REJECTED
+CLI-HELP-ALL
+CLI-MISSING-ARGS-ALL
+DECIMAL-MAX-BOUNDARY
+DECIMAL-MIN-BOUNDARY
+DECIMAL-ROUNDING-REJECTED
+PLAN-INSTRUMENT-SNAPSHOT
+PLAN-KLINE-CROSS-MONTH
+PLAN-FUNDING-FOUR-MONTHS
+PLAN-MULTI-SYMBOL-REJECTED
+PREFLIGHT-INVALID-ROW-ZERO-WRITES
+PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES
+PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES
+CHUNK-EARLY-CLEANUP
+CHUNK-MID-CLEANUP
+CHUNK-LATE-CLEANUP
+CHUNK-CANONICAL-MANIFEST
+CHUNK-ACTUAL-PATH-MATCH
+CHUNK-PK-SCHEMA-MATCH
+CHUNK-EXISTING-CORRUPTION-REJECTED
+IMPORT-SYNTHETIC-REAL-SHAPE
+IMPORT-SOURCE-BYTES-IMMUTABLE
+IMPORT-RECEIPT-LAST
+IMPORT-NOOP-TYPED
+IMPORT-NOOP-ZERO-MUTATION
+IMPORT-NOOP-CORRUPT-CHUNK-REJECTED
+IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED
+AUDIT-EMPTY-REJECTED
+AUDIT-VERSION-TAMPER-REJECTED
+AUDIT-ORPHAN-CHUNK-REJECTED
+AUDIT-ORPHAN-EVIDENCE-REJECTED
+AUDIT-RECEIPT-TAMPER-REJECTED
+AUDIT-GLOBAL-DUPLICATE-REJECTED
+AUDIT-GLOBAL-CONFLICT-REJECTED
+AUDIT-UNEXPECTED-ENTRY-REJECTED
+AUDIT-STALE-STAGING-REJECTED
+REPLAY-SNAPSHOT-REQUIRED
+REPLAY-SNAPSHOT-ROW-RETURNED
+REPLAY-COMPLETE-TRADE-MARK
+REPLAY-FUNDING-MARK-JOIN
+REPLAY-MISSING-MARK-JOIN-REJECTED
+COVERAGE-STRICT-INPUTS
+COVERAGE-OUT-OF-WINDOW-REJECTED
+COVERAGE-GAP-WINDOWS
+RESUME-INCLUSIVE-1000
+RESUME-MONTH-YEAR-LEAP
+FUNDING-STRICT-TIMESTAMPS
+DUCKDB-FOUR-VIEWS
+DUCKDB-DECIMAL-TYPES
+DUCKDB-CONNECTION-CLOSED
+PACK-BUILDER-BAD-STORE-REJECTED
+PACK-EXACT-MEMBER-SET
+PACK-EMPTY-MANIFEST-REJECTED
+PACK-REHASHED-FAKE-REJECTED
+PACK-NESTED-EVIDENCE-VALIDATED
+PACK-REPORT-TAMPER-REJECTED
+PACK-TEMP-CLEANUP
+CLI-FULL-LIFECYCLE-BYBIT-HOST
+CLI-FULL-LIFECYCLE-BYTICK-HOST""".splitlines())
+
+
+def verify_required_behavior_json(path: Path, collected_nodes):
+    errors = []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return [f"{path}:json_invalid:{e}"]
+    if set(raw) != {"schema", "behaviors"} or raw.get("schema") != "sprint_06_4a_3_required_behaviors_v1":
+        errors.append(f"{path}:schema_invalid")
+    rows = raw.get("behaviors")
+    if type(rows) is not list:
+        return errors + [f"{path}:behaviors_invalid"]
+    bids = []
+    collected = set(collected_nodes)
+    for i, row in enumerate(rows):
+        if type(row) is not dict or set(row) != {"behavior_id", "nodeid", "material", "expected"}:
+            errors.append(f"{path}:row_schema_invalid:{i}")
+            continue
+        bid = row["behavior_id"]
+        bids.append(bid)
+        if bid not in REQUIRED_064A3:
+            errors.append(f"{path}:unknown_behavior_id:{bid}")
+        node = row["nodeid"]
+        if node not in collected:
+            errors.append(f"{path}:missing_node:{node}")
+        text = (row["material"] + " " + row["expected"]).lower()
+        if any(p in text for p in PLACEHOLDERS) or "constant-only" in text:
+            errors.append(f"{path}:forbidden_noop_pattern:{bid}")
+    if tuple(bids) != REQUIRED_064A3:
+        errors.append(f"{path}:exact_behavior_id_set_invalid")
+    for x in sorted({b for b in bids if bids.count(b) > 1}):
+        errors.append(f"{path}:duplicate_behavior_id:{x}")
+    for x in sorted(set(REQUIRED_064A3) - set(bids)):
+        errors.append(f"{path}:missing_behavior_id:{x}")
+    return errors
+
 LINE_RE = re.compile(
     r"^\|\s*([^|]+?)\s*\|\s*`([^`]+)`\s*\|\s*([^|]+)\|\s*([^|]+)\|\s*([^|]+)\|\s*$"
 )
@@ -115,6 +214,11 @@ def verify_maps(map_specs, collected_nodes):
                     f"{path}:duplicate_material_mapping:{r['behavior_id']}:{seen_material[sig]}"
                 )
             seen_material[sig] = r["nodeid"]
+    req = Path("docs/sprint_06_4a_3_required_behaviors.json")
+    if req.exists():
+        req_errors = verify_required_behavior_json(req, collected)
+        errors.extend(req_errors)
+        counts[str(req)] = len(REQUIRED_064A3) if not req_errors else -1
     return CoverageMapResult(not errors, tuple(errors), counts)
 
 

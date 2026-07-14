@@ -67,7 +67,7 @@ def _strict_failures(v, n="failures"):
 
 def _strict_mapping(v, n):
     if type(v) is dict:
-        return MappingProxyType(dict(v))
+        v = MappingProxyType(dict(v))
     if type(v) is not MappingProxyType:
         raise MarketStoreError(f"{n}_not_immutable_mapping")
     if any(type(k) is not str or not k for k in v):
@@ -207,19 +207,21 @@ class MarketStoreAudit:
 class StoreRoundTripAudit:
     ok: bool
     failures: tuple[str, ...]
-    dataset_hashes: dict
+    dataset_hashes: MappingProxyType
 
     def __post_init__(self):
         strict_bool(self.ok, "ok")
         _strict_failures(self.failures)
+        object.__setattr__(self, "dataset_hashes", _strict_mapping(self.dataset_hashes, "dataset_hashes"))
 
 
 @dataclass(frozen=True)
 class StoreReproducibilityAudit:
     ok: bool
     failures: tuple[str, ...]
-    values: dict
+    values: MappingProxyType
 
     def __post_init__(self):
         strict_bool(self.ok, "ok")
         _strict_failures(self.failures)
+        object.__setattr__(self, "values", _strict_mapping(self.values, "values"))

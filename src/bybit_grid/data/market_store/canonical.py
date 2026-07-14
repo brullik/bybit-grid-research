@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 from decimal import Decimal
 from pathlib import Path
 from enum import Enum
+from types import MappingProxyType
 from .models import MarketStoreError, MarketDatasetKind
 
 PK = {
@@ -43,7 +44,7 @@ def plain(v):
         return v.value
     if is_dataclass(v):
         return plain(asdict(v))
-    if isinstance(v, dict):
+    if isinstance(v, (dict, MappingProxyType)):
         out = {}
         for k in sorted(v):
             if type(k) is not str or not k:
