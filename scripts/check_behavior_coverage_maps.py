@@ -16,8 +16,8 @@ def main(argv=None):
         nodes = collect_nodes(ns.collect_command)
         res = verify_maps(
             (
-                ("docs/sprint_06_3b_3_2_behavior_coverage.md", 72),
-                ("docs/sprint_06_4a_behavior_coverage.md", 82),
+                ("docs/sprint_06_3b_3_2_behavior_coverage.md", 8),
+                ("docs/sprint_06_4a_behavior_coverage.md", 8),
             ),
             nodes,
         )

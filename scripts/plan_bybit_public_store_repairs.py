@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 from __future__ import annotations
-import argparse
 import sys
 from pathlib import Path as _Path
 
@@ -12,11 +11,11 @@ from bybit_grid.data.market_store.coverage import (
 )
 from bybit_grid.data.market_store.reader import read_dataset
 from bybit_grid.data.market_store.models import MarketDatasetKind
-from _cli_common import emit, fail
+from bybit_grid.common.strict_cli import emit, fail, StrictArgumentParser
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = StrictArgumentParser()
     ap.add_argument("--store-root", required=True)
     ap.add_argument("--symbol", required=True)
     ap.add_argument("--start-ms", required=True, type=int)

@@ -8,6 +8,12 @@ from pathlib import Path
 
 PLACEHOLDERS = (
     "placeholder",
+    "material_contract",
+    "binds to an executable node",
+    "validates collected closure row",
+    'fixture = {"id"',
+    'assert fixture["id"]',
+    "assert index >= 0",
     "test_sprint_06_4a_contract_matrix.py",
     "test_accepted_lifecycle_behavior",
     "behavior-specific",
@@ -85,11 +91,30 @@ def verify_maps(map_specs, collected_nodes):
             errors.append(f"{path}:duplicate_behavior_id:{x}")
         for x in sorted({n for n in nodes if nodes.count(n) > 1}):
             errors.append(f"{path}:duplicate_nodeid:{x}")
+        seen_material = {}
         for r in rows:
+            node_low = r["nodeid"].lower()
+            if "behavior_coverage_material_nodes" in node_low or "material_contract" in node_low:
+                errors.append(f"{path}:forbidden_noop_node:{r['nodeid']}")
             if r["nodeid"] not in collected:
                 errors.append(f"{path}:missing_node:{r['nodeid']}")
             if not (r["fixture"] and r["mutation"] and r["expected"]):
                 errors.append(f"{path}:incomplete_row:{r['behavior_id']}")
+            if r["expected"].strip() == r["behavior_id"].strip():
+                errors.append(f"{path}:expected_repeats_behavior_id:{r['behavior_id']}")
+            generic = (r["fixture"] + " " + r["mutation"]).lower()
+            if (
+                "deterministic in-process fixture" in generic
+                or "behavior identifier" in generic
+                or "generic" in generic
+            ):
+                errors.append(f"{path}:generic_fixture_or_mutation:{r['behavior_id']}")
+            sig = (r["fixture"].lower(), r["mutation"].lower(), r["expected"].lower())
+            if sig in seen_material and seen_material[sig] != r["nodeid"]:
+                errors.append(
+                    f"{path}:duplicate_material_mapping:{r['behavior_id']}:{seen_material[sig]}"
+                )
+            seen_material[sig] = r["nodeid"]
     return CoverageMapResult(not errors, tuple(errors), counts)
 
 
@@ -103,8 +128,4 @@ def collect_nodes(command: str):
     )
     if cp.returncode not in (0, 5):
         raise RuntimeError(cp.stdout)
-    return [
-        ln.strip()
-        for ln in cp.stdout.splitlines()
-        if "::" in ln and not ln.startswith("<")
-    ]
+    return [ln.strip() for ln in cp.stdout.splitlines() if "::" in ln and not ln.startswith("<")]

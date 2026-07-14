@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 from __future__ import annotations
-import argparse
 import sys
 from pathlib import Path as _Path
 
@@ -10,11 +9,11 @@ from bybit_grid.data.market_store.import_public_batch import (
     load_validated_public_replay_batch_from_review_pack,
     import_validated_public_batch_to_store,
 )
-from _cli_common import emit, fail
+from bybit_grid.common.strict_cli import emit, fail, StrictArgumentParser
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = StrictArgumentParser()
     ap.add_argument("--review-pack", required=True)
     ap.add_argument("--store-root", required=True)
     ap.add_argument("--expected-run-id", required=True)
