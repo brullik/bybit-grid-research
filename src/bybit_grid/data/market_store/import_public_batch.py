@@ -1,14 +1,20 @@
 from __future__ import annotations
 import hashlib
 import json
-import shutil
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from types import MappingProxyType
-from .models import STORE_SCHEMA_VERSION, MarketDatasetKind, MarketStoreError, StoreImportReceipt
+from .models import (
+    STORE_SCHEMA_VERSION,
+    MarketDatasetKind,
+    MarketStoreError,
+    StoreImportReceipt,
+    StoreChunkManifest,
+)
 from .writer import write_chunk_atomic
 from .canonical import canonical_json_bytes
 from .paths import receipt_rel, evidence_rel
+from .planner import partition_validated_rows
 from bybit_grid.data.public_batch.evidence import validate_review_pack
 from bybit_grid.data.public_batch.reconstruct import records_from_jsonl, reconstruct_from_records
 from bybit_grid.data.public_batch.recording import strict_json_loads
@@ -20,7 +26,7 @@ class ValidatedPublicBatchEvidence:
     review_pack_sha256: str
     batch: object
     reconstructed: MappingProxyType
-    source_path: Path
+    source_bytes: bytes
 
 
 def load_validated_public_replay_batch_from_review_pack(
@@ -43,7 +49,7 @@ def load_validated_public_replay_batch_from_review_pack(
         rec, symbol="BTCUSDT", kline_row_count=1001, funding_lookback_days=100
     )
     return ValidatedPublicBatchEvidence(
-        expected_run_id, sha, rebuilt["batch"], MappingProxyType(rebuilt), Path(path)
+        expected_run_id, sha, rebuilt["batch"], MappingProxyType(rebuilt), bytes(b)
     )
 
 
@@ -71,43 +77,40 @@ def import_validated_public_batch_to_store(evidence, store_root):
         ver.write_bytes(canonical_json_bytes({"storage_schema_version": STORE_SCHEMA_VERSION}))
     rr = store_root / receipt_rel(evidence.run_id, evidence.review_pack_sha256)
     if rr.exists():
-        return StoreImportReceipt(**json.loads(rr.read_text()))
+        raw = json.loads(rr.read_text())
+        if set(raw) != {"chunks", "run_id", "source_review_pack_sha256", "storage_schema_version"}:
+            raise MarketStoreError("receipt_schema_invalid")
+        chunks0 = tuple(
+            StoreChunkManifest(
+                **{
+                    **c,
+                    "primary_key_columns": tuple(c["primary_key_columns"]),
+                    "min_key": tuple(c["min_key"]),
+                    "max_key": tuple(c["max_key"]),
+                }
+            )
+            for c in raw["chunks"]
+        )
+        return StoreImportReceipt(
+            raw["run_id"], raw["source_review_pack_sha256"], chunks0, raw["storage_schema_version"]
+        )
     chunks = []
     rb = evidence.reconstructed
-    chunks.append(
-        write_chunk_atomic(
-            store_root,
-            MarketDatasetKind.instrument_snapshot,
-            _prov(rb["instrument_rows"], evidence, "instrument_primary_1000", "bybit_public_batch"),
-        )
+    dataset_inputs = (
+        (MarketDatasetKind.instrument_snapshot, rb["instrument_rows"], "instrument_primary_1000"),
+        (MarketDatasetKind.trade_kline_1m, rb["trade_rows"], "trade_primary_1000"),
+        (MarketDatasetKind.mark_kline_1m, rb["mark_rows"], "mark_primary_1000"),
+        (MarketDatasetKind.funding_rate, rb["funding_rows"], "funding_primary_backward_200"),
     )
-    chunks.append(
-        write_chunk_atomic(
-            store_root,
-            MarketDatasetKind.trade_kline_1m,
-            _prov(rb["trade_rows"], evidence, "trade_primary_1000", "bybit_public_batch"),
-        )
-    )
-    chunks.append(
-        write_chunk_atomic(
-            store_root,
-            MarketDatasetKind.mark_kline_1m,
-            _prov(rb["mark_rows"], evidence, "mark_primary_1000", "bybit_public_batch"),
-        )
-    )
-    chunks.append(
-        write_chunk_atomic(
-            store_root,
-            MarketDatasetKind.funding_rate,
-            _prov(
-                rb["funding_rows"], evidence, "funding_primary_backward_200", "bybit_public_batch"
-            ),
-        )
-    )
+    planned = []
+    for kind, rows0, plan_id in dataset_inputs:
+        rows = _prov(rows0, evidence, plan_id, "bybit_public_batch")
+        planned.extend((kind, e.rows) for e in partition_validated_rows(kind, rows))
+    for kind, rows in planned:
+        chunks.append(write_chunk_atomic(store_root, kind, rows))
     er = store_root / evidence_rel(evidence.review_pack_sha256)
     er.mkdir(parents=True, exist_ok=True)
-    if evidence.source_path.exists():
-        shutil.copyfile(evidence.source_path, er / "review_pack.zip")
+    (er / "review_pack.zip").write_bytes(evidence.source_bytes)
     (er / "evidence_reference.json").write_bytes(
         canonical_json_bytes(
             {"source_review_pack_sha256": evidence.review_pack_sha256, "run_id": evidence.run_id}

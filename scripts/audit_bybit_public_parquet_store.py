@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 from __future__ import annotations
-import argparse
 import sys
 from pathlib import Path as _Path
 
@@ -8,11 +7,11 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from dataclasses import asdict
 from pathlib import Path
 from bybit_grid.data.market_store.audit import audit_market_store
-from _cli_common import emit, fail
+from bybit_grid.common.strict_cli import emit, fail, StrictArgumentParser
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = StrictArgumentParser()
     ap.add_argument("--store-root", required=True)
     ap.add_argument("--debug", action="store_true")
     ns = ap.parse_args()

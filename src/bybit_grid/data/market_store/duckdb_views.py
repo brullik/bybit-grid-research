@@ -18,14 +18,16 @@ def open_readonly_duckdb_views(store_root):
         files = list((root / "datasets" / ds).glob("**/data.parquet"))
         if not files:
             raise MarketStoreError("empty_store_dataset")
-        glob = (root / "datasets" / ds / "**" / "data.parquet").as_posix()
+        glob = (root / "datasets" / ds / "**" / "data.parquet").as_posix().replace("'", "''")
         con.execute(
-            f"CREATE VIEW {view} AS SELECT * FROM read_parquet(?, hive_partitioning=true, union_by_name=true)",
-            [glob],
+            f"CREATE VIEW {view} AS SELECT * FROM read_parquet('" + glob + "', hive_partitioning=true, union_by_name=true)"
         )
     return con
 
 
 def duckdb_smoke_audit(store_root):
     con = open_readonly_duckdb_views(store_root)
-    return {v: con.execute(f"SELECT count(*) FROM {v}").fetchone()[0] for v in VIEWS.values()}
+    try:
+        return {v: con.execute(f"SELECT count(*) FROM {v}").fetchone()[0] for v in VIEWS.values()}
+    finally:
+        con.close()

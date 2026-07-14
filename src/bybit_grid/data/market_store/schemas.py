@@ -1,5 +1,5 @@
 from __future__ import annotations
-from decimal import Decimal
+from decimal import Decimal, localcontext, Inexact, Rounded, InvalidOperation
 import pyarrow as pa
 from .models import MarketDatasetKind, MarketStoreError
 
@@ -92,9 +92,13 @@ def ensure_decimal128_38_18(v):
         raise MarketStoreError("decimal_rounding_required")
     q = Decimal("0.000000000000000001")
     try:
-        qv = v.quantize(q)
-    except Exception as e:
-        raise MarketStoreError("decimal_precision_overflow") from e
+        with localcontext() as ctx:
+            ctx.prec = 80
+            ctx.traps[Inexact] = True
+            ctx.traps[Rounded] = True
+            qv = v.quantize(q)
+    except (InvalidOperation, Inexact, Rounded) as e:
+        raise MarketStoreError("decimal_rounding_required") from e
     if qv != v:
         raise MarketStoreError("decimal_rounding_required")
     as_int = abs(int(qv.scaleb(18)))
