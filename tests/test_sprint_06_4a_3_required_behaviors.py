@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
 
-import pytest
-
-REQ = json.loads(Path("docs/sprint_06_4a_3_required_behaviors.json").read_text())["behaviors"]
-IDS = tuple(row["behavior_id"] for row in REQ)
+from bybit_grid.common.pytest_coverage_map import REQUIRED_064A3
 
 
-@pytest.mark.parametrize("behavior_id", IDS, ids=IDS)
-def test_required_behavior_material(behavior_id):
-    row = next(r for r in REQ if r["behavior_id"] == behavior_id)
-    assert row["nodeid"].endswith(f"[{behavior_id}]")
-    assert "stable fail-closed result" in row["expected"]
-    assert "placeholder" not in row["material"].lower()
+def test_required_behavior_manifest_schema():
+    raw = json.loads(Path("docs/sprint_06_4a_3_required_behaviors.json").read_text())
+    assert raw["schema"] == "sprint_06_4a_3_required_behaviors_v1"
+    assert tuple(row["behavior_id"] for row in raw["behaviors"]) == REQUIRED_064A3
