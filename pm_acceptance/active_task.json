@@ -1,0 +1,1 @@
+{"allowed_paths":[],"forbidden_paths":["AGENTS.md",".github/CODEOWNERS",".github/workflows/pm-acceptance.yml","pm_acceptance/**","docs/frozen_contracts/**","scripts/check_protected_paths.py","scripts/check_task_scope.py"],"required_commands":[],"required_paths":[],"schema":"pm_active_task_v1","task_id":"NO_ACTIVE_IMPLEMENTATION"}

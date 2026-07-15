@@ -1,0 +1,76 @@
+name: PM Acceptance
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  protected-paths:
+    name: protected-paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Fetch PR head for diff only
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+      - name: Check protected paths and task scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python scripts/check_protected_paths.py --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
+          python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
+
+  acceptance:
+    name: acceptance (${{ matrix.python-version }})
+    needs: protected-paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Restore base-controlled acceptance files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git checkout "$BASE_SHA" -- pm_acceptance
+          git checkout "$BASE_SHA" -- AGENTS.md scripts/check_protected_paths.py scripts/check_task_scope.py docs/frozen_contracts
+      # Security: PR code is executed with a read-only token, persist-credentials=false, no secrets, and base-controlled acceptance tests.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+      - name: Run PM acceptance checks
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python scripts/check_numeric_environment.py
+          python -m pip check
+          python scripts/check_no_live_execution.py
+          python -m compileall -q src tests scripts pm_acceptance
+          python -m pytest pm_acceptance -q
+          python -m pytest -q
+          ruff check .
+          git diff --check "$BASE_SHA"..."$HEAD_SHA"

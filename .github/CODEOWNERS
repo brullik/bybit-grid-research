@@ -1,0 +1,7 @@
+/AGENTS.md @brullik
+/.github/CODEOWNERS @brullik
+/.github/workflows/pm-acceptance.yml @brullik
+/pm_acceptance/ @brullik
+/docs/frozen_contracts/ @brullik
+/scripts/check_protected_paths.py @brullik
+/scripts/check_task_scope.py @brullik
