@@ -62,24 +62,45 @@ def read_dataset(root, kind, *, symbol=None, start_ms=None, end_ms=None):
     return tuple(sorted(rows, key=lambda r: row_key(kind, r)))
 
 
+def _validate_replay_args(symbol, start_ms, end_ms, snapshot_server_time_ms):
+    if type(symbol) is not str or not symbol or "/" in symbol or "\\" in symbol or ".." in symbol:
+        raise MarketStoreError("unsafe_symbol")
+    for name, value in (("start", start_ms), ("end", end_ms), ("snapshot", snapshot_server_time_ms)):
+        if type(value) is not int:
+            raise MarketStoreError(f"{name}_not_exact_int")
+        if value < 0:
+            raise MarketStoreError(f"{name}_negative")
+        if value % 60000:
+            raise MarketStoreError(f"{name}_unaligned")
+    if start_ms > end_ms:
+        raise MarketStoreError("timestamp_range_reversed")
+
+
 def read_replay_slice(root, *, symbol, start_ms, end_ms, snapshot_server_time_ms):
-    if snapshot_server_time_ms is None:
-        raise MarketStoreError("explicit_instrument_snapshot_required")
-    tr = read_dataset(
-        root, MarketDatasetKind.trade_kline_1m, symbol=symbol, start_ms=start_ms, end_ms=end_ms
+    _validate_replay_args(symbol, start_ms, end_ms, snapshot_server_time_ms)
+    inst = tuple(
+        r for r in read_dataset(root, MarketDatasetKind.instrument_snapshot, symbol=symbol)
+        if r["snapshot_server_time_ms"] == snapshot_server_time_ms
     )
-    mk = read_dataset(
-        root, MarketDatasetKind.mark_kline_1m, symbol=symbol, start_ms=start_ms, end_ms=end_ms
-    )
+    if len(inst) != 1:
+        raise MarketStoreError("instrument_snapshot_match_invalid")
+    tr = read_dataset(root, MarketDatasetKind.trade_kline_1m, symbol=symbol, start_ms=start_ms, end_ms=end_ms)
+    mk = read_dataset(root, MarketDatasetKind.mark_kline_1m, symbol=symbol, start_ms=start_ms, end_ms=end_ms)
     exp = tuple(range(start_ms, end_ms + 1, 60000))
     if tuple(r["open_time_ms"] for r in tr) != exp:
         raise MarketStoreError("incomplete_trade_coverage")
     if tuple(r["open_time_ms"] for r in mk) != exp:
         raise MarketStoreError("incomplete_mark_coverage")
-    return {
-        "trade_klines": tr,
-        "mark_klines": mk,
-        "funding_rates": read_dataset(
-            root, MarketDatasetKind.funding_rate, symbol=symbol, start_ms=start_ms, end_ms=end_ms
-        ),
-    }
+    mark_by_ts = {}
+    for r in mk:
+        ts = r["open_time_ms"]
+        if ts in mark_by_ts:
+            raise MarketStoreError("duplicate_mark_join")
+        mark_by_ts[ts] = r
+    funding = []
+    for r in read_dataset(root, MarketDatasetKind.funding_rate, symbol=symbol, start_ms=start_ms, end_ms=end_ms):
+        ts = r["funding_time_ms"]
+        if ts not in mark_by_ts:
+            raise MarketStoreError("funding_mark_join_missing")
+        funding.append({"funding_time_ms": ts, "funding_rate": r["funding_rate"], "mark_open": mark_by_ts[ts]["open"]})
+    return {"instrument": inst[0], "trade_klines": tr, "mark_klines": mk, "funding_observations": tuple(funding)}

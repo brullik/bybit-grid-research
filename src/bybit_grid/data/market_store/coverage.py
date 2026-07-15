@@ -9,15 +9,47 @@ from .models import (
 )
 
 
-def scan_minute_coverage(symbol, start_ms, end_ms, timestamps):
-    for n, v in [("start", start_ms), ("end", end_ms)]:
-        if type(v) is not int or v % 60000:
-            raise MarketStoreError(f"{n}_invalid")
-    c = Counter(timestamps)
+def _validate_symbol(symbol):
+    if type(symbol) is not str or not symbol or "/" in symbol or "\\" in symbol or ".." in symbol:
+        raise MarketStoreError("unsafe_symbol")
+    return symbol
+
+
+def _validate_minute_ts(v, name="timestamp"):
+    if type(v) is not int:
+        raise MarketStoreError(f"{name}_not_exact_int")
+    if v < 0:
+        raise MarketStoreError(f"{name}_negative")
+    if v % 60000:
+        raise MarketStoreError(f"{name}_unaligned")
+    return v
+
+
+def _validate_window(symbol, start_ms, end_ms):
+    _validate_symbol(symbol)
+    _validate_minute_ts(start_ms, "start")
+    _validate_minute_ts(end_ms, "end")
+    if start_ms > end_ms:
+        raise MarketStoreError("timestamp_range_reversed")
+
+
+def _validate_observed(timestamps, start_ms=None, end_ms=None, reject_duplicates=True):
+    out = []
+    for ts in timestamps:
+        _validate_minute_ts(ts)
+        if start_ms is not None and (ts < start_ms or ts > end_ms):
+            raise MarketStoreError("timestamp_out_of_window")
+        out.append(ts)
+    c = Counter(out)
     dups = tuple(sorted(k for k, v in c.items() if v > 1))
-    if dups:
+    if dups and reject_duplicates:
         raise MarketStoreError("duplicate_timestamp")
-    present = sorted(set(timestamps))
+    return tuple(out)
+
+
+def scan_minute_coverage(symbol, start_ms, end_ms, timestamps):
+    _validate_window(symbol, start_ms, end_ms)
+    present = sorted(_validate_observed(timestamps, start_ms, end_ms))
     miss = []
     ints = []
 
@@ -33,14 +65,14 @@ def scan_minute_coverage(symbol, start_ms, end_ms, timestamps):
                 s = p = x
         out.append(cls(s, p, (p - s) // 60000 + 1))
 
-    add([x for x in present if start_ms <= x <= end_ms], CoverageInterval, ints)
+    add(present, CoverageInterval, ints)
     expected = set(range(start_ms, end_ms + 1, 60000))
     add(sorted(expected - set(present)), MissingMinuteWindow, miss)
-    return MinuteCoverageAudit(symbol, start_ms, end_ms, tuple(ints), tuple(miss), dups, not miss)
+    return MinuteCoverageAudit(symbol, start_ms, end_ms, tuple(ints), tuple(miss), (), not miss)
 
 
 def plan_missing_minute_windows(audit, max_rows=1000):
-    if type(max_rows) is not int or max_rows <= 0:
+    if type(max_rows) is not int or max_rows <= 0 or max_rows > 1000:
         raise MarketStoreError("max_rows_invalid")
     out = []
     for w in audit.missing_windows:
@@ -63,9 +95,11 @@ def plan_trade_mark_repairs(trade_audit, mark_audit, max_rows=1000):
 
 
 def scan_funding_observed_range(symbol, timestamps):
-    c = Counter(timestamps)
-    d = tuple(sorted(k for k, v in c.items() if v > 1))
+    _validate_symbol(symbol)
+    observed = _validate_observed(timestamps, reject_duplicates=False)
+    c = Counter(observed)
+    dups = tuple(sorted(k for k, v in c.items() if v > 1))
     u = sorted(c)
     return FundingObservedRangeAudit(
-        symbol, len(timestamps), u[0] if u else None, u[-1] if u else None, d, False
+        symbol, len(observed), u[0] if u else None, u[-1] if u else None, dups, False
     )

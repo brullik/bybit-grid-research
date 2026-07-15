@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from decimal import Decimal
 from pathlib import Path
 from enum import Enum
@@ -43,23 +43,28 @@ def plain(v):
     if isinstance(v, Enum):
         return v.value
     if is_dataclass(v):
-        return plain(asdict(v))
+        return {f.name: plain(getattr(v, f.name)) for f in fields(v)}
     if isinstance(v, (dict, MappingProxyType)):
         out = {}
-        for k in sorted(v):
+        keys = []
+        for k in v:
             if type(k) is not str or not k:
                 raise MarketStoreError("mapping_key_invalid")
+            keys.append(k)
+        for k in sorted(keys):
             out[k] = plain(v[k])
         return out
-    if isinstance(v, (list, tuple)):
+    if isinstance(v, tuple):
         return [plain(x) for x in v]
+    if isinstance(v, list):
+        raise MarketStoreError("mutable_sequence_forbidden")
     if isinstance(v, (bytes, bytearray, set, frozenset, Path)):
         raise MarketStoreError("type_forbidden")
     raise MarketStoreError(f"type_unknown:{type(v).__name__}")
 
 
 def row_key(kind, row):
-    d = asdict(row) if is_dataclass(row) else dict(row)
+    d = {f.name: getattr(row, f.name) for f in fields(row)} if is_dataclass(row) else dict(row)
     return tuple(d[k] for k in PK[MarketDatasetKind(kind)])
 
 
@@ -67,7 +72,7 @@ def canonical_jsonl_bytes(kind, rows) -> bytes:
     kind = MarketDatasetKind(kind)
     out = []
     for r in sorted(rows, key=lambda x: row_key(kind, x)):
-        d = asdict(r) if is_dataclass(r) else dict(r)
+        d = {f.name: getattr(r, f.name) for f in fields(r)} if is_dataclass(r) else dict(r)
         out.append(
             json.dumps(
                 plain(d), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False

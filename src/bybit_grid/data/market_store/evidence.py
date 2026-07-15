@@ -20,6 +20,9 @@ def make_seed_review_pack(store_root, dest):
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     if tmp.exists():
         tmp.unlink()
+    aud0 = audit_market_store(store_root)
+    if not aud0.ok:
+        raise MarketStoreError("store_audit_failed")
     manifest = {}
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for p in sorted(store_root.rglob("*")):
@@ -49,6 +52,8 @@ def check_seed_review_pack(path):
         for n in names:
             _safe(n)
         man = json.loads(z.read("review_pack_manifest.json"))["members"]
+        if type(man) is not dict or not man:
+            raise MarketStoreError("empty_manifest")
         for n, h in man.items():
             if n not in names:
                 raise MarketStoreError("missing_zip_member")

@@ -33,4 +33,6 @@ def test_atomic_chunk_roundtrip_and_idempotent_reuse(tmp_path):
         tmp_path, MarketDatasetKind.trade_kline_1m, symbol="BTCUSDT", start_ms=0, end_ms=60000
     )
     assert rows[0]["open"] == Decimal("1.000000000000000000")
-    assert audit_market_store(tmp_path).ok
+    audit = audit_market_store(tmp_path)
+    assert not audit.ok
+    assert "chunks_without_receipt" in audit.failures
