@@ -1,21 +1,30 @@
 from __future__ import annotations
 import hashlib
 from pathlib import Path
+import pyarrow as pa
 import pyarrow.parquet as pq
 from .models import MarketDatasetKind, MarketStoreError, FundingReplayObservation, ReplaySlice, freeze_immutable
 from .schemas import schema_for
 from .parsing import parse_chunk_manifest_bytes
 from .canonical import logical_rows_sha256, row_key
-from .paths import rel_chunk_path
+from .paths import (
+    _absolute_lexical_path,
+    _safe_dataset_kind,
+    ensure_safe_store_path,
+    rel_chunk_path,
+)
 
 
 def _chunk_dirs(root, kind):
-    return sorted((Path(root) / "datasets" / MarketDatasetKind(kind).value).glob("**/chunk=*"))
+    kind = _safe_dataset_kind(kind)
+    return sorted((Path(root) / "datasets" / kind.value).glob("**/chunk=*"))
 
 
 def read_and_validate_chunk(store_root: Path, chunk_dir: Path, *, expected_manifest=None):
-    store_root = Path(store_root)
-    d = Path(chunk_dir)
+    store_root = _absolute_lexical_path(store_root)
+    d = _absolute_lexical_path(chunk_dir)
+    ensure_safe_store_path(store_root, store_root)
+    ensure_safe_store_path(store_root, d)
     if not d.is_dir() or d.is_symlink():
         raise MarketStoreError("chunk_dir_contract_invalid")
     try:
@@ -37,10 +46,17 @@ def read_and_validate_chunk(store_root: Path, chunk_dir: Path, *, expected_manif
     data = d / "data.parquet"
     if hashlib.sha256(data.read_bytes()).hexdigest() != mf.parquet_sha256:
         raise MarketStoreError("parquet_sha256_mismatch")
-    t = pq.read_table(data)
+    try:
+        t = pq.read_table(data)
+    except (pa.ArrowException, OSError, UnicodeError) as exc:
+        raise MarketStoreError("parquet_read_invalid") from exc
     if t.schema != schema_for(kind):
         raise MarketStoreError("schema_mismatch")
-    rows = tuple(freeze_immutable(r, field_name="row") for r in t.to_pylist())
+    try:
+        py_rows = t.to_pylist()
+    except (pa.ArrowException, OSError, UnicodeError) as exc:
+        raise MarketStoreError("parquet_read_invalid") from exc
+    rows = tuple(freeze_immutable(r, field_name="row") for r in py_rows)
     if not rows:
         raise MarketStoreError("empty_chunk")
     keys = tuple(row_key(kind, r) for r in rows)
@@ -84,13 +100,16 @@ def _read_chunk(d, kind):
         raise MarketStoreError("chunk_dir_contract_invalid")
     root = Path(*parts[:parts.index("datasets")])
     mf, rows = read_and_validate_chunk(root, d)
-    if mf.dataset != MarketDatasetKind(kind).value:
+    if mf.dataset != _safe_dataset_kind(kind).value:
         raise MarketStoreError("manifest_schema_invalid")
     return rows
 
 
 def read_dataset(root, kind, *, symbol=None, start_ms=None, end_ms=None):
-    kind = MarketDatasetKind(kind)
+    kind = _safe_dataset_kind(kind)
+    root = _absolute_lexical_path(root)
+    ensure_safe_store_path(root, root)
+    ensure_safe_store_path(root, root / "datasets" / kind.value)
     rows = []
     seen = {}
     for d in _chunk_dirs(root, kind):
