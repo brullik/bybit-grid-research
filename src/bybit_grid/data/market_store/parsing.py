@@ -93,3 +93,4 @@ def parse_seed_manifest_bytes(data: bytes) -> MappingProxyType:
     if canonical_json_bytes(obj) != data:
         raise MarketStoreError(f"{ctx}_canonical_mismatch")
     return obj
+# RED acceptance probe only: no behavioral implementation; do not merge.
