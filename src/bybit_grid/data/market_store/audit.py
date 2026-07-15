@@ -192,15 +192,19 @@ def audit_market_store(root):
         declared_chunks: set[str] = set()
         for manifest in receipt.chunks:
             chunk_rel = manifest.relative_path
+            manifest_rel = f"{chunk_rel}/chunk_manifest.json"
+            data_rel = f"{chunk_rel}/data.parquet"
             if chunk_rel in declared_chunks:
                 failures.append(f"duplicate_receipt_chunk:{rel}:{chunk_rel}")
             declared_chunks.add(chunk_rel)
             receipt_chunks.add(chunk_rel)
             _expect(expected, chunk_rel, "directory")
-            _expect(expected, f"{chunk_rel}/chunk_manifest.json", "file")
-            _expect(expected, f"{chunk_rel}/data.parquet", "file")
+            _expect(expected, manifest_rel, "file")
+            _expect(expected, data_rel, "file")
             if entries.get(chunk_rel) != "directory":
                 failures.append(f"receipt_chunk_missing:{chunk_rel}")
+                continue
+            if entries.get(manifest_rel) != "file" or entries.get(data_rel) != "file":
                 continue
             try:
                 _manifest, rows = read_and_validate_chunk(
