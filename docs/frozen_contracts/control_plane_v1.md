@@ -41,7 +41,7 @@ Control-plane v1 does not support dependency changes. Implementation PRs, PM tas
 
 1. The PM first opens a `pm-task-definition` PR on `main` that changes the canonical `pm_acceptance/active_task.json`, adds at least one frozen test below `pm_acceptance/tasks/<task_id>/`, and may add the matching `docs/frozen_contracts/tasks/<task_id>.md` contract.
 2. After every required check succeeds, the authorized autonomous maintainer may mark the valid non-probe PR ready and merge it at its unchanged expected head SHA.
-3. The PM opens a deliberately empty or no-production-change implementation probe PR.
+3. The PM opens a deliberately empty or no-production-change implementation probe PR from a `probe/` branch.
 4. The PM confirms the new base-controlled acceptance tests fail for the exact expected behavioral reason on that red probe.
 5. The PM closes the probe without merge. A mandatory RED probe is never mergeable under the standing authorization.
 6. Only after recorded red-probe evidence exists may Codex start the implementation task and open a separate implementation PR from fresh `main`.
@@ -63,7 +63,7 @@ This governance revision does not enable private or live execution. The existing
 
 ## Aggregate head status
 
-The base-owned `pull_request_target` workflow publishes a `pm-acceptance` commit status on the exact pull-request head SHA. A minimal pending job publishes the Actions run URL before acceptance. A final `always()` job reports success only when the pending publication, protected-path job, and complete acceptance matrix all succeeded; every other result publishes failure or leaves the status pending.
+The base-owned `pull_request_target` workflow publishes a `pm-acceptance` commit status on the exact pull-request head SHA. A minimal pending job publishes the Actions run URL before acceptance. A final `always()` job reports success only when the pending publication, protected-path job, and complete acceptance matrix all succeeded and the PR is Ready, owner-authored, and not on a `probe/` branch. Every other completed result publishes failure or error. The status remains pending only if the finalizer cannot publish its result.
 
 Only the two status publisher jobs receive `statuses: write`. They do not check out or execute pull-request head code. The protected-path and acceptance jobs retain read-only permissions. This makes the run URL and aggregate result discoverable from the head SHA without transferring a user-supplied Actions URL and without exposing a write token to untrusted head code.
 
