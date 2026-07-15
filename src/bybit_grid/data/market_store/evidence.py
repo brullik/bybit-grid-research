@@ -68,3 +68,4 @@ def check_seed_review_pack(path):
         if extra:
             raise MarketStoreError("extra_zip_member")
     return {"ok": True}
+# RED probe: strict portable seed-pack behavior remains intentionally unimplemented.
