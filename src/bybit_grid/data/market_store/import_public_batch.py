@@ -1,5 +1,7 @@
 from __future__ import annotations
 import hashlib
+import tempfile
+import zipfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from types import MappingProxyType
@@ -23,27 +25,48 @@ class ValidatedPublicBatchEvidence:
     source_bytes: bytes
 
 
+def load_validated_public_replay_batch_from_review_pack_bytes(
+    source_bytes: bytes, *, expected_run_id: str, expected_sha256: str | None = None
+) -> ValidatedPublicBatchEvidence:
+    if type(source_bytes) is not bytes or not source_bytes:
+        raise MarketStoreError("source_bytes_invalid")
+    sha = hashlib.sha256(source_bytes).hexdigest()
+    if expected_sha256 is not None and sha != expected_sha256:
+        raise MarketStoreError("source_sha256_mismatch")
+    tmp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            tmp.write(source_bytes)
+            tmp_name = tmp.name
+        validate_review_pack(Path(tmp_name), expected_run_id)
+        with zipfile.ZipFile(__import__("io").BytesIO(source_bytes)) as z:
+            plan = strict_json_loads(z.read("capture_plan.json").decode())
+            status = strict_json_loads(z.read("public_batch_run_status.json").decode())
+            if status.get("status") != "complete":
+                raise MarketStoreError("source_status_incomplete")
+            rec = records_from_jsonl(z.read("recorded_public_responses.jsonl"), capture_plan=plan)
+        rebuilt = reconstruct_from_records(
+            rec, symbol="BTCUSDT", kline_row_count=1001, funding_lookback_days=100
+        )
+        batch = rebuilt["batch"]
+        audit = getattr(batch, "audit", None)
+        if audit is not None:
+            if getattr(audit, "private_api_used_bool", False) or getattr(audit, "live_execution_present_bool", False):
+                raise MarketStoreError("source_private_or_live_forbidden")
+            if not getattr(audit, "sufficient_for_parquet_storage_engineering_bool", True):
+                raise MarketStoreError("source_not_storage_sufficient")
+        return ValidatedPublicBatchEvidence(expected_run_id, sha, batch, MappingProxyType(rebuilt), bytes(source_bytes))
+    finally:
+        if tmp_name is not None:
+            Path(tmp_name).unlink(missing_ok=True)
+
+
 def load_validated_public_replay_batch_from_review_pack(
     path: Path, *, expected_run_id: str, expected_sha256: str | None = None
 ):
-    b = Path(path).read_bytes()
-    sha = hashlib.sha256(b).hexdigest()
-    if expected_sha256 and sha != expected_sha256:
-        raise MarketStoreError("source_sha256_mismatch")
-    validate_review_pack(Path(path), expected_run_id)
-    import zipfile
-
-    with zipfile.ZipFile(path) as z:
-        plan = strict_json_loads(z.read("capture_plan.json").decode())
-        status = strict_json_loads(z.read("public_batch_run_status.json").decode())
-        if status.get("status") != "complete":
-            raise MarketStoreError("source_status_incomplete")
-        rec = records_from_jsonl(z.read("recorded_public_responses.jsonl"), capture_plan=plan)
-    rebuilt = reconstruct_from_records(
-        rec, symbol="BTCUSDT", kline_row_count=1001, funding_lookback_days=100
-    )
-    return ValidatedPublicBatchEvidence(
-        expected_run_id, sha, rebuilt["batch"], MappingProxyType(rebuilt), bytes(b)
+    source_bytes = Path(path).read_bytes()
+    return load_validated_public_replay_batch_from_review_pack_bytes(
+        source_bytes, expected_run_id=expected_run_id, expected_sha256=expected_sha256
     )
 
 

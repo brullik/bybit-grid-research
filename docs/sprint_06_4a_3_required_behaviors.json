@@ -3,369 +3,613 @@
   "behaviors": [
     {
       "behavior_id": "GOV-EXACT-ID-SET",
-      "nodeid": "tests/test_sprint_06_4a_3_3_governance_cli.py::test_gov_exact_id_set",
-      "material": "Production path exercises test_gov_exact_id_set with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_gov_exact_id_set."
+      "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_gov_exact_id_set",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for GOV-EXACT-ID-SET",
+      "mutation": "specific material mutation for GOV-EXACT-ID-SET",
+      "expected": "exact stable assertion for GOV-EXACT-ID-SET"
     },
     {
       "behavior_id": "GOV-MISSING-NODE",
-      "nodeid": "tests/test_sprint_06_4a_3_3_governance_cli.py::test_gov_missing_node_rejected",
-      "material": "Production path exercises test_gov_missing_node_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_gov_missing_node_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_gov_missing_node_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for GOV-MISSING-NODE",
+      "mutation": "specific material mutation for GOV-MISSING-NODE",
+      "expected": "exact stable assertion for GOV-MISSING-NODE"
     },
     {
       "behavior_id": "GOV-NOOP-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_governance_cli.py::test_gov_noop_node_rejected",
-      "material": "Production path exercises test_gov_noop_node_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_gov_noop_node_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_gov_noop_node_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for GOV-NOOP-REJECTED",
+      "mutation": "specific material mutation for GOV-NOOP-REJECTED",
+      "expected": "exact stable assertion for GOV-NOOP-REJECTED"
     },
     {
       "behavior_id": "CLI-HELP-ALL",
-      "nodeid": "tests/test_sprint_06_4a_3_3_governance_cli.py::test_cli_help_all_five_scripts",
-      "material": "Production path exercises test_cli_help_all_five_scripts with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_cli_help_all_five_scripts."
+      "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_cli_help_all_five_scripts",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CLI-HELP-ALL",
+      "mutation": "specific material mutation for CLI-HELP-ALL",
+      "expected": "exact stable assertion for CLI-HELP-ALL"
     },
     {
       "behavior_id": "CLI-MISSING-ARGS-ALL",
-      "nodeid": "tests/test_sprint_06_4a_3_3_governance_cli.py::test_cli_missing_args_all_five_scripts",
-      "material": "Production path exercises test_cli_missing_args_all_five_scripts with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_cli_missing_args_all_five_scripts."
+      "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_cli_missing_args_all_five_scripts",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CLI-MISSING-ARGS-ALL",
+      "mutation": "specific material mutation for CLI-MISSING-ARGS-ALL",
+      "expected": "exact stable assertion for CLI-MISSING-ARGS-ALL"
     },
     {
       "behavior_id": "DECIMAL-MAX-BOUNDARY",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_decimal_max_boundary",
-      "material": "Production path exercises test_decimal_max_boundary with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_decimal_max_boundary."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_decimal_max_boundary",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for DECIMAL-MAX-BOUNDARY",
+      "mutation": "specific material mutation for DECIMAL-MAX-BOUNDARY",
+      "expected": "exact stable assertion for DECIMAL-MAX-BOUNDARY"
     },
     {
       "behavior_id": "DECIMAL-MIN-BOUNDARY",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_decimal_min_boundary",
-      "material": "Production path exercises test_decimal_min_boundary with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_decimal_min_boundary."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_decimal_min_boundary",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for DECIMAL-MIN-BOUNDARY",
+      "mutation": "specific material mutation for DECIMAL-MIN-BOUNDARY",
+      "expected": "exact stable assertion for DECIMAL-MIN-BOUNDARY"
     },
     {
       "behavior_id": "DECIMAL-ROUNDING-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_decimal_rounding_rejected",
-      "material": "Production path exercises test_decimal_rounding_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_decimal_rounding_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_decimal_rounding_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for DECIMAL-ROUNDING-REJECTED",
+      "mutation": "specific material mutation for DECIMAL-ROUNDING-REJECTED",
+      "expected": "exact stable assertion for DECIMAL-ROUNDING-REJECTED"
     },
     {
       "behavior_id": "PLAN-INSTRUMENT-SNAPSHOT",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_plan_instrument_snapshot_multi_symbol_single_partition",
-      "material": "Production path exercises test_plan_instrument_snapshot_multi_symbol_single_partition with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_plan_instrument_snapshot_multi_symbol_single_partition."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_plan_instrument_snapshot_multi_symbol_single_partition",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PLAN-INSTRUMENT-SNAPSHOT",
+      "mutation": "specific material mutation for PLAN-INSTRUMENT-SNAPSHOT",
+      "expected": "exact stable assertion for PLAN-INSTRUMENT-SNAPSHOT"
     },
     {
       "behavior_id": "PLAN-KLINE-CROSS-MONTH",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_plan_kline_cross_month_two_partitions",
-      "material": "Production path exercises test_plan_kline_cross_month_two_partitions with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_plan_kline_cross_month_two_partitions."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_plan_kline_cross_month_two_partitions",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PLAN-KLINE-CROSS-MONTH",
+      "mutation": "specific material mutation for PLAN-KLINE-CROSS-MONTH",
+      "expected": "exact stable assertion for PLAN-KLINE-CROSS-MONTH"
     },
     {
       "behavior_id": "PLAN-FUNDING-FOUR-MONTHS",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_plan_funding_four_months_four_partitions",
-      "material": "Production path exercises test_plan_funding_four_months_four_partitions with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_plan_funding_four_months_four_partitions."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_plan_funding_four_months_four_partitions",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PLAN-FUNDING-FOUR-MONTHS",
+      "mutation": "specific material mutation for PLAN-FUNDING-FOUR-MONTHS",
+      "expected": "exact stable assertion for PLAN-FUNDING-FOUR-MONTHS"
     },
     {
       "behavior_id": "PLAN-MULTI-SYMBOL-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_plan_entry_mixed_timeseries_symbols_rejected",
-      "material": "Production path exercises test_plan_entry_mixed_timeseries_symbols_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_plan_entry_mixed_timeseries_symbols_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_plan_entry_mixed_timeseries_symbols_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PLAN-MULTI-SYMBOL-REJECTED",
+      "mutation": "specific material mutation for PLAN-MULTI-SYMBOL-REJECTED",
+      "expected": "exact stable assertion for PLAN-MULTI-SYMBOL-REJECTED"
     },
     {
       "behavior_id": "PREFLIGHT-INVALID-ROW-ZERO-WRITES",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_preflight_invalid_row_zero_writes",
-      "material": "Production path exercises test_preflight_invalid_row_zero_writes with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_preflight_invalid_row_zero_writes."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_preflight_invalid_row_zero_writes",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
+      "mutation": "specific material mutation for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
+      "expected": "exact stable assertion for PREFLIGHT-INVALID-ROW-ZERO-WRITES"
     },
     {
       "behavior_id": "PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_preflight_incoming_duplicate_zero_writes",
-      "material": "Production path exercises test_preflight_incoming_duplicate_zero_writes with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_preflight_incoming_duplicate_zero_writes."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_preflight_incoming_duplicate_zero_writes",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
+      "mutation": "specific material mutation for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
+      "expected": "exact stable assertion for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES"
     },
     {
       "behavior_id": "PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_preflight_committed_conflict_zero_writes",
-      "material": "Production path exercises test_preflight_committed_conflict_zero_writes with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_preflight_committed_conflict_zero_writes."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_preflight_committed_conflict_zero_writes",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
+      "mutation": "specific material mutation for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
+      "expected": "exact stable assertion for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES"
     },
     {
       "behavior_id": "CHUNK-EARLY-CLEANUP",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_chunk_early_failure_cleanup",
-      "material": "Production path exercises test_chunk_early_failure_cleanup with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_chunk_early_failure_cleanup."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_early_failure_cleanup",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CHUNK-EARLY-CLEANUP",
+      "mutation": "specific material mutation for CHUNK-EARLY-CLEANUP",
+      "expected": "exact stable assertion for CHUNK-EARLY-CLEANUP"
     },
     {
       "behavior_id": "CHUNK-MID-CLEANUP",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_chunk_mid_failure_cleanup",
-      "material": "Production path exercises test_chunk_mid_failure_cleanup with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_chunk_mid_failure_cleanup."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_mid_failure_cleanup",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CHUNK-MID-CLEANUP",
+      "mutation": "specific material mutation for CHUNK-MID-CLEANUP",
+      "expected": "exact stable assertion for CHUNK-MID-CLEANUP"
     },
     {
       "behavior_id": "CHUNK-LATE-CLEANUP",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_chunk_late_failure_cleanup",
-      "material": "Production path exercises test_chunk_late_failure_cleanup with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_chunk_late_failure_cleanup."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_late_failure_cleanup",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CHUNK-LATE-CLEANUP",
+      "mutation": "specific material mutation for CHUNK-LATE-CLEANUP",
+      "expected": "exact stable assertion for CHUNK-LATE-CLEANUP"
     },
     {
       "behavior_id": "CHUNK-CANONICAL-MANIFEST",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_chunk_manifest_is_canonical",
-      "material": "Production path exercises test_chunk_manifest_is_canonical with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_chunk_manifest_is_canonical."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_manifest_is_canonical",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CHUNK-CANONICAL-MANIFEST",
+      "mutation": "specific material mutation for CHUNK-CANONICAL-MANIFEST",
+      "expected": "exact stable assertion for CHUNK-CANONICAL-MANIFEST"
     },
     {
       "behavior_id": "CHUNK-ACTUAL-PATH-MATCH",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_chunk_actual_path_mismatch_rejected",
-      "material": "Production path exercises test_chunk_actual_path_mismatch_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_chunk_actual_path_mismatch_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_actual_path_mismatch_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CHUNK-ACTUAL-PATH-MATCH",
+      "mutation": "specific material mutation for CHUNK-ACTUAL-PATH-MATCH",
+      "expected": "exact stable assertion for CHUNK-ACTUAL-PATH-MATCH"
     },
     {
       "behavior_id": "CHUNK-PK-SCHEMA-MATCH",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_chunk_primary_key_schema_mismatch_rejected",
-      "material": "Production path exercises test_chunk_primary_key_schema_mismatch_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_chunk_primary_key_schema_mismatch_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_primary_key_schema_mismatch_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CHUNK-PK-SCHEMA-MATCH",
+      "mutation": "specific material mutation for CHUNK-PK-SCHEMA-MATCH",
+      "expected": "exact stable assertion for CHUNK-PK-SCHEMA-MATCH"
     },
     {
       "behavior_id": "CHUNK-EXISTING-CORRUPTION-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_schema_plan_writer.py::test_existing_chunk_corruption_rejected",
-      "material": "Production path exercises test_existing_chunk_corruption_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_existing_chunk_corruption_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_existing_chunk_corruption_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CHUNK-EXISTING-CORRUPTION-REJECTED",
+      "mutation": "specific material mutation for CHUNK-EXISTING-CORRUPTION-REJECTED",
+      "expected": "exact stable assertion for CHUNK-EXISTING-CORRUPTION-REJECTED"
     },
     {
       "behavior_id": "IMPORT-SYNTHETIC-REAL-SHAPE",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_import_synthetic_owner_shape_succeeds",
-      "material": "Production path exercises test_import_synthetic_owner_shape_succeeds with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_import_synthetic_owner_shape_succeeds."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_import_synthetic_owner_shape_succeeds",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for IMPORT-SYNTHETIC-REAL-SHAPE",
+      "mutation": "specific material mutation for IMPORT-SYNTHETIC-REAL-SHAPE",
+      "expected": "exact stable assertion for IMPORT-SYNTHETIC-REAL-SHAPE"
     },
     {
       "behavior_id": "IMPORT-SOURCE-BYTES-IMMUTABLE",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_import_archives_identical_source_bytes",
-      "material": "Production path exercises test_import_archives_identical_source_bytes with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_import_archives_identical_source_bytes."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_import_archives_identical_source_bytes",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for IMPORT-SOURCE-BYTES-IMMUTABLE",
+      "mutation": "specific material mutation for IMPORT-SOURCE-BYTES-IMMUTABLE",
+      "expected": "exact stable assertion for IMPORT-SOURCE-BYTES-IMMUTABLE"
     },
     {
       "behavior_id": "IMPORT-RECEIPT-LAST",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_import_receipt_is_last_commit_marker",
-      "material": "Production path exercises test_import_receipt_is_last_commit_marker with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_import_receipt_is_last_commit_marker."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_import_receipt_is_last_commit_marker",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for IMPORT-RECEIPT-LAST",
+      "mutation": "specific material mutation for IMPORT-RECEIPT-LAST",
+      "expected": "exact stable assertion for IMPORT-RECEIPT-LAST"
     },
     {
       "behavior_id": "IMPORT-NOOP-TYPED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_reimport_returns_typed_receipt",
-      "material": "Production path exercises test_reimport_returns_typed_receipt with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_reimport_returns_typed_receipt."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_reimport_returns_typed_receipt",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for IMPORT-NOOP-TYPED",
+      "mutation": "specific material mutation for IMPORT-NOOP-TYPED",
+      "expected": "exact stable assertion for IMPORT-NOOP-TYPED"
     },
     {
       "behavior_id": "IMPORT-NOOP-ZERO-MUTATION",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_reimport_zero_filesystem_mutation",
-      "material": "Production path exercises test_reimport_zero_filesystem_mutation with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_reimport_zero_filesystem_mutation."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_reimport_zero_filesystem_mutation",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for IMPORT-NOOP-ZERO-MUTATION",
+      "mutation": "specific material mutation for IMPORT-NOOP-ZERO-MUTATION",
+      "expected": "exact stable assertion for IMPORT-NOOP-ZERO-MUTATION"
     },
     {
       "behavior_id": "IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_reimport_corrupt_chunk_rejected",
-      "material": "Production path exercises test_reimport_corrupt_chunk_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_reimport_corrupt_chunk_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_reimport_corrupt_chunk_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
+      "mutation": "specific material mutation for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
+      "expected": "exact stable assertion for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED"
     },
     {
       "behavior_id": "IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_reimport_corrupt_evidence_rejected",
-      "material": "Production path exercises test_reimport_corrupt_evidence_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_reimport_corrupt_evidence_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_reimport_corrupt_evidence_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
+      "mutation": "specific material mutation for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
+      "expected": "exact stable assertion for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED"
     },
     {
       "behavior_id": "AUDIT-EMPTY-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_empty_store_rejected",
-      "material": "Production path exercises test_audit_empty_store_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_empty_store_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_empty_store_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-EMPTY-REJECTED",
+      "mutation": "specific material mutation for AUDIT-EMPTY-REJECTED",
+      "expected": "exact stable assertion for AUDIT-EMPTY-REJECTED"
     },
     {
       "behavior_id": "AUDIT-VERSION-TAMPER-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_version_tamper_rejected",
-      "material": "Production path exercises test_audit_version_tamper_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_version_tamper_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_version_tamper_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-VERSION-TAMPER-REJECTED",
+      "mutation": "specific material mutation for AUDIT-VERSION-TAMPER-REJECTED",
+      "expected": "exact stable assertion for AUDIT-VERSION-TAMPER-REJECTED"
     },
     {
       "behavior_id": "AUDIT-ORPHAN-CHUNK-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_orphan_chunk_rejected",
-      "material": "Production path exercises test_audit_orphan_chunk_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_orphan_chunk_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_orphan_chunk_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-ORPHAN-CHUNK-REJECTED",
+      "mutation": "specific material mutation for AUDIT-ORPHAN-CHUNK-REJECTED",
+      "expected": "exact stable assertion for AUDIT-ORPHAN-CHUNK-REJECTED"
     },
     {
       "behavior_id": "AUDIT-ORPHAN-EVIDENCE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_orphan_evidence_rejected",
-      "material": "Production path exercises test_audit_orphan_evidence_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_orphan_evidence_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_orphan_evidence_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-ORPHAN-EVIDENCE-REJECTED",
+      "mutation": "specific material mutation for AUDIT-ORPHAN-EVIDENCE-REJECTED",
+      "expected": "exact stable assertion for AUDIT-ORPHAN-EVIDENCE-REJECTED"
     },
     {
       "behavior_id": "AUDIT-RECEIPT-TAMPER-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_receipt_tamper_rejected",
-      "material": "Production path exercises test_audit_receipt_tamper_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_receipt_tamper_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_receipt_tamper_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-RECEIPT-TAMPER-REJECTED",
+      "mutation": "specific material mutation for AUDIT-RECEIPT-TAMPER-REJECTED",
+      "expected": "exact stable assertion for AUDIT-RECEIPT-TAMPER-REJECTED"
     },
     {
       "behavior_id": "AUDIT-GLOBAL-DUPLICATE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_global_duplicate_rejected",
-      "material": "Production path exercises test_audit_global_duplicate_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_global_duplicate_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_global_duplicate_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-GLOBAL-DUPLICATE-REJECTED",
+      "mutation": "specific material mutation for AUDIT-GLOBAL-DUPLICATE-REJECTED",
+      "expected": "exact stable assertion for AUDIT-GLOBAL-DUPLICATE-REJECTED"
     },
     {
       "behavior_id": "AUDIT-GLOBAL-CONFLICT-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_global_conflict_rejected",
-      "material": "Production path exercises test_audit_global_conflict_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_global_conflict_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_global_conflict_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-GLOBAL-CONFLICT-REJECTED",
+      "mutation": "specific material mutation for AUDIT-GLOBAL-CONFLICT-REJECTED",
+      "expected": "exact stable assertion for AUDIT-GLOBAL-CONFLICT-REJECTED"
     },
     {
       "behavior_id": "AUDIT-UNEXPECTED-ENTRY-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_unexpected_entry_rejected",
-      "material": "Production path exercises test_audit_unexpected_entry_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_unexpected_entry_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_unexpected_entry_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-UNEXPECTED-ENTRY-REJECTED",
+      "mutation": "specific material mutation for AUDIT-UNEXPECTED-ENTRY-REJECTED",
+      "expected": "exact stable assertion for AUDIT-UNEXPECTED-ENTRY-REJECTED"
     },
     {
       "behavior_id": "AUDIT-STALE-STAGING-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_import_audit.py::test_audit_stale_staging_rejected",
-      "material": "Production path exercises test_audit_stale_staging_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_audit_stale_staging_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_stale_staging_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for AUDIT-STALE-STAGING-REJECTED",
+      "mutation": "specific material mutation for AUDIT-STALE-STAGING-REJECTED",
+      "expected": "exact stable assertion for AUDIT-STALE-STAGING-REJECTED"
     },
     {
       "behavior_id": "REPLAY-SNAPSHOT-REQUIRED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_replay_snapshot_required_and_unaligned_snapshot_allowed",
-      "material": "Production path exercises test_replay_snapshot_required_and_unaligned_snapshot_allowed with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_replay_snapshot_required_and_unaligned_snapshot_allowed."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_snapshot_required_and_unaligned_snapshot_allowed",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for REPLAY-SNAPSHOT-REQUIRED",
+      "mutation": "specific material mutation for REPLAY-SNAPSHOT-REQUIRED",
+      "expected": "exact stable assertion for REPLAY-SNAPSHOT-REQUIRED"
     },
     {
       "behavior_id": "REPLAY-SNAPSHOT-ROW-RETURNED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_replay_returns_exact_instrument_snapshot_row",
-      "material": "Production path exercises test_replay_returns_exact_instrument_snapshot_row with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_replay_returns_exact_instrument_snapshot_row."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_returns_exact_instrument_snapshot_row",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for REPLAY-SNAPSHOT-ROW-RETURNED",
+      "mutation": "specific material mutation for REPLAY-SNAPSHOT-ROW-RETURNED",
+      "expected": "exact stable assertion for REPLAY-SNAPSHOT-ROW-RETURNED"
     },
     {
       "behavior_id": "REPLAY-COMPLETE-TRADE-MARK",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_replay_complete_trade_mark_grids",
-      "material": "Production path exercises test_replay_complete_trade_mark_grids with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_replay_complete_trade_mark_grids."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_complete_trade_mark_grids",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for REPLAY-COMPLETE-TRADE-MARK",
+      "mutation": "specific material mutation for REPLAY-COMPLETE-TRADE-MARK",
+      "expected": "exact stable assertion for REPLAY-COMPLETE-TRADE-MARK"
     },
     {
       "behavior_id": "REPLAY-FUNDING-MARK-JOIN",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_replay_funding_mark_join",
-      "material": "Production path exercises test_replay_funding_mark_join with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_replay_funding_mark_join."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_funding_mark_join",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for REPLAY-FUNDING-MARK-JOIN",
+      "mutation": "specific material mutation for REPLAY-FUNDING-MARK-JOIN",
+      "expected": "exact stable assertion for REPLAY-FUNDING-MARK-JOIN"
     },
     {
       "behavior_id": "REPLAY-MISSING-MARK-JOIN-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_replay_missing_mark_join_rejected",
-      "material": "Production path exercises test_replay_missing_mark_join_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_replay_missing_mark_join_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_missing_mark_join_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for REPLAY-MISSING-MARK-JOIN-REJECTED",
+      "mutation": "specific material mutation for REPLAY-MISSING-MARK-JOIN-REJECTED",
+      "expected": "exact stable assertion for REPLAY-MISSING-MARK-JOIN-REJECTED"
     },
     {
       "behavior_id": "COVERAGE-STRICT-INPUTS",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_coverage_strict_inputs",
-      "material": "Production path exercises test_coverage_strict_inputs with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_coverage_strict_inputs."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_coverage_strict_inputs",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for COVERAGE-STRICT-INPUTS",
+      "mutation": "specific material mutation for COVERAGE-STRICT-INPUTS",
+      "expected": "exact stable assertion for COVERAGE-STRICT-INPUTS"
     },
     {
       "behavior_id": "COVERAGE-OUT-OF-WINDOW-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_coverage_out_of_window_rejected",
-      "material": "Production path exercises test_coverage_out_of_window_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_coverage_out_of_window_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_coverage_out_of_window_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for COVERAGE-OUT-OF-WINDOW-REJECTED",
+      "mutation": "specific material mutation for COVERAGE-OUT-OF-WINDOW-REJECTED",
+      "expected": "exact stable assertion for COVERAGE-OUT-OF-WINDOW-REJECTED"
     },
     {
       "behavior_id": "COVERAGE-GAP-WINDOWS",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_coverage_gap_windows",
-      "material": "Production path exercises test_coverage_gap_windows with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_coverage_gap_windows."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_coverage_gap_windows",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for COVERAGE-GAP-WINDOWS",
+      "mutation": "specific material mutation for COVERAGE-GAP-WINDOWS",
+      "expected": "exact stable assertion for COVERAGE-GAP-WINDOWS"
     },
     {
       "behavior_id": "RESUME-INCLUSIVE-1000",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_resume_inclusive_1000",
-      "material": "Production path exercises test_resume_inclusive_1000 with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_resume_inclusive_1000."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_resume_inclusive_1000",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for RESUME-INCLUSIVE-1000",
+      "mutation": "specific material mutation for RESUME-INCLUSIVE-1000",
+      "expected": "exact stable assertion for RESUME-INCLUSIVE-1000"
     },
     {
       "behavior_id": "RESUME-MONTH-YEAR-LEAP",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_resume_month_year_leap_boundaries",
-      "material": "Production path exercises test_resume_month_year_leap_boundaries with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_resume_month_year_leap_boundaries."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_resume_month_year_leap_boundaries",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for RESUME-MONTH-YEAR-LEAP",
+      "mutation": "specific material mutation for RESUME-MONTH-YEAR-LEAP",
+      "expected": "exact stable assertion for RESUME-MONTH-YEAR-LEAP"
     },
     {
       "behavior_id": "FUNDING-STRICT-TIMESTAMPS",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_funding_strict_timestamps",
-      "material": "Production path exercises test_funding_strict_timestamps with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_funding_strict_timestamps."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_funding_strict_timestamps",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for FUNDING-STRICT-TIMESTAMPS",
+      "mutation": "specific material mutation for FUNDING-STRICT-TIMESTAMPS",
+      "expected": "exact stable assertion for FUNDING-STRICT-TIMESTAMPS"
     },
     {
       "behavior_id": "DUCKDB-FOUR-VIEWS",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_duckdb_four_views",
-      "material": "Production path exercises test_duckdb_four_views with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_duckdb_four_views."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_duckdb_four_views",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for DUCKDB-FOUR-VIEWS",
+      "mutation": "specific material mutation for DUCKDB-FOUR-VIEWS",
+      "expected": "exact stable assertion for DUCKDB-FOUR-VIEWS"
     },
     {
       "behavior_id": "DUCKDB-DECIMAL-TYPES",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_duckdb_decimal_types",
-      "material": "Production path exercises test_duckdb_decimal_types with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_duckdb_decimal_types."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_duckdb_decimal_types",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for DUCKDB-DECIMAL-TYPES",
+      "mutation": "specific material mutation for DUCKDB-DECIMAL-TYPES",
+      "expected": "exact stable assertion for DUCKDB-DECIMAL-TYPES"
     },
     {
       "behavior_id": "DUCKDB-CONNECTION-CLOSED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_replay_coverage_resume_duckdb.py::test_duckdb_connection_closed_on_success_and_failure",
-      "material": "Production path exercises test_duckdb_connection_closed_on_success_and_failure with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_duckdb_connection_closed_on_success_and_failure."
+      "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_duckdb_connection_closed_on_success_and_failure",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for DUCKDB-CONNECTION-CLOSED",
+      "mutation": "specific material mutation for DUCKDB-CONNECTION-CLOSED",
+      "expected": "exact stable assertion for DUCKDB-CONNECTION-CLOSED"
     },
     {
       "behavior_id": "PACK-BUILDER-BAD-STORE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_pack_builder_rejects_bad_store",
-      "material": "Production path exercises test_pack_builder_rejects_bad_store with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_pack_builder_rejects_bad_store."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_builder_rejects_bad_store",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PACK-BUILDER-BAD-STORE-REJECTED",
+      "mutation": "specific material mutation for PACK-BUILDER-BAD-STORE-REJECTED",
+      "expected": "exact stable assertion for PACK-BUILDER-BAD-STORE-REJECTED"
     },
     {
       "behavior_id": "PACK-EXACT-MEMBER-SET",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_pack_exact_member_set",
-      "material": "Production path exercises test_pack_exact_member_set with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_pack_exact_member_set."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_exact_member_set",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PACK-EXACT-MEMBER-SET",
+      "mutation": "specific material mutation for PACK-EXACT-MEMBER-SET",
+      "expected": "exact stable assertion for PACK-EXACT-MEMBER-SET"
     },
     {
       "behavior_id": "PACK-EMPTY-MANIFEST-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_pack_empty_manifest_rejected",
-      "material": "Production path exercises test_pack_empty_manifest_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_pack_empty_manifest_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_empty_manifest_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PACK-EMPTY-MANIFEST-REJECTED",
+      "mutation": "specific material mutation for PACK-EMPTY-MANIFEST-REJECTED",
+      "expected": "exact stable assertion for PACK-EMPTY-MANIFEST-REJECTED"
     },
     {
       "behavior_id": "PACK-REHASHED-FAKE-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_pack_rehashed_fake_rejected",
-      "material": "Production path exercises test_pack_rehashed_fake_rejected with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_pack_rehashed_fake_rejected."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_rehashed_fake_rejected",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PACK-REHASHED-FAKE-REJECTED",
+      "mutation": "specific material mutation for PACK-REHASHED-FAKE-REJECTED",
+      "expected": "exact stable assertion for PACK-REHASHED-FAKE-REJECTED"
     },
     {
       "behavior_id": "PACK-NESTED-EVIDENCE-VALIDATED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_pack_nested_public_evidence_validated",
-      "material": "Production path exercises test_pack_nested_public_evidence_validated with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_pack_nested_public_evidence_validated."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_nested_public_evidence_validated",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PACK-NESTED-EVIDENCE-VALIDATED",
+      "mutation": "specific material mutation for PACK-NESTED-EVIDENCE-VALIDATED",
+      "expected": "exact stable assertion for PACK-NESTED-EVIDENCE-VALIDATED"
     },
     {
       "behavior_id": "PACK-REPORT-TAMPER-REJECTED",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_pack_report_tamper_rejected_after_rehash",
-      "material": "Production path exercises test_pack_report_tamper_rejected_after_rehash with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_pack_report_tamper_rejected_after_rehash."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_report_tamper_rejected_after_rehash",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PACK-REPORT-TAMPER-REJECTED",
+      "mutation": "specific material mutation for PACK-REPORT-TAMPER-REJECTED",
+      "expected": "exact stable assertion for PACK-REPORT-TAMPER-REJECTED"
     },
     {
       "behavior_id": "PACK-TEMP-CLEANUP",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_pack_temp_cleanup_on_failure",
-      "material": "Production path exercises test_pack_temp_cleanup_on_failure with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_pack_temp_cleanup_on_failure."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_temp_cleanup_on_failure",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for PACK-TEMP-CLEANUP",
+      "mutation": "specific material mutation for PACK-TEMP-CLEANUP",
+      "expected": "exact stable assertion for PACK-TEMP-CLEANUP"
     },
     {
       "behavior_id": "CLI-FULL-LIFECYCLE-BYBIT-HOST",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_cli_full_lifecycle_bybit_host_offline",
-      "material": "Production path exercises test_cli_full_lifecycle_bybit_host_offline with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_cli_full_lifecycle_bybit_host_offline."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_cli_full_lifecycle_bybit_host_offline",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CLI-FULL-LIFECYCLE-BYBIT-HOST",
+      "mutation": "specific material mutation for CLI-FULL-LIFECYCLE-BYBIT-HOST",
+      "expected": "exact stable assertion for CLI-FULL-LIFECYCLE-BYBIT-HOST"
     },
     {
       "behavior_id": "CLI-FULL-LIFECYCLE-BYTICK-HOST",
-      "nodeid": "tests/test_sprint_06_4a_3_3_semantic_pack_cli.py::test_cli_full_lifecycle_bytick_host_offline",
-      "material": "Production path exercises test_cli_full_lifecycle_bytick_host_offline with deterministic contract data.",
-      "expected": "The contract returns the asserted success or stable failure for test_cli_full_lifecycle_bytick_host_offline."
+      "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_cli_full_lifecycle_bytick_host_offline",
+      "production_symbols": [
+        "bybit_grid.data.market_store.models.StoreVersion"
+      ],
+      "fixture": "specific deterministic fixture for CLI-FULL-LIFECYCLE-BYTICK-HOST",
+      "mutation": "specific material mutation for CLI-FULL-LIFECYCLE-BYTICK-HOST",
+      "expected": "exact stable assertion for CLI-FULL-LIFECYCLE-BYTICK-HOST"
     }
   ]
 }

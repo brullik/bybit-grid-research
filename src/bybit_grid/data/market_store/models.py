@@ -50,7 +50,12 @@ def strict_dec(v, n):
 
 def freeze_immutable(value, *, field_name):
     if type(value) is MappingProxyType:
-        return MappingProxyType({k: freeze_immutable(v, field_name=field_name) for k, v in value.items()})
+        out = {}
+        for k, v in value.items():
+            if type(k) is not str or not k:
+                raise MarketStoreError(f"{field_name}_key_invalid")
+            out[k] = freeze_immutable(v, field_name=field_name)
+        return MappingProxyType(out)
     if type(value) is dict:
         out = {}
         for k, v in value.items():
@@ -258,6 +263,14 @@ class StoreChunkInventoryRow:
     row_count: int
     logical_rows_sha256: str
 
+    def __post_init__(self):
+        MarketDatasetKind(self.dataset)
+        _safe_relative(self.relative_path, "relative_path")
+        strict_int(self.row_count, "row_count")
+        if self.row_count <= 0:
+            raise MarketStoreError("row_count_invalid")
+        _sha(self.logical_rows_sha256, "logical_rows_sha256")
+
 
 @dataclass(frozen=True)
 class CoverageInterval:
@@ -269,6 +282,15 @@ class CoverageInterval:
         strict_int(self.start_open_time_ms, "start_open_time_ms")
         strict_int(self.end_open_time_ms, "end_open_time_ms")
         strict_int(self.row_count, "row_count")
+        if self.start_open_time_ms < 0 or self.end_open_time_ms < 0:
+            raise MarketStoreError("timestamp_negative")
+        if self.start_open_time_ms % MINUTE_MS or self.end_open_time_ms % MINUTE_MS:
+            raise MarketStoreError("timestamp_unaligned")
+        if self.start_open_time_ms > self.end_open_time_ms:
+            raise MarketStoreError("coverage_interval_reversed")
+        expected = (self.end_open_time_ms - self.start_open_time_ms) // MINUTE_MS + 1
+        if self.row_count <= 0 or self.row_count != expected:
+            raise MarketStoreError("row_count_invalid")
 
 
 @dataclass(frozen=True)
@@ -287,6 +309,33 @@ class MinuteCoverageAudit:
     complete_bool: bool
     historical_market_data_coverage_proven_bool: bool = False
 
+    def __post_init__(self):
+        strict_str(self.symbol, "symbol")
+        strict_int(self.start_open_time_ms, "start_open_time_ms")
+        strict_int(self.end_open_time_ms, "end_open_time_ms")
+        if self.start_open_time_ms % MINUTE_MS or self.end_open_time_ms % MINUTE_MS or self.start_open_time_ms > self.end_open_time_ms:
+            raise MarketStoreError("coverage_window_invalid")
+        for name, typ in (("present_intervals", CoverageInterval), ("missing_windows", MissingMinuteWindow)):
+            xs = _tuple_exact(getattr(self, name), name)
+            prev = None
+            for x in xs:
+                if type(x) is not typ:
+                    raise MarketStoreError(f"{name}_invalid")
+                if x.start_open_time_ms < self.start_open_time_ms or x.end_open_time_ms > self.end_open_time_ms:
+                    raise MarketStoreError(f"{name}_outside_window")
+                if prev is not None and x.start_open_time_ms <= prev:
+                    raise MarketStoreError(f"{name}_not_ordered")
+                prev = x.end_open_time_ms
+        _tuple_exact(self.duplicate_timestamps, "duplicate_timestamps")
+        if any(type(x) is not int for x in self.duplicate_timestamps) or tuple(sorted(set(self.duplicate_timestamps))) != self.duplicate_timestamps:
+            raise MarketStoreError("duplicate_timestamps_invalid")
+        strict_bool(self.complete_bool, "complete_bool")
+        strict_bool(self.historical_market_data_coverage_proven_bool, "historical_market_data_coverage_proven_bool")
+        if self.historical_market_data_coverage_proven_bool:
+            raise MarketStoreError("historical_coverage_proven_forbidden")
+        if self.complete_bool != (self.missing_windows == ()):
+            raise MarketStoreError("complete_bool_invalid")
+
 
 @dataclass(frozen=True)
 class ReplayPairCoverageAudit:
@@ -295,6 +344,13 @@ class ReplayPairCoverageAudit:
     mark_complete_bool: bool
     timestamp_sets_equal_bool: bool
     replay_ready_bool: bool
+
+    def __post_init__(self):
+        strict_str(self.symbol, "symbol")
+        for n in ("trade_complete_bool", "mark_complete_bool", "timestamp_sets_equal_bool", "replay_ready_bool"):
+            strict_bool(getattr(self, n), n)
+        if self.replay_ready_bool != (self.trade_complete_bool and self.mark_complete_bool and self.timestamp_sets_equal_bool):
+            raise MarketStoreError("replay_ready_bool_invalid")
 
 
 @dataclass(frozen=True)
@@ -306,6 +362,26 @@ class FundingObservedRangeAudit:
     duplicate_timestamps: tuple[int, ...]
     funding_coverage_proven_bool: bool = False
 
+    def __post_init__(self):
+        strict_str(self.symbol, "symbol")
+        strict_int(self.observed_count, "observed_count")
+        if self.observed_count < 0:
+            raise MarketStoreError("observed_count_invalid")
+        if self.observed_count == 0:
+            if self.min_funding_time_ms is not None or self.max_funding_time_ms is not None:
+                raise MarketStoreError("funding_range_invalid")
+        else:
+            strict_int(self.min_funding_time_ms, "min_funding_time_ms")
+            strict_int(self.max_funding_time_ms, "max_funding_time_ms")
+            if self.min_funding_time_ms > self.max_funding_time_ms or self.min_funding_time_ms % MINUTE_MS or self.max_funding_time_ms % MINUTE_MS:
+                raise MarketStoreError("funding_range_invalid")
+        _tuple_exact(self.duplicate_timestamps, "duplicate_timestamps")
+        if any(type(x) is not int or x % MINUTE_MS for x in self.duplicate_timestamps) or tuple(sorted(set(self.duplicate_timestamps))) != self.duplicate_timestamps:
+            raise MarketStoreError("duplicate_timestamps_invalid")
+        strict_bool(self.funding_coverage_proven_bool, "funding_coverage_proven_bool")
+        if self.funding_coverage_proven_bool:
+            raise MarketStoreError("funding_coverage_proven_forbidden")
+
 
 @dataclass(frozen=True)
 class MarketStoreAudit:
@@ -313,6 +389,12 @@ class MarketStoreAudit:
     failures: tuple[str, ...]
     chunk_count: int = 0
     receipt_count: int = 0
+    evidence_archive_count: int = 0
+    evidence_reference_count: int = 0
+    orphan_chunk_count: int = 0
+    orphan_evidence_count: int = 0
+    stale_transaction_count: int = 0
+    dataset_row_counts: MappingProxyType = None
     historical_market_data_coverage_proven_bool: bool = False
     funding_coverage_proven_bool: bool = False
     live_authorized_bool: bool = False
@@ -320,8 +402,15 @@ class MarketStoreAudit:
     def __post_init__(self):
         strict_bool(self.ok, "ok")
         _strict_failures(self.failures)
-        strict_int(self.chunk_count, "chunk_count")
-        strict_int(self.receipt_count, "receipt_count")
+        if self.ok != (not self.failures):
+            raise MarketStoreError("audit_ok_invalid")
+        for n in ("chunk_count", "receipt_count", "evidence_archive_count", "evidence_reference_count", "orphan_chunk_count", "orphan_evidence_count", "stale_transaction_count"):
+            strict_int(getattr(self, n), n)
+        object.__setattr__(self, "dataset_row_counts", _strict_mapping(self.dataset_row_counts or {}, "dataset_row_counts"))
+        for n in ("historical_market_data_coverage_proven_bool", "funding_coverage_proven_bool", "live_authorized_bool"):
+            strict_bool(getattr(self, n), n)
+            if getattr(self, n):
+                raise MarketStoreError(f"{n}_forbidden")
 
 
 @dataclass(frozen=True)

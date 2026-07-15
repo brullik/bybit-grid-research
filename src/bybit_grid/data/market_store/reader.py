@@ -6,6 +6,7 @@ from .models import MarketDatasetKind, MarketStoreError, FundingReplayObservatio
 from .schemas import schema_for
 from .parsing import parse_chunk_manifest_bytes
 from .canonical import logical_rows_sha256, row_key
+from .paths import rel_chunk_path
 
 
 def _chunk_dirs(root, kind):
@@ -54,8 +55,25 @@ def read_and_validate_chunk(store_root: Path, chunk_dir: Path, *, expected_manif
         MarketDatasetKind.funding_rate:("symbol","funding_time_ms"),
     }[kind]:
         raise MarketStoreError("primary_key_schema_invalid")
-    if logical_rows_sha256(kind, rows) != mf.logical_rows_sha256:
+    logical_hash = logical_rows_sha256(kind, rows)
+    if logical_hash != mf.logical_rows_sha256:
         raise MarketStoreError("logical_hash_mismatch")
+    first = rows[0]
+    if kind is MarketDatasetKind.instrument_snapshot:
+        snaps = {r["snapshot_server_time_ms"] for r in rows}
+        if len(snaps) != 1:
+            raise MarketStoreError("chunk_path_semantic_mismatch")
+        expected_rel = rel_chunk_path(kind, snapshot_server_time_ms=first["snapshot_server_time_ms"], logical_hash=logical_hash).as_posix()
+    else:
+        ts_name = "funding_time_ms" if kind is MarketDatasetKind.funding_rate else "open_time_ms"
+        symbols = {r["symbol"] for r in rows}
+        if len(symbols) != 1:
+            raise MarketStoreError("chunk_path_semantic_mismatch")
+        expected_rel = rel_chunk_path(kind, symbol=first["symbol"], min_ms=keys[0][1], max_ms=keys[-1][1], logical_hash=logical_hash).as_posix()
+        if any(r[ts_name] < keys[0][1] or r[ts_name] > keys[-1][1] for r in rows):
+            raise MarketStoreError("chunk_path_semantic_mismatch")
+    if mf.relative_path != rel or rel != expected_rel:
+        raise MarketStoreError("chunk_path_semantic_mismatch")
     return mf, rows
 
 
