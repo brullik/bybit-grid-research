@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -473,6 +474,82 @@ def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
         assert "urllib.request.urlopen" in status_job
 
     assert "converted_to_draft" in workflow
+
+
+def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | None, dict[str, str]]:
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    final = workflow.split("\n  status-final:\n", 1)[1]
+    source = textwrap.dedent(
+        final.split("          python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+    )
+    environment = {
+        "GH_TOKEN": "test-token",
+        "HEAD_SHA": "a" * 40,
+        "REPOSITORY": "brullik/bybit-grid-research",
+        "API_URL": "https://api.example.test",
+        "SERVER_URL": "https://example.test",
+        "RUN_ID": "123",
+        "PENDING_RESULT": "success",
+        "PROTECTED_RESULT": "success",
+        "ACCEPTANCE_RESULT": "success",
+        "PR_AUTHOR": "brullik",
+        "PR_DRAFT": "false",
+        "HEAD_REF": "pm/task-a",
+    }
+    environment.update(overrides)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    captured: dict[str, str] = {}
+
+    class Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout):
+        assert timeout == 30
+        captured.update(json.loads(request.data))
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    exit_reason = None
+    try:
+        exec(compile(source, "pm-acceptance-finalizer", "exec"), {})
+    except SystemExit as exc:
+        exit_reason = str(exc)
+    return exit_reason, captured
+
+
+def test_final_status_script_succeeds_only_for_ready_owner_non_probe(monkeypatch):
+    exit_reason, payload = _execute_final_status_script(monkeypatch)
+    assert exit_reason is None
+    assert payload["state"] == "success"
+    assert payload["context"] == "pm-acceptance"
+    assert payload["target_url"].endswith("/actions/runs/123")
+
+    for ineligible in (
+        {"PR_DRAFT": "true"},
+        {"PR_AUTHOR": "someone-else"},
+        {"HEAD_REF": "probe/task-a-red"},
+    ):
+        exit_reason, payload = _execute_final_status_script(monkeypatch, **ineligible)
+        assert exit_reason == "pm_acceptance_failed"
+        assert payload["state"] == "failure"
+
+
+def test_final_status_script_distinguishes_failure_from_cancelled(monkeypatch):
+    exit_reason, payload = _execute_final_status_script(monkeypatch, PROTECTED_RESULT="failure")
+    assert exit_reason == "pm_acceptance_failed"
+    assert payload["state"] == "failure"
+
+    exit_reason, payload = _execute_final_status_script(monkeypatch, ACCEPTANCE_RESULT="cancelled")
+    assert exit_reason == "pm_acceptance_failed"
+    assert payload["state"] == "error"
 
 
 def test_direct_task_scope_cli_import_shape_from_repository_root():
