@@ -36,6 +36,12 @@ exactly the graph derived from `store_version.json` and its canonical import rec
 The scan must not follow a symlink or read its target. Failures are sorted, unique, and
 repeatable. Existing audit counters remain exact for a valid store.
 
+This is a static offline boundary: the caller keeps the selected store root quiescent for
+the complete audit call and trusts the filesystem path components above that root.
+Concurrent filesystem mutation and untrusted symlink ancestors are outside this one-file
+task because the existing chunk reader reopens pathnames rather than caller-owned file
+descriptors.
+
 ## Compatibility fixture
 
 The accepted fixture is a minimal canonical funding-rate store containing one real chunk,
