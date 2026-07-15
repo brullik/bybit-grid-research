@@ -16,6 +16,7 @@ PK = {
 }
 
 
+# RED probe: the frozen suite must reject unchanged Decimal identity semantics.
 def decimal_to_text(d: Decimal) -> str:
     if type(d) is not Decimal or not d.is_finite():
         raise MarketStoreError("decimal_invalid")
