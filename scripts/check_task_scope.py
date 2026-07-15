@@ -11,7 +11,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from scripts.check_protected_paths import _path_error, _SHA_RE, changed_paths_from_git, protected_path_errors
+if __package__:
+    from .check_protected_paths import (
+        _path_error,
+        _SHA_RE,
+        changed_paths_from_git,
+        protected_path_errors,
+    )
+else:
+    from check_protected_paths import (  # type: ignore[no-redef]
+        _path_error,
+        _SHA_RE,
+        changed_paths_from_git,
+        protected_path_errors,
+    )
 
 _KEYS = ("allowed_paths", "forbidden_paths", "required_paths", "schema", "task_id")
 _SCHEMA = "pm_active_task_v1"
