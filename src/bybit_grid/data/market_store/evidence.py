@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import binascii
 import hashlib
 import os
 import re
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import zipfile
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 
@@ -40,6 +42,7 @@ _MAX_CONTROL_MEMBER_BYTES = 4 * 1024 * 1024
 _MAX_MEMBER_NAME_BYTES = 1024
 _MAX_CENTRAL_DIRECTORY_BYTES = 8 * 1024 * 1024
 _REGULAR_EXTERNAL_ATTR = (stat.S_IFREG | 0o600) << 16
+_LEGACY_EMPTY_MANIFEST_BYTES = b'{"members":{}}\n'
 _LOCAL_HEADER = struct.Struct("<4s5H3L2H")
 _CENTRAL_HEADER = struct.Struct("<4s6H3L5H2L")
 _END_RECORD = struct.Struct("<4s4H2LH")
@@ -880,6 +883,88 @@ def _validated_zip_infos(source_pack, archive, archive_size):
     return {info.filename: info for info in infos}
 
 
+def _reject_legacy_empty_manifest(source_pack, archive, archive_size):
+    name = _MANIFEST_NAME.encode("ascii")
+    payload = _LEGACY_EMPTY_MANIFEST_BYTES
+    local_name_offset = _LOCAL_HEADER.size
+    payload_offset = local_name_offset + len(name)
+    central_offset = payload_offset + len(payload)
+    central_name_offset = central_offset + _CENTRAL_HEADER.size
+    end_offset = central_name_offset + len(name)
+    expected_archive_size = end_offset + _END_RECORD.size
+    if archive_size != expected_archive_size:
+        return
+    infos = archive.infolist()
+    if len(infos) != 1:
+        return
+    info = infos[0]
+    try:
+        datetime(*info.date_time)
+    except (TypeError, ValueError):
+        return
+    raw = _read_zip_metadata_at(source_pack, 0, archive_size)
+    local = _LOCAL_HEADER.unpack(raw[: _LOCAL_HEADER.size])
+    central = _CENTRAL_HEADER.unpack(raw[central_offset : central_offset + _CENTRAL_HEADER.size])
+    end = _END_RECORD.unpack(raw[end_offset:])
+    crc = binascii.crc32(payload)
+    if local != (
+        b"PK\x03\x04",
+        20,
+        0,
+        zipfile.ZIP_STORED,
+        local[4],
+        local[5],
+        crc,
+        len(payload),
+        len(payload),
+        len(name),
+        0,
+    ):
+        return
+    if central != (
+        b"PK\x01\x02",
+        (3 << 8) | 20,
+        20,
+        0,
+        zipfile.ZIP_STORED,
+        local[4],
+        local[5],
+        crc,
+        len(payload),
+        len(payload),
+        len(name),
+        0,
+        0,
+        0,
+        0,
+        0o600 << 16,
+        0,
+    ):
+        return
+    if end != (
+        b"PK\x05\x06",
+        0,
+        0,
+        1,
+        1,
+        _CENTRAL_HEADER.size + len(name),
+        central_offset,
+        0,
+    ):
+        return
+    if (
+        archive.comment
+        or info.filename != _MANIFEST_NAME
+        or info.orig_filename != _MANIFEST_NAME
+        or info.header_offset != 0
+        or raw[local_name_offset:payload_offset] != name
+        or raw[payload_offset:central_offset] != payload
+        or raw[central_name_offset:end_offset] != name
+    ):
+        return
+    raise MarketStoreError("empty_manifest")
+
+
 def _validated_manifest(manifest_bytes, names):
     manifest = parse_seed_manifest_bytes(manifest_bytes)
     if type(manifest["schema"]) is not str or manifest["schema"] != SEED_REVIEW_PACK_SCHEMA:
@@ -995,6 +1080,7 @@ def _check_seed_review_pack_stream(source_pack):
         _preflight_end_record(source_pack, archive_size)
         source_pack.seek(0)
         with zipfile.ZipFile(source_pack) as archive:
+            _reject_legacy_empty_manifest(source_pack, archive, archive_size)
             infos = _validated_zip_infos(source_pack, archive, archive_size)
             if _MANIFEST_NAME not in infos:
                 raise MarketStoreError("seed_manifest_missing")
