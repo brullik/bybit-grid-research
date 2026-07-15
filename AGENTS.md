@@ -11,3 +11,5 @@ Run the exact commands from the active task and keep the PR draft until PM appro
 Do not merge your own PR.
 If a frozen acceptance test appears wrong, report it; do not change it.
 Never edit dependency/config files pyproject.toml, requirements.txt, requirements-dev.txt, requirements/*.txt, uv.lock, poetry.lock, Pipfile, or Pipfile.lock in any PR for control-plane v1.
+
+CONTROL_PLANE_ATTACK_PROBE_DO_NOT_MERGE
