@@ -1,0 +1,32 @@
+name: pull-request
+
+on:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package
+        run: python -m pip install -e .[dev]
+      - name: pip check
+        run: python -m pip check
+      - name: no-live audit
+        run: python scripts/check_no_live_execution.py
+      - name: coverage verifier
+        run: python scripts/check_behavior_coverage_maps.py --collect-command "python -m pytest --collect-only -q"
+      - name: focused 06.4A.3.4 tests
+        run: |
+          python -m pytest tests/test_sprint_06_4a_3_4_governance_cli.py -q
+          python -m pytest tests/test_sprint_06_4a_3_4_schema_plan_writer.py -q
+          python -m pytest tests/test_sprint_06_4a_3_4_import_audit.py -q
+          python -m pytest tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py -q
+          python -m pytest tests/test_sprint_06_4a_3_4_semantic_pack_cli.py -q
+      - name: full pytest
+        run: python -m pytest -q
+      - name: Ruff
+        run: ruff check .

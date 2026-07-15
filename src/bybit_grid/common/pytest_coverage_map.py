@@ -6,6 +6,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 FORBIDDEN_HELPERS = {
     "_exercise",
@@ -16,7 +17,10 @@ FORBIDDEN_HELPERS = {
 }
 GENERIC_TEXT = (
     "production path exercises",
-    "the contract returns the asserted success or stable failure",
+    "the contract returns",
+    "specific deterministic fixture",
+    "specific material mutation",
+    "exact stable assertion",
     "placeholder",
     "constant-only",
 )
@@ -92,6 +96,70 @@ CLI-FULL-LIFECYCLE-BYTICK-HOST""".splitlines()
 )
 
 
+REQUIRED_PRODUCTION_SYMBOLS_064A35: Mapping[str, tuple[str, ...]] = {
+    "GOV-EXACT-ID-SET": ('verify_required_behavior_json',),
+    "GOV-MISSING-NODE": ('verify_required_behavior_json',),
+    "GOV-NOOP-REJECTED": ('verify_required_behavior_json',),
+    "CLI-HELP-ALL": ('subprocess.run',),
+    "CLI-MISSING-ARGS-ALL": ('subprocess.run',),
+    "DECIMAL-MAX-BOUNDARY": ('ensure_decimal128_38_18',),
+    "DECIMAL-MIN-BOUNDARY": ('ensure_decimal128_38_18',),
+    "DECIMAL-ROUNDING-REJECTED": ('ensure_decimal128_38_18',),
+    "PLAN-INSTRUMENT-SNAPSHOT": ('partition_validated_rows',),
+    "PLAN-KLINE-CROSS-MONTH": ('partition_validated_rows',),
+    "PLAN-FUNDING-FOUR-MONTHS": ('partition_validated_rows',),
+    "PLAN-MULTI-SYMBOL-REJECTED": ('partition_validated_rows',),
+    "PREFLIGHT-INVALID-ROW-ZERO-WRITES": ('build_import_preflight_plan', 'snapshot_tree',),
+    "PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES": ('build_import_preflight_plan', 'snapshot_tree',),
+    "PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES": ('build_import_preflight_plan', 'snapshot_tree',),
+    "CHUNK-EARLY-CLEANUP": ('write_chunk_atomic', 'snapshot_tree',),
+    "CHUNK-MID-CLEANUP": ('write_chunk_atomic', 'snapshot_tree',),
+    "CHUNK-LATE-CLEANUP": ('write_chunk_atomic', 'snapshot_tree',),
+    "CHUNK-CANONICAL-MANIFEST": ('write_chunk_atomic', 'read_and_validate_chunk',),
+    "CHUNK-ACTUAL-PATH-MATCH": ('write_chunk_atomic', 'read_and_validate_chunk',),
+    "CHUNK-PK-SCHEMA-MATCH": ('write_chunk_atomic', 'read_and_validate_chunk',),
+    "CHUNK-EXISTING-CORRUPTION-REJECTED": ('write_chunk_atomic', 'read_and_validate_chunk',),
+    "IMPORT-SYNTHETIC-REAL-SHAPE": ('import_validated_public_batch_to_store',),
+    "IMPORT-SOURCE-BYTES-IMMUTABLE": ('import_validated_public_batch_to_store',),
+    "IMPORT-RECEIPT-LAST": ('import_validated_public_batch_to_store',),
+    "IMPORT-NOOP-TYPED": ('import_validated_public_batch_to_store',),
+    "IMPORT-NOOP-ZERO-MUTATION": ('import_validated_public_batch_to_store',),
+    "IMPORT-NOOP-CORRUPT-CHUNK-REJECTED": ('import_validated_public_batch_to_store',),
+    "IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED": ('import_validated_public_batch_to_store',),
+    "AUDIT-EMPTY-REJECTED": ('audit_market_store',),
+    "AUDIT-VERSION-TAMPER-REJECTED": ('audit_market_store',),
+    "AUDIT-ORPHAN-CHUNK-REJECTED": ('audit_market_store',),
+    "AUDIT-ORPHAN-EVIDENCE-REJECTED": ('audit_market_store',),
+    "AUDIT-RECEIPT-TAMPER-REJECTED": ('audit_market_store',),
+    "AUDIT-GLOBAL-DUPLICATE-REJECTED": ('audit_market_store',),
+    "AUDIT-GLOBAL-CONFLICT-REJECTED": ('audit_market_store',),
+    "AUDIT-UNEXPECTED-ENTRY-REJECTED": ('audit_market_store',),
+    "AUDIT-STALE-STAGING-REJECTED": ('audit_market_store',),
+    "REPLAY-SNAPSHOT-REQUIRED": ('read_replay_slice',),
+    "REPLAY-SNAPSHOT-ROW-RETURNED": ('read_replay_slice',),
+    "REPLAY-COMPLETE-TRADE-MARK": ('read_replay_slice',),
+    "REPLAY-FUNDING-MARK-JOIN": ('read_replay_slice',),
+    "REPLAY-MISSING-MARK-JOIN-REJECTED": ('read_replay_slice',),
+    "COVERAGE-STRICT-INPUTS": ('scan_minute_coverage',),
+    "COVERAGE-OUT-OF-WINDOW-REJECTED": ('scan_minute_coverage',),
+    "COVERAGE-GAP-WINDOWS": ('scan_minute_coverage',),
+    "RESUME-INCLUSIVE-1000": ('plan_bounded_resume_windows',),
+    "RESUME-MONTH-YEAR-LEAP": ('plan_bounded_resume_windows',),
+    "FUNDING-STRICT-TIMESTAMPS": ('scan_funding_observed_range',),
+    "DUCKDB-FOUR-VIEWS": ('open_readonly_duckdb_views', 'duckdb_smoke_audit',),
+    "DUCKDB-DECIMAL-TYPES": ('open_readonly_duckdb_views', 'duckdb_smoke_audit',),
+    "DUCKDB-CONNECTION-CLOSED": ('open_readonly_duckdb_views', 'duckdb_smoke_audit',),
+    "PACK-BUILDER-BAD-STORE-REJECTED": ('make_seed_review_pack', 'check_seed_review_pack',),
+    "PACK-EXACT-MEMBER-SET": ('make_seed_review_pack', 'check_seed_review_pack',),
+    "PACK-EMPTY-MANIFEST-REJECTED": ('make_seed_review_pack', 'check_seed_review_pack',),
+    "PACK-REHASHED-FAKE-REJECTED": ('make_seed_review_pack', 'check_seed_review_pack',),
+    "PACK-NESTED-EVIDENCE-VALIDATED": ('make_seed_review_pack', 'check_seed_review_pack',),
+    "PACK-REPORT-TAMPER-REJECTED": ('make_seed_review_pack', 'check_seed_review_pack',),
+    "PACK-TEMP-CLEANUP": ('make_seed_review_pack', 'check_seed_review_pack',),
+    "CLI-FULL-LIFECYCLE-BYBIT-HOST": ('subprocess.run',),
+    "CLI-FULL-LIFECYCLE-BYTICK-HOST": ('subprocess.run',),
+}
+
 def _call_name(node: ast.AST) -> str:
     if isinstance(node, ast.Name):
         return node.id
@@ -106,21 +174,32 @@ def _literal_strings(node: ast.AST) -> set[str]:
 
 
 def _normalize_body(fn: ast.FunctionDef) -> str:
-    clone = (
-        ast.fix_missing_locations(
-            ast.parse("\n".join(ast.get_source_segment("", n) or ast.dump(n) for n in fn.body))
-        )
-        if False
-        else fn
-    )
+    clone = ast.fix_missing_locations(ast.parse(ast.unparse(fn))).body[0]
     for n in ast.walk(clone):
         for attr in ("lineno", "col_offset", "end_lineno", "end_col_offset"):
             if hasattr(n, attr):
                 setattr(n, attr, 0)
-        if isinstance(n, ast.Constant) and type(n.value) is str and n.value in REQUIRED_064A3:
-            n.value = "<BEHAVIOR_ID>"
+        if isinstance(n, ast.Constant):
+            if type(n.value) in (str, int, float):
+                if type(n.value) is str and n.value in REQUIRED_064A3:
+                    n.value = "<BEHAVIOR_ID>"
+                else:
+                    n.value = "<CONST>"
     return ast.dump(clone, include_attributes=False)
 
+
+def _called_symbols(fn: ast.FunctionDef) -> set[str]:
+    return {_call_name(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)}
+
+
+def _symbol_called(fn: ast.FunctionDef, symbols) -> bool:
+    calls = _called_symbols(fn)
+    suffixes = {s.split(".")[-1] for s in symbols}
+    return bool(calls & set(symbols)) or bool({c.split(".")[-1] for c in calls} & suffixes)
+
+
+def _assert_is_constant_only(node: ast.Assert) -> bool:
+    return all(isinstance(n, (ast.Assert, ast.Compare, ast.Constant, ast.GtE, ast.Load)) for n in ast.walk(node))
 
 def _resolve_test(nodeid: str):
     file_part, _, func_part = nodeid.partition("::")
@@ -133,13 +212,6 @@ def _resolve_test(nodeid: str):
     raise ValueError("test_function_not_found")
 
 
-def _symbol_present(fn: ast.FunctionDef, symbols: list[str]) -> bool:
-    refs = {
-        _call_name(n) for n in ast.walk(fn) if isinstance(n, (ast.Call, ast.Attribute, ast.Name))
-    }
-    suffixes = {s.split(".")[-1] for s in symbols}
-    return bool(refs & set(symbols)) or bool(refs & suffixes)
-
 
 def _ast_errors(row: dict, seen_bodies: dict[str, str]) -> list[str]:
     bid = row["behavior_id"]
@@ -149,11 +221,12 @@ def _ast_errors(row: dict, seen_bodies: dict[str, str]) -> list[str]:
         _, fn = _resolve_test(nodeid)
     except Exception as e:
         return [f"missing_node_source:{nodeid}:{e}"]
-    calls = [_call_name(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)]
+    calls = list(_called_symbols(fn))
     if any(c.split(".")[-1] in FORBIDDEN_HELPERS for c in calls):
         errors.append(f"generic_dispatcher_node:{nodeid}")
     top_calls = [n for n in fn.body if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)]
-    has_assert = any(isinstance(n, ast.Assert) for n in ast.walk(fn))
+    asserts = [n for n in ast.walk(fn) if isinstance(n, ast.Assert)]
+    has_assert = bool(asserts)
     has_raises_match = any(
         _call_name(n.func).endswith("pytest.raises") and any(k.arg == "match" for k in n.keywords)
         for n in ast.walk(fn)
@@ -163,15 +236,17 @@ def _ast_errors(row: dict, seen_bodies: dict[str, str]) -> list[str]:
         errors.append(f"single_helper_no_assert:{nodeid}")
     strings = _literal_strings(fn)
     has_cli = "subprocess.run" in calls and bool(strings & CLI_SCRIPTS)
-    has_market = any(
-        "bybit_grid.data.market_store" in s for s in row["production_symbols"]
-    ) and _symbol_present(fn, row["production_symbols"])
-    if not (has_cli or has_market):
+    has_required_call = _symbol_called(fn, row["production_symbols"])
+    if not (has_cli or has_required_call):
         errors.append(f"no_direct_production_call:{nodeid}")
     if not (has_assert or has_raises_match):
         errors.append(f"no_assertion_contract:{nodeid}")
-    if not _symbol_present(fn, row["production_symbols"]):
-        errors.append(f"production_symbol_not_referenced:{bid}")
+    if asserts and all(_assert_is_constant_only(a) for a in asserts) and not has_raises_match:
+        errors.append(f"constant_only_assertion:{nodeid}")
+    if not has_required_call:
+        errors.append(f"production_symbol_not_called:{bid}")
+    if {"StoreVersion", "audit_market_store"}.issubset({c.split(".")[-1] for c in calls}) and not (set(row["production_symbols"]) == {"audit_market_store"}):
+        errors.append(f"unrelated_noop_node:{nodeid}")
     sig = _normalize_body(fn)
     if sig in seen_bodies:
         errors.append(f"duplicate_normalized_test_body:{nodeid}:{seen_bodies[sig]}")
@@ -213,12 +288,12 @@ def verify_required_behavior_json(path: Path, collected_nodes, *, ast_checks: bo
             errors.append(f"{path}:unknown_behavior_id:{bid}")
         if row["nodeid"] not in collected:
             errors.append(f"{path}:missing_node:{row['nodeid']}")
+        expected_symbols = REQUIRED_PRODUCTION_SYMBOLS_064A35.get(bid)
         if (
             type(row["production_symbols"]) is not list
-            or not row["production_symbols"]
-            or len(set(row["production_symbols"])) != len(row["production_symbols"])
+            or tuple(row["production_symbols"]) != expected_symbols
         ):
-            errors.append(f"{path}:production_symbols_invalid:{bid}")
+            errors.append(f"{path}:production_symbols_not_frozen:{bid}")
         if any(type(row[k]) is not str or not row[k] for k in ("fixture", "mutation", "expected")):
             errors.append(f"{path}:traceability_text_invalid:{bid}")
         text = " ".join(str(row[k]).lower() for k in ("fixture", "mutation", "expected"))

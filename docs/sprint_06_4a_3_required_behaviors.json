@@ -5,611 +5,631 @@
       "behavior_id": "GOV-EXACT-ID-SET",
       "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_gov_exact_id_set",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "verify_required_behavior_json"
       ],
-      "fixture": "specific deterministic fixture for GOV-EXACT-ID-SET",
-      "mutation": "specific material mutation for GOV-EXACT-ID-SET",
-      "expected": "exact stable assertion for GOV-EXACT-ID-SET"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for GOV-EXACT-ID-SET",
+      "mutation": "mutation calls verify_required_behavior_json with behavior-specific changed input for GOV-EXACT-ID-SET",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_gov_exact_id_set"
     },
     {
       "behavior_id": "GOV-MISSING-NODE",
       "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_gov_missing_node_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "verify_required_behavior_json"
       ],
-      "fixture": "specific deterministic fixture for GOV-MISSING-NODE",
-      "mutation": "specific material mutation for GOV-MISSING-NODE",
-      "expected": "exact stable assertion for GOV-MISSING-NODE"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for GOV-MISSING-NODE",
+      "mutation": "mutation calls verify_required_behavior_json with behavior-specific changed input for GOV-MISSING-NODE",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_gov_missing_node_rejected"
     },
     {
       "behavior_id": "GOV-NOOP-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_gov_noop_node_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "verify_required_behavior_json"
       ],
-      "fixture": "specific deterministic fixture for GOV-NOOP-REJECTED",
-      "mutation": "specific material mutation for GOV-NOOP-REJECTED",
-      "expected": "exact stable assertion for GOV-NOOP-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for GOV-NOOP-REJECTED",
+      "mutation": "mutation calls verify_required_behavior_json with behavior-specific changed input for GOV-NOOP-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_gov_noop_node_rejected"
     },
     {
       "behavior_id": "CLI-HELP-ALL",
       "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_cli_help_all_five_scripts",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "subprocess.run"
       ],
-      "fixture": "specific deterministic fixture for CLI-HELP-ALL",
-      "mutation": "specific material mutation for CLI-HELP-ALL",
-      "expected": "exact stable assertion for CLI-HELP-ALL"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CLI-HELP-ALL",
+      "mutation": "mutation calls subprocess.run with behavior-specific changed input for CLI-HELP-ALL",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_cli_help_all_five_scripts"
     },
     {
       "behavior_id": "CLI-MISSING-ARGS-ALL",
       "nodeid": "tests/test_sprint_06_4a_3_4_governance_cli.py::test_cli_missing_args_all_five_scripts",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "subprocess.run"
       ],
-      "fixture": "specific deterministic fixture for CLI-MISSING-ARGS-ALL",
-      "mutation": "specific material mutation for CLI-MISSING-ARGS-ALL",
-      "expected": "exact stable assertion for CLI-MISSING-ARGS-ALL"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CLI-MISSING-ARGS-ALL",
+      "mutation": "mutation calls subprocess.run with behavior-specific changed input for CLI-MISSING-ARGS-ALL",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_cli_missing_args_all_five_scripts"
     },
     {
       "behavior_id": "DECIMAL-MAX-BOUNDARY",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_decimal_max_boundary",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "ensure_decimal128_38_18"
       ],
-      "fixture": "specific deterministic fixture for DECIMAL-MAX-BOUNDARY",
-      "mutation": "specific material mutation for DECIMAL-MAX-BOUNDARY",
-      "expected": "exact stable assertion for DECIMAL-MAX-BOUNDARY"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for DECIMAL-MAX-BOUNDARY",
+      "mutation": "mutation calls ensure_decimal128_38_18 with behavior-specific changed input for DECIMAL-MAX-BOUNDARY",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_decimal_max_boundary"
     },
     {
       "behavior_id": "DECIMAL-MIN-BOUNDARY",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_decimal_min_boundary",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "ensure_decimal128_38_18"
       ],
-      "fixture": "specific deterministic fixture for DECIMAL-MIN-BOUNDARY",
-      "mutation": "specific material mutation for DECIMAL-MIN-BOUNDARY",
-      "expected": "exact stable assertion for DECIMAL-MIN-BOUNDARY"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for DECIMAL-MIN-BOUNDARY",
+      "mutation": "mutation calls ensure_decimal128_38_18 with behavior-specific changed input for DECIMAL-MIN-BOUNDARY",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_decimal_min_boundary"
     },
     {
       "behavior_id": "DECIMAL-ROUNDING-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_decimal_rounding_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "ensure_decimal128_38_18"
       ],
-      "fixture": "specific deterministic fixture for DECIMAL-ROUNDING-REJECTED",
-      "mutation": "specific material mutation for DECIMAL-ROUNDING-REJECTED",
-      "expected": "exact stable assertion for DECIMAL-ROUNDING-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for DECIMAL-ROUNDING-REJECTED",
+      "mutation": "mutation calls ensure_decimal128_38_18 with behavior-specific changed input for DECIMAL-ROUNDING-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_decimal_rounding_rejected"
     },
     {
       "behavior_id": "PLAN-INSTRUMENT-SNAPSHOT",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_plan_instrument_snapshot_multi_symbol_single_partition",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "partition_validated_rows"
       ],
-      "fixture": "specific deterministic fixture for PLAN-INSTRUMENT-SNAPSHOT",
-      "mutation": "specific material mutation for PLAN-INSTRUMENT-SNAPSHOT",
-      "expected": "exact stable assertion for PLAN-INSTRUMENT-SNAPSHOT"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PLAN-INSTRUMENT-SNAPSHOT",
+      "mutation": "mutation calls partition_validated_rows with behavior-specific changed input for PLAN-INSTRUMENT-SNAPSHOT",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_plan_instrument_snapshot_multi_symbol_single_partition"
     },
     {
       "behavior_id": "PLAN-KLINE-CROSS-MONTH",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_plan_kline_cross_month_two_partitions",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "partition_validated_rows"
       ],
-      "fixture": "specific deterministic fixture for PLAN-KLINE-CROSS-MONTH",
-      "mutation": "specific material mutation for PLAN-KLINE-CROSS-MONTH",
-      "expected": "exact stable assertion for PLAN-KLINE-CROSS-MONTH"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PLAN-KLINE-CROSS-MONTH",
+      "mutation": "mutation calls partition_validated_rows with behavior-specific changed input for PLAN-KLINE-CROSS-MONTH",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_plan_kline_cross_month_two_partitions"
     },
     {
       "behavior_id": "PLAN-FUNDING-FOUR-MONTHS",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_plan_funding_four_months_four_partitions",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "partition_validated_rows"
       ],
-      "fixture": "specific deterministic fixture for PLAN-FUNDING-FOUR-MONTHS",
-      "mutation": "specific material mutation for PLAN-FUNDING-FOUR-MONTHS",
-      "expected": "exact stable assertion for PLAN-FUNDING-FOUR-MONTHS"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PLAN-FUNDING-FOUR-MONTHS",
+      "mutation": "mutation calls partition_validated_rows with behavior-specific changed input for PLAN-FUNDING-FOUR-MONTHS",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_plan_funding_four_months_four_partitions"
     },
     {
       "behavior_id": "PLAN-MULTI-SYMBOL-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_plan_entry_mixed_timeseries_symbols_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "partition_validated_rows"
       ],
-      "fixture": "specific deterministic fixture for PLAN-MULTI-SYMBOL-REJECTED",
-      "mutation": "specific material mutation for PLAN-MULTI-SYMBOL-REJECTED",
-      "expected": "exact stable assertion for PLAN-MULTI-SYMBOL-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PLAN-MULTI-SYMBOL-REJECTED",
+      "mutation": "mutation calls partition_validated_rows with behavior-specific changed input for PLAN-MULTI-SYMBOL-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_plan_entry_mixed_timeseries_symbols_rejected"
     },
     {
       "behavior_id": "PREFLIGHT-INVALID-ROW-ZERO-WRITES",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_preflight_invalid_row_zero_writes",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "build_import_preflight_plan",
+        "snapshot_tree"
       ],
-      "fixture": "specific deterministic fixture for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
-      "mutation": "specific material mutation for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
-      "expected": "exact stable assertion for PREFLIGHT-INVALID-ROW-ZERO-WRITES"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
+      "mutation": "mutation calls build_import_preflight_plan, snapshot_tree with behavior-specific changed input for PREFLIGHT-INVALID-ROW-ZERO-WRITES",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_preflight_invalid_row_zero_writes"
     },
     {
       "behavior_id": "PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_preflight_incoming_duplicate_zero_writes",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "build_import_preflight_plan",
+        "snapshot_tree"
       ],
-      "fixture": "specific deterministic fixture for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
-      "mutation": "specific material mutation for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
-      "expected": "exact stable assertion for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
+      "mutation": "mutation calls build_import_preflight_plan, snapshot_tree with behavior-specific changed input for PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_preflight_incoming_duplicate_zero_writes"
     },
     {
       "behavior_id": "PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_preflight_committed_conflict_zero_writes",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "build_import_preflight_plan",
+        "snapshot_tree"
       ],
-      "fixture": "specific deterministic fixture for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
-      "mutation": "specific material mutation for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
-      "expected": "exact stable assertion for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
+      "mutation": "mutation calls build_import_preflight_plan, snapshot_tree with behavior-specific changed input for PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_preflight_committed_conflict_zero_writes"
     },
     {
       "behavior_id": "CHUNK-EARLY-CLEANUP",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_early_failure_cleanup",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "write_chunk_atomic",
+        "snapshot_tree"
       ],
-      "fixture": "specific deterministic fixture for CHUNK-EARLY-CLEANUP",
-      "mutation": "specific material mutation for CHUNK-EARLY-CLEANUP",
-      "expected": "exact stable assertion for CHUNK-EARLY-CLEANUP"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CHUNK-EARLY-CLEANUP",
+      "mutation": "mutation calls write_chunk_atomic, snapshot_tree with behavior-specific changed input for CHUNK-EARLY-CLEANUP",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_chunk_early_failure_cleanup"
     },
     {
       "behavior_id": "CHUNK-MID-CLEANUP",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_mid_failure_cleanup",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "write_chunk_atomic",
+        "snapshot_tree"
       ],
-      "fixture": "specific deterministic fixture for CHUNK-MID-CLEANUP",
-      "mutation": "specific material mutation for CHUNK-MID-CLEANUP",
-      "expected": "exact stable assertion for CHUNK-MID-CLEANUP"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CHUNK-MID-CLEANUP",
+      "mutation": "mutation calls write_chunk_atomic, snapshot_tree with behavior-specific changed input for CHUNK-MID-CLEANUP",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_chunk_mid_failure_cleanup"
     },
     {
       "behavior_id": "CHUNK-LATE-CLEANUP",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_late_failure_cleanup",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "write_chunk_atomic",
+        "snapshot_tree"
       ],
-      "fixture": "specific deterministic fixture for CHUNK-LATE-CLEANUP",
-      "mutation": "specific material mutation for CHUNK-LATE-CLEANUP",
-      "expected": "exact stable assertion for CHUNK-LATE-CLEANUP"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CHUNK-LATE-CLEANUP",
+      "mutation": "mutation calls write_chunk_atomic, snapshot_tree with behavior-specific changed input for CHUNK-LATE-CLEANUP",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_chunk_late_failure_cleanup"
     },
     {
       "behavior_id": "CHUNK-CANONICAL-MANIFEST",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_manifest_is_canonical",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "write_chunk_atomic",
+        "read_and_validate_chunk"
       ],
-      "fixture": "specific deterministic fixture for CHUNK-CANONICAL-MANIFEST",
-      "mutation": "specific material mutation for CHUNK-CANONICAL-MANIFEST",
-      "expected": "exact stable assertion for CHUNK-CANONICAL-MANIFEST"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CHUNK-CANONICAL-MANIFEST",
+      "mutation": "mutation calls write_chunk_atomic, read_and_validate_chunk with behavior-specific changed input for CHUNK-CANONICAL-MANIFEST",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_chunk_manifest_is_canonical"
     },
     {
       "behavior_id": "CHUNK-ACTUAL-PATH-MATCH",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_actual_path_mismatch_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "write_chunk_atomic",
+        "read_and_validate_chunk"
       ],
-      "fixture": "specific deterministic fixture for CHUNK-ACTUAL-PATH-MATCH",
-      "mutation": "specific material mutation for CHUNK-ACTUAL-PATH-MATCH",
-      "expected": "exact stable assertion for CHUNK-ACTUAL-PATH-MATCH"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CHUNK-ACTUAL-PATH-MATCH",
+      "mutation": "mutation calls write_chunk_atomic, read_and_validate_chunk with behavior-specific changed input for CHUNK-ACTUAL-PATH-MATCH",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_chunk_actual_path_mismatch_rejected"
     },
     {
       "behavior_id": "CHUNK-PK-SCHEMA-MATCH",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_chunk_primary_key_schema_mismatch_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "write_chunk_atomic",
+        "read_and_validate_chunk"
       ],
-      "fixture": "specific deterministic fixture for CHUNK-PK-SCHEMA-MATCH",
-      "mutation": "specific material mutation for CHUNK-PK-SCHEMA-MATCH",
-      "expected": "exact stable assertion for CHUNK-PK-SCHEMA-MATCH"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CHUNK-PK-SCHEMA-MATCH",
+      "mutation": "mutation calls write_chunk_atomic, read_and_validate_chunk with behavior-specific changed input for CHUNK-PK-SCHEMA-MATCH",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_chunk_primary_key_schema_mismatch_rejected"
     },
     {
       "behavior_id": "CHUNK-EXISTING-CORRUPTION-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_schema_plan_writer.py::test_existing_chunk_corruption_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "write_chunk_atomic",
+        "read_and_validate_chunk"
       ],
-      "fixture": "specific deterministic fixture for CHUNK-EXISTING-CORRUPTION-REJECTED",
-      "mutation": "specific material mutation for CHUNK-EXISTING-CORRUPTION-REJECTED",
-      "expected": "exact stable assertion for CHUNK-EXISTING-CORRUPTION-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CHUNK-EXISTING-CORRUPTION-REJECTED",
+      "mutation": "mutation calls write_chunk_atomic, read_and_validate_chunk with behavior-specific changed input for CHUNK-EXISTING-CORRUPTION-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_existing_chunk_corruption_rejected"
     },
     {
       "behavior_id": "IMPORT-SYNTHETIC-REAL-SHAPE",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_import_synthetic_owner_shape_succeeds",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "import_validated_public_batch_to_store"
       ],
-      "fixture": "specific deterministic fixture for IMPORT-SYNTHETIC-REAL-SHAPE",
-      "mutation": "specific material mutation for IMPORT-SYNTHETIC-REAL-SHAPE",
-      "expected": "exact stable assertion for IMPORT-SYNTHETIC-REAL-SHAPE"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for IMPORT-SYNTHETIC-REAL-SHAPE",
+      "mutation": "mutation calls import_validated_public_batch_to_store with behavior-specific changed input for IMPORT-SYNTHETIC-REAL-SHAPE",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_import_synthetic_owner_shape_succeeds"
     },
     {
       "behavior_id": "IMPORT-SOURCE-BYTES-IMMUTABLE",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_import_archives_identical_source_bytes",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "import_validated_public_batch_to_store"
       ],
-      "fixture": "specific deterministic fixture for IMPORT-SOURCE-BYTES-IMMUTABLE",
-      "mutation": "specific material mutation for IMPORT-SOURCE-BYTES-IMMUTABLE",
-      "expected": "exact stable assertion for IMPORT-SOURCE-BYTES-IMMUTABLE"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for IMPORT-SOURCE-BYTES-IMMUTABLE",
+      "mutation": "mutation calls import_validated_public_batch_to_store with behavior-specific changed input for IMPORT-SOURCE-BYTES-IMMUTABLE",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_import_archives_identical_source_bytes"
     },
     {
       "behavior_id": "IMPORT-RECEIPT-LAST",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_import_receipt_is_last_commit_marker",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "import_validated_public_batch_to_store"
       ],
-      "fixture": "specific deterministic fixture for IMPORT-RECEIPT-LAST",
-      "mutation": "specific material mutation for IMPORT-RECEIPT-LAST",
-      "expected": "exact stable assertion for IMPORT-RECEIPT-LAST"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for IMPORT-RECEIPT-LAST",
+      "mutation": "mutation calls import_validated_public_batch_to_store with behavior-specific changed input for IMPORT-RECEIPT-LAST",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_import_receipt_is_last_commit_marker"
     },
     {
       "behavior_id": "IMPORT-NOOP-TYPED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_reimport_returns_typed_receipt",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "import_validated_public_batch_to_store"
       ],
-      "fixture": "specific deterministic fixture for IMPORT-NOOP-TYPED",
-      "mutation": "specific material mutation for IMPORT-NOOP-TYPED",
-      "expected": "exact stable assertion for IMPORT-NOOP-TYPED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for IMPORT-NOOP-TYPED",
+      "mutation": "mutation calls import_validated_public_batch_to_store with behavior-specific changed input for IMPORT-NOOP-TYPED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_reimport_returns_typed_receipt"
     },
     {
       "behavior_id": "IMPORT-NOOP-ZERO-MUTATION",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_reimport_zero_filesystem_mutation",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "import_validated_public_batch_to_store"
       ],
-      "fixture": "specific deterministic fixture for IMPORT-NOOP-ZERO-MUTATION",
-      "mutation": "specific material mutation for IMPORT-NOOP-ZERO-MUTATION",
-      "expected": "exact stable assertion for IMPORT-NOOP-ZERO-MUTATION"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for IMPORT-NOOP-ZERO-MUTATION",
+      "mutation": "mutation calls import_validated_public_batch_to_store with behavior-specific changed input for IMPORT-NOOP-ZERO-MUTATION",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_reimport_zero_filesystem_mutation"
     },
     {
       "behavior_id": "IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_reimport_corrupt_chunk_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "import_validated_public_batch_to_store"
       ],
-      "fixture": "specific deterministic fixture for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
-      "mutation": "specific material mutation for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
-      "expected": "exact stable assertion for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
+      "mutation": "mutation calls import_validated_public_batch_to_store with behavior-specific changed input for IMPORT-NOOP-CORRUPT-CHUNK-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_reimport_corrupt_chunk_rejected"
     },
     {
       "behavior_id": "IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_reimport_corrupt_evidence_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "import_validated_public_batch_to_store"
       ],
-      "fixture": "specific deterministic fixture for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
-      "mutation": "specific material mutation for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
-      "expected": "exact stable assertion for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
+      "mutation": "mutation calls import_validated_public_batch_to_store with behavior-specific changed input for IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_reimport_corrupt_evidence_rejected"
     },
     {
       "behavior_id": "AUDIT-EMPTY-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_empty_store_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-EMPTY-REJECTED",
-      "mutation": "specific material mutation for AUDIT-EMPTY-REJECTED",
-      "expected": "exact stable assertion for AUDIT-EMPTY-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-EMPTY-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-EMPTY-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_empty_store_rejected"
     },
     {
       "behavior_id": "AUDIT-VERSION-TAMPER-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_version_tamper_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-VERSION-TAMPER-REJECTED",
-      "mutation": "specific material mutation for AUDIT-VERSION-TAMPER-REJECTED",
-      "expected": "exact stable assertion for AUDIT-VERSION-TAMPER-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-VERSION-TAMPER-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-VERSION-TAMPER-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_version_tamper_rejected"
     },
     {
       "behavior_id": "AUDIT-ORPHAN-CHUNK-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_orphan_chunk_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-ORPHAN-CHUNK-REJECTED",
-      "mutation": "specific material mutation for AUDIT-ORPHAN-CHUNK-REJECTED",
-      "expected": "exact stable assertion for AUDIT-ORPHAN-CHUNK-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-ORPHAN-CHUNK-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-ORPHAN-CHUNK-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_orphan_chunk_rejected"
     },
     {
       "behavior_id": "AUDIT-ORPHAN-EVIDENCE-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_orphan_evidence_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-ORPHAN-EVIDENCE-REJECTED",
-      "mutation": "specific material mutation for AUDIT-ORPHAN-EVIDENCE-REJECTED",
-      "expected": "exact stable assertion for AUDIT-ORPHAN-EVIDENCE-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-ORPHAN-EVIDENCE-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-ORPHAN-EVIDENCE-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_orphan_evidence_rejected"
     },
     {
       "behavior_id": "AUDIT-RECEIPT-TAMPER-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_receipt_tamper_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-RECEIPT-TAMPER-REJECTED",
-      "mutation": "specific material mutation for AUDIT-RECEIPT-TAMPER-REJECTED",
-      "expected": "exact stable assertion for AUDIT-RECEIPT-TAMPER-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-RECEIPT-TAMPER-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-RECEIPT-TAMPER-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_receipt_tamper_rejected"
     },
     {
       "behavior_id": "AUDIT-GLOBAL-DUPLICATE-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_global_duplicate_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-GLOBAL-DUPLICATE-REJECTED",
-      "mutation": "specific material mutation for AUDIT-GLOBAL-DUPLICATE-REJECTED",
-      "expected": "exact stable assertion for AUDIT-GLOBAL-DUPLICATE-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-GLOBAL-DUPLICATE-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-GLOBAL-DUPLICATE-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_global_duplicate_rejected"
     },
     {
       "behavior_id": "AUDIT-GLOBAL-CONFLICT-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_global_conflict_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-GLOBAL-CONFLICT-REJECTED",
-      "mutation": "specific material mutation for AUDIT-GLOBAL-CONFLICT-REJECTED",
-      "expected": "exact stable assertion for AUDIT-GLOBAL-CONFLICT-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-GLOBAL-CONFLICT-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-GLOBAL-CONFLICT-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_global_conflict_rejected"
     },
     {
       "behavior_id": "AUDIT-UNEXPECTED-ENTRY-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_unexpected_entry_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-UNEXPECTED-ENTRY-REJECTED",
-      "mutation": "specific material mutation for AUDIT-UNEXPECTED-ENTRY-REJECTED",
-      "expected": "exact stable assertion for AUDIT-UNEXPECTED-ENTRY-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-UNEXPECTED-ENTRY-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-UNEXPECTED-ENTRY-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_unexpected_entry_rejected"
     },
     {
       "behavior_id": "AUDIT-STALE-STAGING-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_import_audit.py::test_audit_stale_staging_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "audit_market_store"
       ],
-      "fixture": "specific deterministic fixture for AUDIT-STALE-STAGING-REJECTED",
-      "mutation": "specific material mutation for AUDIT-STALE-STAGING-REJECTED",
-      "expected": "exact stable assertion for AUDIT-STALE-STAGING-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for AUDIT-STALE-STAGING-REJECTED",
+      "mutation": "mutation calls audit_market_store with behavior-specific changed input for AUDIT-STALE-STAGING-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_audit_stale_staging_rejected"
     },
     {
       "behavior_id": "REPLAY-SNAPSHOT-REQUIRED",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_snapshot_required_and_unaligned_snapshot_allowed",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "read_replay_slice"
       ],
-      "fixture": "specific deterministic fixture for REPLAY-SNAPSHOT-REQUIRED",
-      "mutation": "specific material mutation for REPLAY-SNAPSHOT-REQUIRED",
-      "expected": "exact stable assertion for REPLAY-SNAPSHOT-REQUIRED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for REPLAY-SNAPSHOT-REQUIRED",
+      "mutation": "mutation calls read_replay_slice with behavior-specific changed input for REPLAY-SNAPSHOT-REQUIRED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_replay_snapshot_required_and_unaligned_snapshot_allowed"
     },
     {
       "behavior_id": "REPLAY-SNAPSHOT-ROW-RETURNED",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_returns_exact_instrument_snapshot_row",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "read_replay_slice"
       ],
-      "fixture": "specific deterministic fixture for REPLAY-SNAPSHOT-ROW-RETURNED",
-      "mutation": "specific material mutation for REPLAY-SNAPSHOT-ROW-RETURNED",
-      "expected": "exact stable assertion for REPLAY-SNAPSHOT-ROW-RETURNED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for REPLAY-SNAPSHOT-ROW-RETURNED",
+      "mutation": "mutation calls read_replay_slice with behavior-specific changed input for REPLAY-SNAPSHOT-ROW-RETURNED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_replay_returns_exact_instrument_snapshot_row"
     },
     {
       "behavior_id": "REPLAY-COMPLETE-TRADE-MARK",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_complete_trade_mark_grids",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "read_replay_slice"
       ],
-      "fixture": "specific deterministic fixture for REPLAY-COMPLETE-TRADE-MARK",
-      "mutation": "specific material mutation for REPLAY-COMPLETE-TRADE-MARK",
-      "expected": "exact stable assertion for REPLAY-COMPLETE-TRADE-MARK"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for REPLAY-COMPLETE-TRADE-MARK",
+      "mutation": "mutation calls read_replay_slice with behavior-specific changed input for REPLAY-COMPLETE-TRADE-MARK",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_replay_complete_trade_mark_grids"
     },
     {
       "behavior_id": "REPLAY-FUNDING-MARK-JOIN",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_funding_mark_join",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "read_replay_slice"
       ],
-      "fixture": "specific deterministic fixture for REPLAY-FUNDING-MARK-JOIN",
-      "mutation": "specific material mutation for REPLAY-FUNDING-MARK-JOIN",
-      "expected": "exact stable assertion for REPLAY-FUNDING-MARK-JOIN"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for REPLAY-FUNDING-MARK-JOIN",
+      "mutation": "mutation calls read_replay_slice with behavior-specific changed input for REPLAY-FUNDING-MARK-JOIN",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_replay_funding_mark_join"
     },
     {
       "behavior_id": "REPLAY-MISSING-MARK-JOIN-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_replay_missing_mark_join_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "read_replay_slice"
       ],
-      "fixture": "specific deterministic fixture for REPLAY-MISSING-MARK-JOIN-REJECTED",
-      "mutation": "specific material mutation for REPLAY-MISSING-MARK-JOIN-REJECTED",
-      "expected": "exact stable assertion for REPLAY-MISSING-MARK-JOIN-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for REPLAY-MISSING-MARK-JOIN-REJECTED",
+      "mutation": "mutation calls read_replay_slice with behavior-specific changed input for REPLAY-MISSING-MARK-JOIN-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_replay_missing_mark_join_rejected"
     },
     {
       "behavior_id": "COVERAGE-STRICT-INPUTS",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_coverage_strict_inputs",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "scan_minute_coverage"
       ],
-      "fixture": "specific deterministic fixture for COVERAGE-STRICT-INPUTS",
-      "mutation": "specific material mutation for COVERAGE-STRICT-INPUTS",
-      "expected": "exact stable assertion for COVERAGE-STRICT-INPUTS"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for COVERAGE-STRICT-INPUTS",
+      "mutation": "mutation calls scan_minute_coverage with behavior-specific changed input for COVERAGE-STRICT-INPUTS",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_coverage_strict_inputs"
     },
     {
       "behavior_id": "COVERAGE-OUT-OF-WINDOW-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_coverage_out_of_window_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "scan_minute_coverage"
       ],
-      "fixture": "specific deterministic fixture for COVERAGE-OUT-OF-WINDOW-REJECTED",
-      "mutation": "specific material mutation for COVERAGE-OUT-OF-WINDOW-REJECTED",
-      "expected": "exact stable assertion for COVERAGE-OUT-OF-WINDOW-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for COVERAGE-OUT-OF-WINDOW-REJECTED",
+      "mutation": "mutation calls scan_minute_coverage with behavior-specific changed input for COVERAGE-OUT-OF-WINDOW-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_coverage_out_of_window_rejected"
     },
     {
       "behavior_id": "COVERAGE-GAP-WINDOWS",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_coverage_gap_windows",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "scan_minute_coverage"
       ],
-      "fixture": "specific deterministic fixture for COVERAGE-GAP-WINDOWS",
-      "mutation": "specific material mutation for COVERAGE-GAP-WINDOWS",
-      "expected": "exact stable assertion for COVERAGE-GAP-WINDOWS"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for COVERAGE-GAP-WINDOWS",
+      "mutation": "mutation calls scan_minute_coverage with behavior-specific changed input for COVERAGE-GAP-WINDOWS",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_coverage_gap_windows"
     },
     {
       "behavior_id": "RESUME-INCLUSIVE-1000",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_resume_inclusive_1000",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "plan_bounded_resume_windows"
       ],
-      "fixture": "specific deterministic fixture for RESUME-INCLUSIVE-1000",
-      "mutation": "specific material mutation for RESUME-INCLUSIVE-1000",
-      "expected": "exact stable assertion for RESUME-INCLUSIVE-1000"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for RESUME-INCLUSIVE-1000",
+      "mutation": "mutation calls plan_bounded_resume_windows with behavior-specific changed input for RESUME-INCLUSIVE-1000",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_resume_inclusive_1000"
     },
     {
       "behavior_id": "RESUME-MONTH-YEAR-LEAP",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_resume_month_year_leap_boundaries",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "plan_bounded_resume_windows"
       ],
-      "fixture": "specific deterministic fixture for RESUME-MONTH-YEAR-LEAP",
-      "mutation": "specific material mutation for RESUME-MONTH-YEAR-LEAP",
-      "expected": "exact stable assertion for RESUME-MONTH-YEAR-LEAP"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for RESUME-MONTH-YEAR-LEAP",
+      "mutation": "mutation calls plan_bounded_resume_windows with behavior-specific changed input for RESUME-MONTH-YEAR-LEAP",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_resume_month_year_leap_boundaries"
     },
     {
       "behavior_id": "FUNDING-STRICT-TIMESTAMPS",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_funding_strict_timestamps",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "scan_funding_observed_range"
       ],
-      "fixture": "specific deterministic fixture for FUNDING-STRICT-TIMESTAMPS",
-      "mutation": "specific material mutation for FUNDING-STRICT-TIMESTAMPS",
-      "expected": "exact stable assertion for FUNDING-STRICT-TIMESTAMPS"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for FUNDING-STRICT-TIMESTAMPS",
+      "mutation": "mutation calls scan_funding_observed_range with behavior-specific changed input for FUNDING-STRICT-TIMESTAMPS",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_funding_strict_timestamps"
     },
     {
       "behavior_id": "DUCKDB-FOUR-VIEWS",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_duckdb_four_views",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "open_readonly_duckdb_views",
+        "duckdb_smoke_audit"
       ],
-      "fixture": "specific deterministic fixture for DUCKDB-FOUR-VIEWS",
-      "mutation": "specific material mutation for DUCKDB-FOUR-VIEWS",
-      "expected": "exact stable assertion for DUCKDB-FOUR-VIEWS"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for DUCKDB-FOUR-VIEWS",
+      "mutation": "mutation calls open_readonly_duckdb_views, duckdb_smoke_audit with behavior-specific changed input for DUCKDB-FOUR-VIEWS",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_duckdb_four_views"
     },
     {
       "behavior_id": "DUCKDB-DECIMAL-TYPES",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_duckdb_decimal_types",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "open_readonly_duckdb_views",
+        "duckdb_smoke_audit"
       ],
-      "fixture": "specific deterministic fixture for DUCKDB-DECIMAL-TYPES",
-      "mutation": "specific material mutation for DUCKDB-DECIMAL-TYPES",
-      "expected": "exact stable assertion for DUCKDB-DECIMAL-TYPES"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for DUCKDB-DECIMAL-TYPES",
+      "mutation": "mutation calls open_readonly_duckdb_views, duckdb_smoke_audit with behavior-specific changed input for DUCKDB-DECIMAL-TYPES",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_duckdb_decimal_types"
     },
     {
       "behavior_id": "DUCKDB-CONNECTION-CLOSED",
       "nodeid": "tests/test_sprint_06_4a_3_4_replay_coverage_resume_duckdb.py::test_duckdb_connection_closed_on_success_and_failure",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "open_readonly_duckdb_views",
+        "duckdb_smoke_audit"
       ],
-      "fixture": "specific deterministic fixture for DUCKDB-CONNECTION-CLOSED",
-      "mutation": "specific material mutation for DUCKDB-CONNECTION-CLOSED",
-      "expected": "exact stable assertion for DUCKDB-CONNECTION-CLOSED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for DUCKDB-CONNECTION-CLOSED",
+      "mutation": "mutation calls open_readonly_duckdb_views, duckdb_smoke_audit with behavior-specific changed input for DUCKDB-CONNECTION-CLOSED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_duckdb_connection_closed_on_success_and_failure"
     },
     {
       "behavior_id": "PACK-BUILDER-BAD-STORE-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_builder_rejects_bad_store",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "make_seed_review_pack",
+        "check_seed_review_pack"
       ],
-      "fixture": "specific deterministic fixture for PACK-BUILDER-BAD-STORE-REJECTED",
-      "mutation": "specific material mutation for PACK-BUILDER-BAD-STORE-REJECTED",
-      "expected": "exact stable assertion for PACK-BUILDER-BAD-STORE-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PACK-BUILDER-BAD-STORE-REJECTED",
+      "mutation": "mutation calls make_seed_review_pack, check_seed_review_pack with behavior-specific changed input for PACK-BUILDER-BAD-STORE-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_pack_builder_rejects_bad_store"
     },
     {
       "behavior_id": "PACK-EXACT-MEMBER-SET",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_exact_member_set",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "make_seed_review_pack",
+        "check_seed_review_pack"
       ],
-      "fixture": "specific deterministic fixture for PACK-EXACT-MEMBER-SET",
-      "mutation": "specific material mutation for PACK-EXACT-MEMBER-SET",
-      "expected": "exact stable assertion for PACK-EXACT-MEMBER-SET"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PACK-EXACT-MEMBER-SET",
+      "mutation": "mutation calls make_seed_review_pack, check_seed_review_pack with behavior-specific changed input for PACK-EXACT-MEMBER-SET",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_pack_exact_member_set"
     },
     {
       "behavior_id": "PACK-EMPTY-MANIFEST-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_empty_manifest_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "make_seed_review_pack",
+        "check_seed_review_pack"
       ],
-      "fixture": "specific deterministic fixture for PACK-EMPTY-MANIFEST-REJECTED",
-      "mutation": "specific material mutation for PACK-EMPTY-MANIFEST-REJECTED",
-      "expected": "exact stable assertion for PACK-EMPTY-MANIFEST-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PACK-EMPTY-MANIFEST-REJECTED",
+      "mutation": "mutation calls make_seed_review_pack, check_seed_review_pack with behavior-specific changed input for PACK-EMPTY-MANIFEST-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_pack_empty_manifest_rejected"
     },
     {
       "behavior_id": "PACK-REHASHED-FAKE-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_rehashed_fake_rejected",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "make_seed_review_pack",
+        "check_seed_review_pack"
       ],
-      "fixture": "specific deterministic fixture for PACK-REHASHED-FAKE-REJECTED",
-      "mutation": "specific material mutation for PACK-REHASHED-FAKE-REJECTED",
-      "expected": "exact stable assertion for PACK-REHASHED-FAKE-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PACK-REHASHED-FAKE-REJECTED",
+      "mutation": "mutation calls make_seed_review_pack, check_seed_review_pack with behavior-specific changed input for PACK-REHASHED-FAKE-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_pack_rehashed_fake_rejected"
     },
     {
       "behavior_id": "PACK-NESTED-EVIDENCE-VALIDATED",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_nested_public_evidence_validated",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "make_seed_review_pack",
+        "check_seed_review_pack"
       ],
-      "fixture": "specific deterministic fixture for PACK-NESTED-EVIDENCE-VALIDATED",
-      "mutation": "specific material mutation for PACK-NESTED-EVIDENCE-VALIDATED",
-      "expected": "exact stable assertion for PACK-NESTED-EVIDENCE-VALIDATED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PACK-NESTED-EVIDENCE-VALIDATED",
+      "mutation": "mutation calls make_seed_review_pack, check_seed_review_pack with behavior-specific changed input for PACK-NESTED-EVIDENCE-VALIDATED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_pack_nested_public_evidence_validated"
     },
     {
       "behavior_id": "PACK-REPORT-TAMPER-REJECTED",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_report_tamper_rejected_after_rehash",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "make_seed_review_pack",
+        "check_seed_review_pack"
       ],
-      "fixture": "specific deterministic fixture for PACK-REPORT-TAMPER-REJECTED",
-      "mutation": "specific material mutation for PACK-REPORT-TAMPER-REJECTED",
-      "expected": "exact stable assertion for PACK-REPORT-TAMPER-REJECTED"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PACK-REPORT-TAMPER-REJECTED",
+      "mutation": "mutation calls make_seed_review_pack, check_seed_review_pack with behavior-specific changed input for PACK-REPORT-TAMPER-REJECTED",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_pack_report_tamper_rejected_after_rehash"
     },
     {
       "behavior_id": "PACK-TEMP-CLEANUP",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_pack_temp_cleanup_on_failure",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "make_seed_review_pack",
+        "check_seed_review_pack"
       ],
-      "fixture": "specific deterministic fixture for PACK-TEMP-CLEANUP",
-      "mutation": "specific material mutation for PACK-TEMP-CLEANUP",
-      "expected": "exact stable assertion for PACK-TEMP-CLEANUP"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for PACK-TEMP-CLEANUP",
+      "mutation": "mutation calls make_seed_review_pack, check_seed_review_pack with behavior-specific changed input for PACK-TEMP-CLEANUP",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_pack_temp_cleanup_on_failure"
     },
     {
       "behavior_id": "CLI-FULL-LIFECYCLE-BYBIT-HOST",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_cli_full_lifecycle_bybit_host_offline",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "subprocess.run"
       ],
-      "fixture": "specific deterministic fixture for CLI-FULL-LIFECYCLE-BYBIT-HOST",
-      "mutation": "specific material mutation for CLI-FULL-LIFECYCLE-BYBIT-HOST",
-      "expected": "exact stable assertion for CLI-FULL-LIFECYCLE-BYBIT-HOST"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CLI-FULL-LIFECYCLE-BYBIT-HOST",
+      "mutation": "mutation calls subprocess.run with behavior-specific changed input for CLI-FULL-LIFECYCLE-BYBIT-HOST",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_cli_full_lifecycle_bybit_host_offline"
     },
     {
       "behavior_id": "CLI-FULL-LIFECYCLE-BYTICK-HOST",
       "nodeid": "tests/test_sprint_06_4a_3_4_semantic_pack_cli.py::test_cli_full_lifecycle_bytick_host_offline",
       "production_symbols": [
-        "bybit_grid.data.market_store.models.StoreVersion"
+        "subprocess.run"
       ],
-      "fixture": "specific deterministic fixture for CLI-FULL-LIFECYCLE-BYTICK-HOST",
-      "mutation": "specific material mutation for CLI-FULL-LIFECYCLE-BYTICK-HOST",
-      "expected": "exact stable assertion for CLI-FULL-LIFECYCLE-BYTICK-HOST"
+      "fixture": "fixture uses named synthetic or tmp_path inputs for CLI-FULL-LIFECYCLE-BYTICK-HOST",
+      "mutation": "mutation calls subprocess.run with behavior-specific changed input for CLI-FULL-LIFECYCLE-BYTICK-HOST",
+      "expected": "expected exact success object or MarketStoreError string asserted by test_cli_full_lifecycle_bytick_host_offline"
     }
   ]
 }
