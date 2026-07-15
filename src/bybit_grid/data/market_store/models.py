@@ -461,3 +461,5 @@ class ReplaySlice:
         _tuple_exact(self.trade_klines, "trade_klines")
         _tuple_exact(self.mark_klines, "mark_klines")
         _tuple_exact(self.funding_observations, "funding_observations")
+
+# Sprint 06.4A.3.6 model contract: store graph objects remain strict immutable dataclasses.

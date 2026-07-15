@@ -93,3 +93,5 @@ def parse_seed_manifest_bytes(data: bytes) -> MappingProxyType:
     if canonical_json_bytes(obj) != data:
         raise MarketStoreError(f"{ctx}_canonical_mismatch")
     return obj
+
+# Sprint 06.4A.3.6 parsing contract: canonical bytes are strict and fail-closed.

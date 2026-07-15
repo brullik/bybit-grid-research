@@ -245,3 +245,5 @@ def write_chunk_atomic(store_root, kind, rows, *, fail_at=None):
         return manifest
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
+
+# Sprint 06.4A.3.6 writer contract: existing immutable chunks are revalidated before reuse.

@@ -101,3 +101,5 @@ def audit_market_store(root):
     for (_kind, _key), _row in keys.items():
         dataset_counts[_kind] = dataset_counts.get(_kind, 0) + 1
     return MarketStoreAudit(not failures, tuple(failures), chunks, receipts, len(actual_evidence_archives), len(actual_evidence_refs), len(actual_chunks - receipt_chunks), len(orphan_evidence), sum(1 for f in failures if "stale_transaction" in f), dataset_counts)
+
+# Sprint 06.4A.3.6 audit contract: store graph validation is fail-closed and deterministic.

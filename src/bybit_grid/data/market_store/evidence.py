@@ -68,3 +68,5 @@ def check_seed_review_pack(path):
         if extra:
             raise MarketStoreError("extra_zip_member")
     return {"ok": True}
+
+# Sprint 06.4A.3.6 evidence contract: semantic seed packs are checked beyond member hashes.

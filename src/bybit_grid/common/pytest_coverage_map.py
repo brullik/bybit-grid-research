@@ -1,5 +1,6 @@
 from __future__ import annotations
 import ast
+import copy
 import json
 import re
 import shlex
@@ -27,6 +28,25 @@ CLI_SCRIPTS = {
     "scripts/make_bybit_public_parquet_seed_review_pack.py",
     "scripts/check_bybit_public_parquet_seed_review_pack.py",
 }
+
+REQUIRED_PRODUCTION_SYMBOLS_064A35 = {
+    **{bid: ("verify_required_behavior_json",) for bid in ("GOV-EXACT-ID-SET", "GOV-MISSING-NODE", "GOV-NOOP-REJECTED")},
+    **{bid: ("subprocess.run",) for bid in ("CLI-HELP-ALL", "CLI-MISSING-ARGS-ALL", "CLI-FULL-LIFECYCLE-BYBIT-HOST", "CLI-FULL-LIFECYCLE-BYTICK-HOST")},
+    **{bid: ("ensure_decimal128_38_18",) for bid in ("DECIMAL-MAX-BOUNDARY", "DECIMAL-MIN-BOUNDARY", "DECIMAL-ROUNDING-REJECTED")},
+    **{bid: ("partition_validated_rows",) for bid in ("PLAN-INSTRUMENT-SNAPSHOT", "PLAN-KLINE-CROSS-MONTH", "PLAN-FUNDING-FOUR-MONTHS", "PLAN-MULTI-SYMBOL-REJECTED")},
+    **{bid: ("build_import_preflight_plan", "snapshot_tree") for bid in ("PREFLIGHT-INVALID-ROW-ZERO-WRITES", "PREFLIGHT-INCOMING-DUPLICATE-ZERO-WRITES", "PREFLIGHT-COMMITTED-CONFLICT-ZERO-WRITES")},
+    **{bid: ("write_chunk_atomic", "snapshot_tree") for bid in ("CHUNK-EARLY-CLEANUP", "CHUNK-MID-CLEANUP", "CHUNK-LATE-CLEANUP")},
+    **{bid: ("write_chunk_atomic", "read_and_validate_chunk") for bid in ("CHUNK-CANONICAL-MANIFEST", "CHUNK-ACTUAL-PATH-MATCH", "CHUNK-PK-SCHEMA-MATCH", "CHUNK-EXISTING-CORRUPTION-REJECTED")},
+    **{bid: ("import_validated_public_batch_to_store",) for bid in ("IMPORT-SYNTHETIC-REAL-SHAPE", "IMPORT-SOURCE-BYTES-IMMUTABLE", "IMPORT-RECEIPT-LAST", "IMPORT-NOOP-TYPED", "IMPORT-NOOP-ZERO-MUTATION", "IMPORT-NOOP-CORRUPT-CHUNK-REJECTED", "IMPORT-NOOP-CORRUPT-EVIDENCE-REJECTED")},
+    **{bid: ("audit_market_store",) for bid in ("AUDIT-EMPTY-REJECTED", "AUDIT-VERSION-TAMPER-REJECTED", "AUDIT-ORPHAN-CHUNK-REJECTED", "AUDIT-ORPHAN-EVIDENCE-REJECTED", "AUDIT-RECEIPT-TAMPER-REJECTED", "AUDIT-GLOBAL-DUPLICATE-REJECTED", "AUDIT-GLOBAL-CONFLICT-REJECTED", "AUDIT-UNEXPECTED-ENTRY-REJECTED", "AUDIT-STALE-STAGING-REJECTED")},
+    **{bid: ("read_replay_slice",) for bid in ("REPLAY-SNAPSHOT-REQUIRED", "REPLAY-SNAPSHOT-ROW-RETURNED", "REPLAY-COMPLETE-TRADE-MARK", "REPLAY-FUNDING-MARK-JOIN", "REPLAY-MISSING-MARK-JOIN-REJECTED")},
+    **{bid: ("scan_minute_coverage",) for bid in ("COVERAGE-STRICT-INPUTS", "COVERAGE-OUT-OF-WINDOW-REJECTED", "COVERAGE-GAP-WINDOWS")},
+    **{bid: ("plan_bounded_resume_windows",) for bid in ("RESUME-INCLUSIVE-1000", "RESUME-MONTH-YEAR-LEAP")},
+    "FUNDING-STRICT-TIMESTAMPS": ("scan_funding_observed_range",),
+    **{bid: ("open_readonly_duckdb_views", "duckdb_smoke_audit") for bid in ("DUCKDB-FOUR-VIEWS", "DUCKDB-DECIMAL-TYPES", "DUCKDB-CONNECTION-CLOSED")},
+    **{bid: ("make_seed_review_pack", "check_seed_review_pack") for bid in ("PACK-BUILDER-BAD-STORE-REJECTED", "PACK-EXACT-MEMBER-SET", "PACK-EMPTY-MANIFEST-REJECTED", "PACK-REHASHED-FAKE-REJECTED", "PACK-NESTED-EVIDENCE-VALIDATED", "PACK-REPORT-TAMPER-REJECTED", "PACK-TEMP-CLEANUP")},
+}
+
 REQUIRED_064A3 = tuple(
     """GOV-EXACT-ID-SET
 GOV-MISSING-NODE
@@ -106,19 +126,16 @@ def _literal_strings(node: ast.AST) -> set[str]:
 
 
 def _normalize_body(fn: ast.FunctionDef) -> str:
-    clone = (
-        ast.fix_missing_locations(
-            ast.parse("\n".join(ast.get_source_segment("", n) or ast.dump(n) for n in fn.body))
-        )
-        if False
-        else fn
-    )
+    clone = copy.deepcopy(fn)
+    clone.name = "<TEST_FUNCTION>"
     for n in ast.walk(clone):
         for attr in ("lineno", "col_offset", "end_lineno", "end_col_offset"):
             if hasattr(n, attr):
                 setattr(n, attr, 0)
-        if isinstance(n, ast.Constant) and type(n.value) is str and n.value in REQUIRED_064A3:
-            n.value = "<BEHAVIOR_ID>"
+        if isinstance(n, ast.Constant) and type(n.value) in (str, int, float):
+            if type(n.value) is str and n.value.startswith("^") and n.value.endswith("$"):
+                continue
+            n.value = f"<CONST_{type(n.value).__name__}>"
     return ast.dump(clone, include_attributes=False)
 
 
@@ -150,6 +167,23 @@ def _ast_errors(row: dict, seen_bodies: dict[str, str]) -> list[str]:
     except Exception as e:
         return [f"missing_node_source:{nodeid}:{e}"]
     calls = [_call_name(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)]
+    for n in ast.walk(fn):
+        if isinstance(n, ast.ExceptHandler) and (n.type is None or _call_name(n.type) in {"Exception", "BaseException"}):
+            errors.append(f"forbidden_any_exception_capture:{nodeid}")
+        if isinstance(n, ast.Call) and _call_name(n.func).endswith("pytest.raises") and n.args and _call_name(n.args[0]) in {"Exception", "BaseException"}:
+            errors.append(f"forbidden_any_exception_capture:{nodeid}")
+        if isinstance(n, ast.Call) and _call_name(n.func).endswith("observations.append"):
+            errors.append(f"forbidden_observations_pattern:{nodeid}")
+        if isinstance(n, ast.Call) and _call_name(n.func) == "object":
+            errors.append(f"forbidden_object_evidence:{nodeid}")
+        if isinstance(n, ast.Call) and _call_name(n.func) == "partition_validated_rows" and len(n.args) >= 2 and isinstance(n.args[1], (ast.List, ast.Tuple)) and not n.args[1].elts:
+            errors.append(f"forbidden_empty_fixture:{nodeid}")
+        if isinstance(n, ast.Call) and _call_name(n.func) == "audit_market_store" and n.args and "missing" in ast.dump(n.args[0]).lower() and not bid.startswith("AUDIT-"):
+            errors.append(f"forbidden_missing_store_fixture:{nodeid}")
+        if isinstance(n, ast.Call) and _call_name(n.func) == "subprocess.run":
+            call_text = ast.dump(n).lower()
+            if "python" in call_text and "--version" in call_text:
+                errors.append(f"forbidden_python_version_lifecycle:{nodeid}")
     if any(c.split(".")[-1] in FORBIDDEN_HELPERS for c in calls):
         errors.append(f"generic_dispatcher_node:{nodeid}")
     top_calls = [n for n in fn.body if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)]
@@ -170,6 +204,13 @@ def _ast_errors(row: dict, seen_bodies: dict[str, str]) -> list[str]:
         errors.append(f"no_direct_production_call:{nodeid}")
     if not (has_assert or has_raises_match):
         errors.append(f"no_assertion_contract:{nodeid}")
+    assert_nodes = [n for n in ast.walk(fn) if isinstance(n, ast.Assert)]
+    if assert_nodes and all(isinstance(a.test, ast.Compare) and all(isinstance(x, ast.Constant) for x in [a.test.left, *a.test.comparators]) for a in assert_nodes):
+        errors.append(f"constant_only_assertion:{nodeid}")
+    expected_text = str(row.get("expected", ""))
+    literal_blob = "\n".join(strings)
+    if "MarketStoreError" in expected_text and not any(part in literal_blob for part in expected_text.replace("MarketStoreError", " ").replace("(", " ").replace(")", " ").replace('"', ' ').replace("'", " ").split() if "_" in part):
+        errors.append(f"missing_exact_expected_literal:{nodeid}")
     if not _symbol_present(fn, row["production_symbols"]):
         errors.append(f"production_symbol_not_referenced:{bid}")
     sig = _normalize_body(fn)
@@ -219,6 +260,8 @@ def verify_required_behavior_json(path: Path, collected_nodes, *, ast_checks: bo
             or len(set(row["production_symbols"])) != len(row["production_symbols"])
         ):
             errors.append(f"{path}:production_symbols_invalid:{bid}")
+        if bid in REQUIRED_PRODUCTION_SYMBOLS_064A35 and tuple(row.get("production_symbols", ())) != REQUIRED_PRODUCTION_SYMBOLS_064A35[bid]:
+            errors.append(f"{path}:production_symbols_not_frozen:{bid}")
         if any(type(row[k]) is not str or not row[k] for k in ("fixture", "mutation", "expected")):
             errors.append(f"{path}:traceability_text_invalid:{bid}")
         text = " ".join(str(row[k]).lower() for k in ("fixture", "mutation", "expected"))

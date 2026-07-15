@@ -105,3 +105,5 @@ def import_validated_public_batch_to_store(evidence, store_root):
     from .transaction import build_import_preflight_plan, commit_import_preflight_plan
     plan = build_import_preflight_plan(evidence, Path(store_root))
     return commit_import_preflight_plan(plan)
+
+# Sprint 06.4A.3.6 import contract: path loading is a one-read immutable-bytes wrapper.

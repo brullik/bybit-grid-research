@@ -27,6 +27,19 @@ def build_import_preflight_plan(evidence, store_root: Path) -> ImportPreflightPl
         aud = audit_market_store(store_root)
         if not aud.ok:
             raise MarketStoreError(";".join(aud.failures) or "store_audit_failed")
+    existing_rows = {}
+    if store_root.exists() and any(store_root.iterdir()):
+        from .reader import read_and_validate_chunk
+        from .canonical import row_key
+        for chunk_dir in sorted((store_root / "datasets").glob("*/*/*/*/chunk=*")):
+            mf, committed = read_and_validate_chunk(store_root, chunk_dir)
+            for r in committed:
+                k = (mf.dataset, row_key(mf.dataset, r))
+                if k in existing_rows:
+                    if existing_rows[k] != r:
+                        raise MarketStoreError("store_row_conflict")
+                    raise MarketStoreError("duplicate_committed_key")
+                existing_rows[k] = r
     chunks = []
     seen = {}
     for kind, rows in _project_planned_rows(evidence):
@@ -36,6 +49,8 @@ def build_import_preflight_plan(evidence, store_root: Path) -> ImportPreflightPl
             k = (kind.value, row_key(kind, r))
             if k in seen:
                 raise MarketStoreError("duplicate_incoming_key")
+            if k in existing_rows and existing_rows[k] != r:
+                raise MarketStoreError("store_row_conflict")
             seen[k] = r
         chunks.append(
             build_planned_chunk(

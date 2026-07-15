@@ -37,3 +37,5 @@ def duckdb_smoke_audit(store_root):
         return {v: con.execute(f"SELECT count(*) FROM {v}").fetchone()[0] for v in VIEWS.values()}
     finally:
         con.close()
+
+# Sprint 06.4A.3.6 DuckDB smoke contract: market decimal columns must not degrade to floats.
