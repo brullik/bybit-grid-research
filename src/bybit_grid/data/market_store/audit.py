@@ -1,10 +1,9 @@
 from __future__ import annotations
 import hashlib
-import json
 from pathlib import Path
-from .models import MarketStoreAudit, STORE_SCHEMA_VERSION
-from .reader import _read_chunk, row_key
-from .canonical import canonical_json_bytes
+from .models import MarketStoreAudit
+from .reader import read_and_validate_chunk, row_key
+from .parsing import parse_import_receipt_bytes, parse_store_version_bytes, parse_evidence_reference_bytes
 
 
 def audit_market_store(root):
@@ -31,8 +30,7 @@ def audit_market_store(root):
         failures.append("store_version_missing")
     else:
         try:
-            if ver.read_bytes() != canonical_json_bytes({"storage_schema_version": STORE_SCHEMA_VERSION}):
-                failures.append("store_version_invalid")
+            parse_store_version_bytes(ver.read_bytes())
         except Exception:
             failures.append("store_version_invalid")
     receipt_chunks = set()
@@ -40,11 +38,8 @@ def audit_market_store(root):
         chunks += 1
         try:
             kind = d.parts[d.parts.index("datasets") + 1]
-            rows = _read_chunk(d, kind)
-            mf = json.loads((d / "chunk_manifest.json").read_text())
+            mf_obj, rows = read_and_validate_chunk(root, d)
             rel = d.relative_to(root).as_posix()
-            if mf.get("relative_path") != rel:
-                failures.append("chunk_path_mismatch")
             for r in rows:
                 k = (kind, row_key(kind, r))
                 if k in keys:
@@ -55,28 +50,32 @@ def audit_market_store(root):
     for rr in (root / "imports").glob("**/import_receipt.json") if (root / "imports").exists() else []:
         receipts += 1
         try:
-            raw = json.loads(rr.read_text())
-            if set(raw) != {"chunks", "run_id", "source_review_pack_sha256", "storage_schema_version"}:
-                failures.append("receipt_schema_invalid")
-                continue
-            if raw["storage_schema_version"] != STORE_SCHEMA_VERSION:
-                failures.append("receipt_schema_invalid")
-            if rr.read_bytes() != canonical_json_bytes(raw):
-                failures.append("receipt_canonical_mismatch")
-            sha = raw.get("source_review_pack_sha256")
-            evzip = root / "evidence" / str(sha) / "review_pack.zip"
-            evref = root / "evidence" / str(sha) / "evidence_reference.json"
+            receipt = parse_import_receipt_bytes(rr.read_bytes())
+            sha = receipt.source_review_pack_sha256
+            evzip = root / "evidence" / f"sha256={sha}" / "review_pack.zip"
+            evref = root / "evidence" / f"sha256={sha}" / "evidence_reference.json"
             if not evzip.exists() or not evref.exists():
-                failures.append("receipt_evidence_missing")
+                failures.append(f"receipt_evidence_missing:{rr.relative_to(root).as_posix()}")
             elif hashlib.sha256(evzip.read_bytes()).hexdigest() != sha:
-                failures.append("evidence_archive_sha256_mismatch")
-            for c in raw.get("chunks", []):
-                rel = c.get("relative_path")
-                receipt_chunks.add(rel)
-                if not rel or not (root / rel).exists():
+                failures.append(f"evidence_archive_sha256_mismatch:{sha}")
+            else:
+                try:
+                    ref = parse_evidence_reference_bytes(evref.read_bytes())
+                    if ref.run_id != receipt.run_id or ref.source_review_pack_sha256 != sha:
+                        failures.append(f"evidence_reference_invalid:{evref.relative_to(root).as_posix()}:mismatch")
+                except Exception as e:
+                    failures.append(f"evidence_reference_invalid:{evref.relative_to(root).as_posix()}:{e}")
+            for c in receipt.chunks:
+                receipt_chunks.add(c.relative_path)
+                if not (root / c.relative_path).exists():
                     failures.append("receipt_chunk_missing")
+                else:
+                    try:
+                        read_and_validate_chunk(root, root / c.relative_path, expected_manifest=c)
+                    except Exception as e:
+                        failures.append(f"receipt_chunk_manifest_mismatch:{c.relative_path}:{e}")
         except Exception as e:
-            failures.append(f"receipt_invalid:{e}")
+            failures.append(f"receipt_invalid:{rr.relative_to(root).as_posix()}:{e}")
     actual_chunks = {p.relative_to(root).as_posix() for p in (root / "datasets").glob("**/chunk=*")} if (root / "datasets").exists() else set()
     if chunks and not receipts:
         failures.append("chunks_without_receipt")
@@ -86,8 +85,4 @@ def audit_market_store(root):
         failures.append(f"orphan_chunk:{rel}")
     if (root / "evidence").exists() and not receipts:
         failures.append("evidence_without_receipt")
-    if chunks == 0:
-        failures.append("no_committed_chunks")
-    if receipts == 0:
-        failures.append("no_import_receipts")
     return MarketStoreAudit(not failures, tuple(failures), chunks, receipts)

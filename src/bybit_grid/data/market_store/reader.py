@@ -1,10 +1,10 @@
 from __future__ import annotations
-import json
 import hashlib
 from pathlib import Path
 import pyarrow.parquet as pq
-from .models import MarketDatasetKind, MarketStoreError
+from .models import MarketDatasetKind, MarketStoreError, FundingReplayObservation, ReplaySlice, freeze_immutable
 from .schemas import schema_for
+from .parsing import parse_chunk_manifest_bytes
 from .canonical import logical_rows_sha256, row_key
 
 
@@ -12,30 +12,62 @@ def _chunk_dirs(root, kind):
     return sorted((Path(root) / "datasets" / MarketDatasetKind(kind).value).glob("**/chunk=*"))
 
 
-def _read_chunk(d, kind):
-    kind = MarketDatasetKind(kind)
-    if sorted(p.name for p in Path(d).iterdir()) != ["chunk_manifest.json", "data.parquet"]:
+def read_and_validate_chunk(store_root: Path, chunk_dir: Path, *, expected_manifest=None):
+    store_root = Path(store_root)
+    d = Path(chunk_dir)
+    if not d.is_dir() or d.is_symlink():
         raise MarketStoreError("chunk_dir_contract_invalid")
-    mf = json.loads((d / "chunk_manifest.json").read_text())
-    required = {"dataset","relative_path","row_count","primary_key_columns","min_key","max_key","parquet_sha256","logical_rows_sha256","storage_schema_version"}
-    if set(mf) != required or mf["dataset"] != kind.value:
-        raise MarketStoreError("manifest_schema_invalid")
-    if type(mf["relative_path"]) is not str or not mf["relative_path"].startswith("datasets/"):
+    try:
+        rel = d.relative_to(store_root).as_posix()
+    except ValueError as e:
+        raise MarketStoreError("chunk_dir_contract_invalid") from e
+    entries = sorted(d.iterdir(), key=lambda p: p.name)
+    if [p.name for p in entries] != ["chunk_manifest.json", "data.parquet"]:
+        raise MarketStoreError("chunk_dir_contract_invalid")
+    for f in entries:
+        if f.is_symlink() or not f.is_file():
+            raise MarketStoreError("chunk_dir_contract_invalid")
+    mf = parse_chunk_manifest_bytes((d / "chunk_manifest.json").read_bytes())
+    if expected_manifest is not None and mf != expected_manifest:
+        raise MarketStoreError("manifest_expected_mismatch")
+    kind = MarketDatasetKind(mf.dataset)
+    if mf.relative_path != rel:
         raise MarketStoreError("manifest_relative_path_invalid")
     data = d / "data.parquet"
-    if hashlib.sha256(data.read_bytes()).hexdigest() != mf["parquet_sha256"]:
+    if hashlib.sha256(data.read_bytes()).hexdigest() != mf.parquet_sha256:
         raise MarketStoreError("parquet_sha256_mismatch")
     t = pq.read_table(data)
     if t.schema != schema_for(kind):
         raise MarketStoreError("schema_mismatch")
-    rows = tuple(t.to_pylist())
+    rows = tuple(freeze_immutable(r, field_name="row") for r in t.to_pylist())
+    if not rows:
+        raise MarketStoreError("empty_chunk")
     keys = tuple(row_key(kind, r) for r in rows)
     if tuple(sorted(keys)) != keys or len(set(keys)) != len(keys):
         raise MarketStoreError("primary_key_order_invalid")
-    if len(rows) != mf["row_count"] or list(keys[0]) != mf["min_key"] or list(keys[-1]) != mf["max_key"]:
+    if len(rows) != mf.row_count or keys[0] != mf.min_key or keys[-1] != mf.max_key:
         raise MarketStoreError("manifest_row_bounds_invalid")
-    if logical_rows_sha256(kind, rows) != mf["logical_rows_sha256"]:
+    if tuple(mf.primary_key_columns) != {
+        MarketDatasetKind.instrument_snapshot:("snapshot_server_time_ms","symbol"),
+        MarketDatasetKind.trade_kline_1m:("symbol","open_time_ms"),
+        MarketDatasetKind.mark_kline_1m:("symbol","open_time_ms"),
+        MarketDatasetKind.funding_rate:("symbol","funding_time_ms"),
+    }[kind]:
+        raise MarketStoreError("primary_key_schema_invalid")
+    if logical_rows_sha256(kind, rows) != mf.logical_rows_sha256:
         raise MarketStoreError("logical_hash_mismatch")
+    return mf, rows
+
+
+def _read_chunk(d, kind):
+    d = Path(d)
+    parts = d.parts
+    if "datasets" not in parts:
+        raise MarketStoreError("chunk_dir_contract_invalid")
+    root = Path(*parts[:parts.index("datasets")])
+    mf, rows = read_and_validate_chunk(root, d)
+    if mf.dataset != MarketDatasetKind(kind).value:
+        raise MarketStoreError("manifest_schema_invalid")
     return rows
 
 
@@ -44,7 +76,7 @@ def read_dataset(root, kind, *, symbol=None, start_ms=None, end_ms=None):
     rows = []
     seen = {}
     for d in _chunk_dirs(root, kind):
-        for r in _read_chunk(d, kind):
+        for r in read_and_validate_chunk(Path(root), d)[1]:
             if symbol is not None and r.get("symbol") != symbol:
                 continue
             ts = r.get("open_time_ms", r.get("funding_time_ms", r.get("snapshot_server_time_ms")))
@@ -65,13 +97,15 @@ def read_dataset(root, kind, *, symbol=None, start_ms=None, end_ms=None):
 def _validate_replay_args(symbol, start_ms, end_ms, snapshot_server_time_ms):
     if type(symbol) is not str or not symbol or "/" in symbol or "\\" in symbol or ".." in symbol:
         raise MarketStoreError("unsafe_symbol")
-    for name, value in (("start", start_ms), ("end", end_ms), ("snapshot", snapshot_server_time_ms)):
+    for name, value in (("start", start_ms), ("end", end_ms)):
         if type(value) is not int:
             raise MarketStoreError(f"{name}_not_exact_int")
         if value < 0:
             raise MarketStoreError(f"{name}_negative")
         if value % 60000:
             raise MarketStoreError(f"{name}_unaligned")
+    if type(snapshot_server_time_ms) is not int or snapshot_server_time_ms < 0:
+        raise MarketStoreError("snapshot_invalid")
     if start_ms > end_ms:
         raise MarketStoreError("timestamp_range_reversed")
 
@@ -102,5 +136,5 @@ def read_replay_slice(root, *, symbol, start_ms, end_ms, snapshot_server_time_ms
         ts = r["funding_time_ms"]
         if ts not in mark_by_ts:
             raise MarketStoreError("funding_mark_join_missing")
-        funding.append({"funding_time_ms": ts, "funding_rate": r["funding_rate"], "mark_open": mark_by_ts[ts]["open"]})
-    return {"instrument": inst[0], "trade_klines": tr, "mark_klines": mk, "funding_observations": tuple(funding)}
+        funding.append(FundingReplayObservation(ts, r["funding_rate"], mark_by_ts[ts]["open"]))
+    return ReplaySlice(inst[0], tr, mk, tuple(funding))
