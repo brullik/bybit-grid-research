@@ -5,6 +5,7 @@ from decimal import Decimal
 import json
 import os
 from pathlib import Path
+import signal
 import stat
 import zipfile
 
@@ -89,7 +90,7 @@ def build_store(root, source_bytes=b"synthetic-public-review-pack"):
 def _regular_info(name):
     info = zipfile.ZipInfo(name, FIXED_ZIP_TIME)
     info.create_system = 3
-    info.compress_type = zipfile.ZIP_DEFLATED
+    info.compress_type = zipfile.ZIP_STORED
     info.external_attr = (stat.S_IFREG | 0o600) << 16
     return info
 
@@ -97,7 +98,7 @@ def _regular_info(name):
 def _typed_info(name, mode):
     info = zipfile.ZipInfo(name, FIXED_ZIP_TIME)
     info.create_system = 3
-    info.compress_type = zipfile.ZIP_DEFLATED
+    info.compress_type = zipfile.ZIP_STORED
     info.external_attr = mode << 16
     return info
 
@@ -162,6 +163,11 @@ def _assert_error(code, callable_):
     assert str(caught.value) == code
 
 
+def _assert_no_seed_temps(root):
+    assert list(root.rglob(".bybit-grid-seed-*.tmp")) == []
+    assert list(root.rglob("seed.zip.tmp")) == []
+
+
 def test_canonical_builder_roundtrip_and_identity(tmp_path, monkeypatch):
     root = tmp_path / "store"
     source_sha = build_store(root)
@@ -212,6 +218,10 @@ def test_builder_emits_sorted_explicit_regular_members(tmp_path, monkeypatch):
     assert [info.filename for info in infos] == sorted(info.filename for info in infos)
     assert all(info.date_time == FIXED_ZIP_TIME for info in infos)
     assert all(stat.S_ISREG(info.external_attr >> 16) for info in infos)
+    assert all(info.compress_type == zipfile.ZIP_STORED for info in infos)
+    assert all(info.compress_size == info.file_size for info in infos)
+    assert all(info.create_version == 20 for info in infos)
+    assert all(info.extract_version == 20 for info in infos)
 
 
 def test_manual_canonical_pack_is_accepted(tmp_path, monkeypatch):
@@ -392,6 +402,92 @@ def test_outer_pack_symlink_is_rejected(tmp_path, monkeypatch):
     _assert_error("unsafe_seed_pack_path", lambda: check_seed_review_pack(alias))
 
 
+def test_outer_pack_fifo_rebind_before_open_is_rejected_without_blocking(tmp_path, monkeypatch):
+    assert "_open_regular_no_follow" in check_seed_review_pack.__globals__
+    _root, _source_sha, pack, _payloads = _canonical_pack(tmp_path)
+    replacement = tmp_path / "replacement.fifo"
+    os.mkfifo(replacement)
+    original_lstat = Path.lstat
+    pack_lstat_calls = 0
+
+    def replace_after_helper_lstat(path):
+        nonlocal pack_lstat_calls
+        result = original_lstat(path)
+        if path == pack:
+            pack_lstat_calls += 1
+            if pack_lstat_calls == 2:
+                os.replace(replacement, pack)
+        return result
+
+    class BlockedOpen(BaseException):
+        pass
+
+    def reject_blocked_open(_signum, _frame):
+        raise BlockedOpen
+
+    monkeypatch.setattr(Path, "lstat", replace_after_helper_lstat)
+    previous_handler = signal.signal(signal.SIGALRM, reject_blocked_open)
+    signal.setitimer(signal.ITIMER_REAL, 0.5)
+    try:
+        try:
+            _assert_error("unsafe_seed_pack_path", lambda: check_seed_review_pack(pack))
+        except BlockedOpen:
+            pytest.fail("outer-pack FIFO rebind blocked while opening the checker input")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+    assert pack_lstat_calls == 2
+    assert stat.S_ISFIFO(original_lstat(pack).st_mode)
+
+
+def test_outer_pack_in_place_mutation_with_restored_mtime_is_rejected(tmp_path, monkeypatch):
+    _root, _source_sha, pack, _payloads = _canonical_pack(tmp_path)
+    before = pack.stat()
+    observed_after_mutation = []
+
+    def mutate_outer_pack(_nested_path, _run_id):
+        with pack.open("r+b") as stream:
+            first = stream.read(1)
+            stream.seek(0)
+            stream.write(b"X" if first != b"X" else b"Y")
+        os.utime(pack, ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = pack.stat()
+        observed_after_mutation.append((after.st_size, after.st_mtime_ns))
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        seed_evidence,
+        "validate_review_pack",
+        mutate_outer_pack,
+        raising=False,
+    )
+    _assert_error("unsafe_seed_pack_path", lambda: check_seed_review_pack(pack))
+    assert observed_after_mutation == [(before.st_size, before.st_mtime_ns)]
+
+
+def test_outer_pack_pathname_rebind_during_validation_is_rejected(tmp_path, monkeypatch):
+    _root, _source_sha, pack, _payloads = _canonical_pack(tmp_path)
+    original_bytes = pack.read_bytes()
+    replacement = tmp_path / "replacement.zip"
+    replacement.write_bytes(original_bytes)
+    original_inode = pack.stat().st_ino
+
+    def rebind_outer_pack(_nested_path, _run_id):
+        os.replace(replacement, pack)
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        seed_evidence,
+        "validate_review_pack",
+        rebind_outer_pack,
+        raising=False,
+    )
+    _assert_error("unsafe_seed_pack_path", lambda: check_seed_review_pack(pack))
+    assert pack.stat().st_ino != original_inode
+    assert pack.read_bytes() == original_bytes
+
+
 def test_destination_inside_store_is_rejected_before_writes(tmp_path, monkeypatch):
     root = tmp_path / "store"
     build_store(root)
@@ -399,7 +495,7 @@ def test_destination_inside_store_is_rejected_before_writes(tmp_path, monkeypatc
     dest = root / "seed.zip"
     _assert_error("destination_inside_store", lambda: make_seed_review_pack(root, dest))
     assert not dest.exists()
-    assert not (root / "seed.zip.tmp").exists()
+    _assert_no_seed_temps(tmp_path)
 
 
 def test_destination_through_symlinked_parent_into_store_is_rejected(tmp_path, monkeypatch):
@@ -411,7 +507,86 @@ def test_destination_through_symlinked_parent_into_store_is_rejected(tmp_path, m
     dest = alias / "seed.zip"
     _assert_error("destination_inside_store", lambda: make_seed_review_pack(root, dest))
     assert not (root / "seed.zip").exists()
-    assert not (root / "seed.zip.tmp").exists()
+    _assert_no_seed_temps(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "destination_kind",
+    ["filesystem_root", "current_directory", "parent_directory", "named_directory"],
+)
+def test_destination_shape_is_rejected_before_store_audit(tmp_path, monkeypatch, destination_kind):
+    root = tmp_path / "store"
+    build_store(root)
+    before = audit_market_store(root)
+    named_directory = tmp_path / "destination-directory"
+    named_directory.mkdir()
+    destinations = {
+        "filesystem_root": Path("/"),
+        "current_directory": Path("."),
+        "parent_directory": Path(".."),
+        "named_directory": named_directory,
+    }
+    monkeypatch.chdir(tmp_path)
+
+    def forbidden_audit(_root):
+        raise AssertionError("destination shape must be validated before store audit")
+
+    monkeypatch.setattr(seed_evidence, "audit_market_store", forbidden_audit)
+    _assert_error(
+        "unsafe_seed_destination",
+        lambda: make_seed_review_pack(root, destinations[destination_kind]),
+    )
+    assert audit_market_store(root) == before
+    assert not (root / "seed.zip").exists()
+    _assert_no_seed_temps(tmp_path)
+
+
+def test_destination_parent_must_already_exist(tmp_path, monkeypatch):
+    root = tmp_path / "store"
+    build_store(root)
+    destination = tmp_path / "missing-parent" / "seed.zip"
+
+    def forbidden_audit(_root):
+        raise AssertionError("destination parent must be validated before store audit")
+
+    monkeypatch.setattr(seed_evidence, "audit_market_store", forbidden_audit)
+    _assert_error(
+        "unsafe_seed_destination",
+        lambda: make_seed_review_pack(root, destination),
+    )
+    assert not destination.parent.exists()
+    assert not destination.exists()
+    _assert_no_seed_temps(tmp_path)
+
+
+@pytest.mark.parametrize("entry_kind", ["symlink", "fifo"])
+def test_existing_nonregular_destination_is_rejected_before_store_audit(
+    tmp_path, monkeypatch, entry_kind
+):
+    root = tmp_path / "store"
+    build_store(root)
+    outside = tmp_path / "outside-target"
+    outside.write_bytes(b"unchanged")
+    destination = tmp_path / "seed.zip"
+    if entry_kind == "symlink":
+        destination.symlink_to(outside)
+    else:
+        os.mkfifo(destination)
+
+    def forbidden_audit(_root):
+        raise AssertionError("destination entry type must be checked before store audit")
+
+    monkeypatch.setattr(seed_evidence, "audit_market_store", forbidden_audit)
+    _assert_error(
+        "unsafe_seed_destination",
+        lambda: make_seed_review_pack(root, destination),
+    )
+    assert outside.read_bytes() == b"unchanged"
+    if entry_kind == "symlink":
+        assert destination.is_symlink()
+    else:
+        assert stat.S_ISFIFO(destination.lstat().st_mode)
+    _assert_no_seed_temps(tmp_path)
 
 
 def test_builder_failure_preserves_destination_and_removes_temp(tmp_path, monkeypatch):
@@ -427,7 +602,7 @@ def test_builder_failure_preserves_destination_and_removes_temp(tmp_path, monkey
     monkeypatch.setattr(seed_evidence, "check_seed_review_pack", reject)
     _assert_error("injected_seed_check_failure", lambda: make_seed_review_pack(root, dest))
     assert dest.read_bytes() == b"previous"
-    assert not (tmp_path / "seed.zip.tmp").exists()
+    _assert_no_seed_temps(tmp_path)
 
 
 @pytest.mark.parametrize("metadata_kind", ["archive_comment", "member_extra", "member_comment"])
@@ -447,6 +622,185 @@ def test_unmanifested_zip_metadata_is_rejected(tmp_path, metadata_kind):
                         info.comment = b"hidden"
                 archive.writestr(info, payloads[name])
     _assert_error("seed_zip_metadata_invalid", lambda: check_seed_review_pack(pack))
+
+
+@pytest.mark.parametrize(
+    "metadata_kind",
+    [
+        "member_timestamp",
+        "member_order",
+        "member_mode",
+        "member_compression",
+        "member_create_system",
+        "member_zip64_version",
+        "archive_prefix",
+        "archive_trailer",
+    ],
+)
+def test_noncanonical_zip_envelope_is_rejected(tmp_path, metadata_kind):
+    _root, _source_sha, pack, payloads = _canonical_pack(tmp_path)
+    if metadata_kind in {"archive_prefix", "archive_trailer"}:
+        canonical = pack.read_bytes()
+        if metadata_kind == "archive_prefix":
+            pack.write_bytes(b"unmanifested-prefix" + canonical)
+        else:
+            pack.write_bytes(canonical + b"unmanifested-trailer")
+    else:
+        names = sorted(payloads)
+        if metadata_kind == "member_order":
+            names.reverse()
+        with zipfile.ZipFile(pack, "w") as archive:
+            for index, name in enumerate(names):
+                info = _regular_info(name)
+                if index == 0:
+                    if metadata_kind == "member_timestamp":
+                        info.date_time = (1980, 1, 2, 0, 0, 0)
+                    elif metadata_kind == "member_mode":
+                        info.external_attr = (stat.S_IFREG | 0o777) << 16
+                    elif metadata_kind == "member_compression":
+                        info.compress_type = zipfile.ZIP_DEFLATED
+                    elif metadata_kind == "member_create_system":
+                        info.create_system = 0
+                    elif metadata_kind == "member_zip64_version":
+                        info.create_version = 45
+                        info.extract_version = 45
+                archive.writestr(info, payloads[name])
+    _assert_error("seed_zip_metadata_invalid", lambda: check_seed_review_pack(pack))
+
+
+def test_orphan_gap_between_local_zip_records_is_rejected(tmp_path):
+    _root, _source_sha, pack, payloads = _canonical_pack(tmp_path)
+    gap = b"unmanifested-local-record-gap"
+    first_record_end = None
+    with zipfile.ZipFile(pack, "w") as archive:
+        for index, name in enumerate(sorted(payloads)):
+            archive.writestr(_regular_info(name), payloads[name])
+            if index == 0:
+                first_record_end = archive.start_dir
+                archive.fp.write(gap)
+                archive.start_dir = archive.fp.tell()
+    raw = pack.read_bytes()
+    with zipfile.ZipFile(pack) as archive:
+        infos = archive.infolist()
+    assert raw[first_record_end : first_record_end + len(gap)] == gap
+    assert infos[1].header_offset == first_record_end + len(gap)
+    _assert_error("seed_zip_metadata_invalid", lambda: check_seed_review_pack(pack))
+
+
+def test_zip_resource_envelope_constants_are_exact():
+    production_globals = make_seed_review_pack.__globals__
+    names = (
+        "_MAX_ARCHIVE_BYTES",
+        "_MAX_MEMBER_COUNT",
+        "_MAX_MEMBER_BYTES",
+        "_MAX_TOTAL_UNCOMPRESSED_BYTES",
+        "_MAX_CONTROL_MEMBER_BYTES",
+        "_MAX_MEMBER_NAME_BYTES",
+        "_MAX_CENTRAL_DIRECTORY_BYTES",
+    )
+    assert tuple(production_globals[name] for name in names) == (
+        512 * 1024 * 1024,
+        4096,
+        128 * 1024 * 1024,
+        512 * 1024 * 1024,
+        4 * 1024 * 1024,
+        1024,
+        8 * 1024 * 1024,
+    )
+
+
+@pytest.mark.parametrize(
+    "limit_name",
+    [
+        "_MAX_ARCHIVE_BYTES",
+        "_MAX_MEMBER_COUNT",
+        "_MAX_MEMBER_BYTES",
+        "_MAX_TOTAL_UNCOMPRESSED_BYTES",
+        "_MAX_CONTROL_MEMBER_BYTES",
+        "_MAX_MEMBER_NAME_BYTES",
+        "_MAX_CENTRAL_DIRECTORY_BYTES",
+    ],
+)
+def test_zip_resource_limit_is_rejected_before_payload_reads(tmp_path, monkeypatch, limit_name):
+    _root, _source_sha, pack, payloads = _canonical_pack(tmp_path)
+    raw_pack = pack.read_bytes()
+    eocd_offset = raw_pack.rfind(b"PK\x05\x06")
+    central_directory_size = int.from_bytes(
+        raw_pack[eocd_offset + 12 : eocd_offset + 16],
+        "little",
+    )
+    controls = {
+        name: data
+        for name, data in payloads.items()
+        if name in {"review_pack_manifest.json", "store_audit.json"}
+    }
+    below_canonical = {
+        "_MAX_ARCHIVE_BYTES": pack.stat().st_size - 1,
+        "_MAX_MEMBER_COUNT": len(payloads) - 1,
+        "_MAX_MEMBER_BYTES": max(map(len, payloads.values())) - 1,
+        "_MAX_TOTAL_UNCOMPRESSED_BYTES": sum(map(len, payloads.values())) - 1,
+        "_MAX_CONTROL_MEMBER_BYTES": max(map(len, controls.values())) - 1,
+        "_MAX_MEMBER_NAME_BYTES": max(len(name.encode()) for name in payloads) - 1,
+        "_MAX_CENTRAL_DIRECTORY_BYTES": central_directory_size - 1,
+    }
+    monkeypatch.setattr(
+        seed_evidence,
+        limit_name,
+        below_canonical[limit_name],
+        raising=False,
+    )
+    payload_opens = []
+
+    def forbidden_payload_open(_archive, member, *_args, **_kwargs):
+        payload_opens.append(member)
+        raise AssertionError("resource envelope must be checked before payload reads")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", forbidden_payload_open)
+    zipfile_constructions = []
+    raw_preflight_limits = {
+        "_MAX_ARCHIVE_BYTES",
+        "_MAX_CENTRAL_DIRECTORY_BYTES",
+        "_MAX_MEMBER_COUNT",
+        "_MAX_MEMBER_NAME_BYTES",
+    }
+    if limit_name in raw_preflight_limits:
+
+        def forbidden_zipfile_construction(*args, **kwargs):
+            zipfile_constructions.append((args, kwargs))
+            raise AssertionError("raw resource bounds must precede ZipFile construction")
+
+        monkeypatch.setattr(zipfile, "ZipFile", forbidden_zipfile_construction)
+    _assert_error("seed_zip_limits_invalid", lambda: check_seed_review_pack(pack))
+    assert payload_opens == []
+    assert zipfile_constructions == []
+
+
+def test_builder_resource_preflight_preserves_destination(tmp_path, monkeypatch):
+    root = tmp_path / "store"
+    build_store(root)
+    destination = tmp_path / "seed.zip"
+    destination.write_bytes(b"previous")
+    monkeypatch.setattr(
+        seed_evidence,
+        "_MAX_TOTAL_UNCOMPRESSED_BYTES",
+        1,
+        raising=False,
+    )
+
+    def forbidden_temp_creation(_directory_fd):
+        raise AssertionError("resource limits must be checked before temp creation")
+
+    monkeypatch.setattr(
+        seed_evidence,
+        "_create_temp_entry",
+        forbidden_temp_creation,
+    )
+    _assert_error(
+        "seed_zip_limits_invalid",
+        lambda: make_seed_review_pack(root, destination),
+    )
+    assert destination.read_bytes() == b"previous"
+    _assert_no_seed_temps(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -554,6 +908,125 @@ def test_builder_streams_source_files_after_audit(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "read_bytes", forbidden_read_bytes)
     destination = tmp_path / "seed.zip"
+    result = make_seed_review_pack(root, destination)
+    assert result == destination
+    assert destination.is_file()
+
+
+def test_builder_rejects_temp_replacement_after_self_check(tmp_path, monkeypatch):
+    root = tmp_path / "store"
+    build_store(root)
+    _accept_nested(monkeypatch)
+    destination = tmp_path / "seed.zip"
+    destination.write_bytes(b"previous")
+    original_check = seed_evidence.check_seed_review_pack
+
+    def replace_checked_path(path):
+        result = original_check(path)
+        replacement = tmp_path / "unchecked.zip"
+        replacement.write_bytes(b"unchecked-bytes")
+        os.replace(replacement, path)
+        return result
+
+    monkeypatch.setattr(seed_evidence, "check_seed_review_pack", replace_checked_path)
+    _assert_error(
+        "seed_temp_path_unsafe",
+        lambda: make_seed_review_pack(root, destination),
+    )
+    assert destination.read_bytes() == b"previous"
+    _assert_no_seed_temps(tmp_path)
+
+
+def test_builder_rechecks_destination_parent_before_publish(tmp_path, monkeypatch):
+    root = tmp_path / "store"
+    build_store(root)
+    _accept_nested(monkeypatch)
+    publish_parent = tmp_path / "publish"
+    publish_parent.mkdir()
+    destination = publish_parent / "seed.zip"
+    destination.write_bytes(b"previous")
+    moved_parent = tmp_path / "publish-before-swap"
+    original_check = seed_evidence.check_seed_review_pack
+
+    def swap_parent_after_check(path):
+        result = original_check(path)
+        publish_parent.rename(moved_parent)
+        publish_parent.symlink_to(root, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(seed_evidence, "check_seed_review_pack", swap_parent_after_check)
+    _assert_error(
+        "destination_inside_store",
+        lambda: make_seed_review_pack(root, destination),
+    )
+    assert not (root / "seed.zip").exists()
+    _assert_no_seed_temps(tmp_path)
+    assert (moved_parent / "seed.zip").read_bytes() == b"previous"
+
+
+def test_builder_normalizes_source_descriptor_close_error(tmp_path, monkeypatch):
+    root = tmp_path / "store"
+    build_store(root)
+    destination = tmp_path / "seed.zip"
+    destination.write_bytes(b"previous")
+    original_fdopen = seed_evidence.os.fdopen
+    close_failures = []
+
+    class CloseFailingStream:
+        def __init__(self, stream):
+            self._stream = stream
+
+        def __getattr__(self, name):
+            return getattr(self._stream, name)
+
+        def close(self):
+            self._stream.close()
+            close_failures.append("source-close")
+            raise OSError("injected source descriptor close failure")
+
+    def fail_first_source_close(fd, mode="r", *args, **kwargs):
+        stream = original_fdopen(fd, mode, *args, **kwargs)
+        if mode == "rb" and not close_failures:
+            return CloseFailingStream(stream)
+        return stream
+
+    monkeypatch.setattr(seed_evidence.os, "fdopen", fail_first_source_close)
+    _assert_error(
+        "seed_store_inventory_invalid",
+        lambda: make_seed_review_pack(root, destination),
+    )
+    assert close_failures == ["source-close"]
+    assert destination.read_bytes() == b"previous"
+    _assert_no_seed_temps(tmp_path)
+
+
+def test_builder_attributes_zip_output_write_failure(tmp_path, monkeypatch):
+    root = tmp_path / "store"
+    build_store(root)
+    destination = tmp_path / "seed.zip"
+    destination.write_bytes(b"previous")
+    write_attempts = []
+
+    def fail_zip_output_write(_self, data):
+        write_attempts.append(len(data))
+        raise OSError("injected ZIP output write failure")
+
+    monkeypatch.setattr(zipfile._ZipWriteFile, "write", fail_zip_output_write)
+    _assert_error(
+        "seed_pack_build_invalid",
+        lambda: make_seed_review_pack(root, destination),
+    )
+    assert len(write_attempts) == 1
+    assert destination.read_bytes() == b"previous"
+    _assert_no_seed_temps(tmp_path)
+
+
+def test_builder_preserves_relative_destination_return_value(tmp_path, monkeypatch):
+    root = tmp_path / "store"
+    build_store(root)
+    _accept_nested(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    destination = Path("seed.zip")
     result = make_seed_review_pack(root, destination)
     assert result == destination
     assert destination.is_file()
