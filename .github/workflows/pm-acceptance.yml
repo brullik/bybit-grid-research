@@ -10,6 +10,8 @@ jobs:
   protected-paths:
     name: protected-paths
     runs-on: ubuntu-latest
+    outputs:
+      pr-mode: ${{ steps.scope.outputs.pr_mode }}
     permissions:
       contents: read
       pull-requests: read
@@ -24,13 +26,22 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: git fetch --no-tags origin "$HEAD_SHA"
       - name: Check PR mode, protected paths, and task scope
+        id: scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
-          python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --actor "$PR_ACTOR" --labels "$PR_LABELS"
+          set +e
+          json=$(python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --actor "$PR_ACTOR" --labels "$PR_LABELS")
+          status=$?
+          printf '%s\n' "$json"
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane"}, mode; print(mode)')
+          printf 'pr_mode=%s\n' "$pr_mode" >> "$GITHUB_OUTPUT"
 
   acceptance:
     name: acceptance (${{ matrix.python-version }})
@@ -66,31 +77,96 @@ jobs:
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
+          rm -rf "$RUNNER_TEMP/pm_acceptance" "$RUNNER_TEMP/scripts" "$RUNNER_TEMP/frozen_contracts"
           cp -R base/pm_acceptance "$RUNNER_TEMP/pm_acceptance"
           cp -R base/docs/frozen_contracts "$RUNNER_TEMP/frozen_contracts"
-          cp base/scripts/check_protected_paths.py "$RUNNER_TEMP/check_protected_paths.py"
-          cp base/scripts/check_task_scope.py "$RUNNER_TEMP/check_task_scope.py"
+          mkdir -p "$RUNNER_TEMP/scripts"
+          printf '' > "$RUNNER_TEMP/scripts/__init__.py"
+          cp base/scripts/check_protected_paths.py "$RUNNER_TEMP/scripts/check_protected_paths.py"
+          cp base/scripts/check_task_scope.py "$RUNNER_TEMP/scripts/check_task_scope.py"
           printf '[pytest]\n' > "$RUNNER_TEMP/pytest.ini"
       - name: Install PR package
         working-directory: head
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .[dev]
-      - name: Run PM acceptance checks
+      - name: Run base isolated acceptance harness
+        if: needs.protected-paths.outputs.pr-mode != 'pm-task-definition'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ${{ runner.temp }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python -m pytest pm_acceptance -q \
+            -c "$RUNNER_TEMP/pytest.ini" \
+            --confcutdir="$RUNNER_TEMP/pm_acceptance"
+      - name: Run base control-plane self-tests for task-definition PRs
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ${{ runner.temp }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python -m pytest pm_acceptance/test_control_plane_self.py -q \
+            -c "$RUNNER_TEMP/pytest.ini" \
+            --confcutdir="$RUNNER_TEMP/pm_acceptance"
+      - name: Stage head control-plane self-tests
+        if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          rm -rf "$RUNNER_TEMP/head_control"
+          mkdir -p "$RUNNER_TEMP/head_control/scripts"
+          cp -R head/pm_acceptance "$RUNNER_TEMP/head_control/pm_acceptance"
+          printf '' > "$RUNNER_TEMP/head_control/scripts/__init__.py"
+          cp head/scripts/check_protected_paths.py "$RUNNER_TEMP/head_control/scripts/check_protected_paths.py"
+          cp head/scripts/check_task_scope.py "$RUNNER_TEMP/head_control/scripts/check_task_scope.py"
+          printf '[pytest]\n' > "$RUNNER_TEMP/head_control/pytest.ini"
+      - name: Run head control-plane self-tests
+        if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
+        working-directory: ${{ runner.temp }}/head_control
+        env:
+          PYTHONPATH: ${{ runner.temp }}/head_control
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          python -m pytest pm_acceptance/test_control_plane_self.py -q \
+            -c pytest.ini \
+            --confcutdir=pm_acceptance
+      - name: Stage head task-definition acceptance tree
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition'
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          rm -rf "$RUNNER_TEMP/head_task_definition"
+          mkdir -p "$RUNNER_TEMP/head_task_definition/scripts"
+          cp -R head/pm_acceptance "$RUNNER_TEMP/head_task_definition/pm_acceptance"
+          printf '' > "$RUNNER_TEMP/head_task_definition/scripts/__init__.py"
+          cp head/scripts/check_protected_paths.py "$RUNNER_TEMP/head_task_definition/scripts/check_protected_paths.py"
+          cp head/scripts/check_task_scope.py "$RUNNER_TEMP/head_task_definition/scripts/check_task_scope.py"
+          printf '[pytest]\n' > "$RUNNER_TEMP/head_task_definition/pytest.ini"
+      - name: Compile and collect head task-definition acceptance tests
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition'
+        env:
+          HEAD_ACCEPTANCE_TEMP: ${{ runner.temp }}/head_task_definition
+          PYTHONPATH: ${{ runner.temp }}/head_task_definition
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          python -m compileall -q "$HEAD_ACCEPTANCE_TEMP"
+          python -m pytest "$HEAD_ACCEPTANCE_TEMP" --collect-only -q \
+            -c "$HEAD_ACCEPTANCE_TEMP/pytest.ini" \
+            --confcutdir="$HEAD_ACCEPTANCE_TEMP/pm_acceptance"
+      - name: Run supplemental PR checks
         working-directory: head
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-          RUNNER_TEMP: ${{ runner.temp }}
         run: |
           python scripts/check_numeric_environment.py
           python -m pip check
           python scripts/check_no_live_execution.py
-          python -m compileall -q src tests scripts "$RUNNER_TEMP/pm_acceptance"
-          cd "$RUNNER_TEMP"
-          python -m pytest pm_acceptance -q -c pytest.ini --confcutdir="$RUNNER_TEMP/pm_acceptance"
-          cd "$GITHUB_WORKSPACE/head"
+          python -m compileall -q src tests scripts
           python -m pytest -q
           ruff check .
           git diff --check "$BASE_SHA"..."$HEAD_SHA"

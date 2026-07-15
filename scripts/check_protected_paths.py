@@ -23,8 +23,15 @@ _PROTECTED_EXACT = frozenset({
     "noxfile.py",
     "sitecustomize.py",
     "usercustomize.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile",
+    "Pipfile.lock",
 })
-_PROTECTED_PREFIXES = (".github/workflows/", ".github/actions/", "pm_acceptance/", "docs/frozen_contracts/")
+_PROTECTED_PREFIXES = (".github/workflows/", ".github/actions/", "pm_acceptance/", "docs/frozen_contracts/", "requirements/")
 _UNSUPPORTED_MODES = {"120000", "160000"}
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")

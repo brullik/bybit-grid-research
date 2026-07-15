@@ -28,7 +28,17 @@ _CONTROL_PLANE_ALLOWED = frozenset({
     "docs/frozen_contracts/control_plane_v1.md",
 })
 _FORBIDDEN_ALWAYS = ("src/", "tests/")
-_FORBIDDEN_EXACT = {"pyproject.toml"}
+_DEPENDENCY_EXACT = {
+    "pyproject.toml",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile",
+    "Pipfile.lock",
+}
+_DEPENDENCY_PREFIXES = ("requirements/",)
+_FORBIDDEN_EXACT = set(_DEPENDENCY_EXACT)
 
 
 @dataclass(frozen=True)
@@ -58,6 +68,8 @@ def _reject_float(value: str) -> None:
 
 
 def _validate_rule(rule: str) -> None:
+    if rule == "requirements/*.txt":
+        return
     if not isinstance(rule, str) or _path_error(rule[:-3] if rule.endswith("/**") else rule) is not None:
         raise ValueError(f"unsafe_rule:{rule}")
     body = rule[:-3] if rule.endswith("/**") else rule
@@ -110,6 +122,9 @@ def parse_active_task_bytes(data: bytes) -> ActiveTask:
 
 
 def _matches(rule: str, path: str) -> bool:
+    if rule == "requirements/*.txt":
+        rest = path.removeprefix("requirements/")
+        return path.startswith("requirements/") and "/" not in rest and rest.endswith(".txt")
     if rule.endswith("/**"):
         return path.startswith(rule[:-2])
     return path == rule
@@ -179,7 +194,7 @@ def classify_pr_mode(actor: str, labels: tuple[str, ...], changed_paths: tuple[s
                 if path not in _CONTROL_PLANE_ALLOWED:
                     errors.append(f"pm_control_plane_out_of_scope:{path}")
         for path in valid:
-            if path.startswith(_FORBIDDEN_ALWAYS) or path in _FORBIDDEN_EXACT:
+            if path.startswith(_FORBIDDEN_ALWAYS) or path in _FORBIDDEN_EXACT or path.startswith(_DEPENDENCY_PREFIXES):
                 errors.append(f"production_path_forbidden_in_pm_mode:{path}")
         return mode, tuple(sorted(errors))
     for path in valid:
@@ -195,6 +210,16 @@ def pr_mode_scope_errors(task: ActiveTask, changed_paths: tuple[str, ...], *, ac
     if mode == "implementation":
         return tuple(sorted((*protected_path_errors(changed_paths), *task_scope_errors(task, changed_paths))))
     return ()
+
+
+def acceptance_plan_for_mode(mode: str) -> tuple[str, ...]:
+    if mode == "implementation":
+        return ("base-isolated-acceptance",)
+    if mode == "pm-control-plane":
+        return ("base-isolated-acceptance", "head-control-plane-self-tests")
+    if mode == "pm-task-definition":
+        return ("base-control-plane-self-tests", "head-task-definition-collect-only")
+    raise ValueError(f"invalid_mode:{mode}")
 
 
 def _emit(changed_count: int, errors: tuple[str, ...], mode: str | None = None) -> int:

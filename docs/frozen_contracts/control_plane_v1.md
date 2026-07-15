@@ -31,16 +31,22 @@ Implementation PRs cannot edit:
 - root `conftest.py`
 - `pytest.ini`, `setup.py`, `setup.cfg`, `tox.ini`, `noxfile.py`
 - `sitecustomize.py`, `usercustomize.py`
+- `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`, `requirements/*.txt`
+- `uv.lock`, `poetry.lock`, `Pipfile`, `Pipfile.lock`
 
-Dependency and configuration files such as `pyproject.toml` and lockfiles may change only through an explicit PM task-definition or PM control-plane scope, never as an incidental implementation change.
+Control-plane v1 does not support dependency changes. Implementation PRs, PM task-definition PRs, and PM control-plane PRs must all reject changes to these dependency and configuration paths.
 
 ## Active-task lifecycle
 
 1. The PM first opens and merges a `pm-task-definition` PR on `main` that adds frozen acceptance tests and updates `pm_acceptance/active_task.json` with the task ID, allowed paths, required paths, and forbidden paths.
-2. Codex then opens a separate implementation PR from `main`.
-3. The PM Acceptance workflow evaluates PR production code against base-controlled acceptance tests and base-controlled checker scripts.
-4. The PM reviews the draft PR. The implementation PR remains draft until PM approval.
-5. After the implementation is merged, the PM can return `pm_acceptance/active_task.json` to `NO_ACTIVE_IMPLEMENTATION` or prepare the next task via another `pm-task-definition` PR.
+2. The PM merges the valid `pm-task-definition` PR.
+3. The PM opens a deliberately empty or no-production-change implementation probe PR.
+4. The PM confirms the new base-controlled acceptance tests fail on that red probe.
+5. The PM closes the probe without merge.
+6. Only after recorded red-probe evidence exists may Codex start the implementation task and open a separate implementation PR from `main`.
+7. The PM Acceptance workflow evaluates PR production code against base-controlled acceptance tests and base-controlled checker scripts.
+8. The PM reviews the draft PR. The implementation PR remains draft until PM approval.
+9. After the implementation is merged, the PM can return `pm_acceptance/active_task.json` to `NO_ACTIVE_IMPLEMENTATION` or prepare the next task via another `pm-task-definition` PR.
 
 No implementation PR may merge while `NO_ACTIVE_IMPLEMENTATION` is active, because production path changes fail task-scope validation.
 

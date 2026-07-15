@@ -16,3 +16,11 @@
 /noxfile.py @brullik
 /sitecustomize.py @brullik
 /usercustomize.py @brullik
+/pyproject.toml @brullik
+/requirements.txt @brullik
+/requirements-dev.txt @brullik
+/requirements/ @brullik
+/uv.lock @brullik
+/poetry.lock @brullik
+/Pipfile @brullik
+/Pipfile.lock @brullik
