@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -424,6 +425,131 @@ def test_workflow_collects_only_the_head_task_id_directory():
     assert 'head/pm_acceptance/tasks/$TASK_ID' in workflow
     assert 'task_path="$HEAD_ACCEPTANCE_TEMP/pm_acceptance/tasks/$TASK_ID"' in workflow
     assert 'cp -R head/pm_acceptance "$RUNNER_TEMP/head_task_definition/pm_acceptance"' not in workflow
+
+
+def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    pending = workflow.split("\n  status-pending:\n", 1)[1].split("\n  protected-paths:\n", 1)[0]
+    acceptance = workflow.split("\n  acceptance:\n", 1)[1].split("\n  status-final:\n", 1)[0]
+    final = workflow.split("\n  status-final:\n", 1)[1]
+
+    assert workflow.count("statuses: write") == 2
+    assert workflow.count('"context": "pm-acceptance"') == 2
+    assert pending.count("github.event.pull_request.head.sha") == 1
+    assert final.count("github.event.pull_request.head.sha") == 1
+    assert pending.count('"brullik/bybit-grid-research"') == 1
+    assert final.count('"brullik/bybit-grid-research"') == 1
+    assert pending.count("timeout-minutes: 2") == 1
+    assert final.count("timeout-minutes: 2") == 1
+    assert "actions/checkout" not in pending
+    assert "actions/checkout" not in final
+    assert "statuses: write" not in acceptance
+    assert "needs: [status-pending, protected-paths, acceptance]" in final
+    assert 'upstream_success = all(result == "success" for result in results.values())' in final
+    assert 'ready = os.environ["PR_DRAFT"] == "false"' in final
+    assert 'owner_authored = os.environ["PR_AUTHOR"] == "brullik"' in final
+    assert 'non_probe = not os.environ["HEAD_REF"].startswith("probe/")' in final
+    assert "successful = upstream_success and ready and owner_authored and non_probe" in final
+    assert 'elif upstream_success or any(result == "failure" for result in results.values())' in final
+    assert 'state = "error"' in final
+    assert 'summary[:140]' in final
+    assert 'raise SystemExit("pm_acceptance_failed")' in final
+
+
+def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    pending = workflow.split("\n  status-pending:\n", 1)[1].split("\n  protected-paths:\n", 1)[0]
+    final = workflow.split("\n  status-final:\n", 1)[1]
+
+    for status_job in (pending, final):
+        assert "statuses: write" in status_job
+        assert "contents: read" not in status_job
+        assert "actions/checkout" not in status_job
+        assert "\n      - uses:" not in status_job
+        assert "working-directory:" not in status_job
+        assert "pull_request.head.repo" not in status_job
+        assert "secrets." not in status_job
+        assert "artifact" not in status_job
+        assert "cache" not in status_job
+        assert "urllib.request.urlopen" in status_job
+
+    assert "converted_to_draft" in workflow
+
+
+def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | None, dict[str, str]]:
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    final = workflow.split("\n  status-final:\n", 1)[1]
+    source = textwrap.dedent(
+        final.split("          python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+    )
+    environment = {
+        "GH_TOKEN": "test-token",
+        "HEAD_SHA": "a" * 40,
+        "REPOSITORY": "brullik/bybit-grid-research",
+        "API_URL": "https://api.example.test",
+        "SERVER_URL": "https://example.test",
+        "RUN_ID": "123",
+        "PENDING_RESULT": "success",
+        "PROTECTED_RESULT": "success",
+        "ACCEPTANCE_RESULT": "success",
+        "PR_AUTHOR": "brullik",
+        "PR_DRAFT": "false",
+        "HEAD_REF": "pm/task-a",
+    }
+    environment.update(overrides)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    captured: dict[str, str] = {}
+
+    class Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout):
+        assert timeout == 30
+        captured.update(json.loads(request.data))
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    exit_reason = None
+    try:
+        exec(compile(source, "pm-acceptance-finalizer", "exec"), {})
+    except SystemExit as exc:
+        exit_reason = str(exc)
+    return exit_reason, captured
+
+
+def test_final_status_script_succeeds_only_for_ready_owner_non_probe(monkeypatch):
+    exit_reason, payload = _execute_final_status_script(monkeypatch)
+    assert exit_reason is None
+    assert payload["state"] == "success"
+    assert payload["context"] == "pm-acceptance"
+    assert payload["target_url"].endswith("/actions/runs/123")
+
+    for ineligible in (
+        {"PR_DRAFT": "true"},
+        {"PR_AUTHOR": "someone-else"},
+        {"HEAD_REF": "probe/task-a-red"},
+    ):
+        exit_reason, payload = _execute_final_status_script(monkeypatch, **ineligible)
+        assert exit_reason == "pm_acceptance_failed"
+        assert payload["state"] == "failure"
+
+
+def test_final_status_script_distinguishes_failure_from_cancelled(monkeypatch):
+    exit_reason, payload = _execute_final_status_script(monkeypatch, PROTECTED_RESULT="failure")
+    assert exit_reason == "pm_acceptance_failed"
+    assert payload["state"] == "failure"
+
+    exit_reason, payload = _execute_final_status_script(monkeypatch, ACCEPTANCE_RESULT="cancelled")
+    assert exit_reason == "pm_acceptance_failed"
+    assert payload["state"] == "error"
 
 
 def test_direct_task_scope_cli_import_shape_from_repository_root():

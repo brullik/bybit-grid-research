@@ -40,16 +40,32 @@ Control-plane v1 does not support dependency changes. Implementation PRs, PM tas
 ## Active-task lifecycle
 
 1. The PM first opens a `pm-task-definition` PR on `main` that changes the canonical `pm_acceptance/active_task.json`, adds at least one frozen test below `pm_acceptance/tasks/<task_id>/`, and may add the matching `docs/frozen_contracts/tasks/<task_id>.md` contract.
-2. The PM merges the valid `pm-task-definition` PR.
-3. The PM opens a deliberately empty or no-production-change implementation probe PR.
-4. The PM confirms the new base-controlled acceptance tests fail on that red probe.
-5. The PM closes the probe without merge.
-6. Only after recorded red-probe evidence exists may Codex start the implementation task and open a separate implementation PR from `main`.
+2. After every required check succeeds, the authorized autonomous maintainer may mark the valid non-probe PR ready and merge it at its unchanged expected head SHA.
+3. The PM opens a deliberately empty or no-production-change implementation probe PR from a `probe/` branch.
+4. The PM confirms the new base-controlled acceptance tests fail for the exact expected behavioral reason on that red probe.
+5. The PM closes the probe without merge. A mandatory RED probe is never mergeable under the standing authorization.
+6. Only after recorded red-probe evidence exists may Codex start the implementation task and open a separate implementation PR from fresh `main`.
 7. The PM Acceptance workflow evaluates PR production code against base-controlled acceptance tests and base-controlled checker scripts.
-8. The PM reviews the draft PR. The implementation PR remains draft until PM approval.
+8. The autonomous maintainer independently reviews the draft PR, verifies exact scope and unresolved-thread state, and keeps it draft until all required checks and lifecycle evidence pass. Standing owner authorization satisfies PM approval only when those objective conditions are met.
 9. After the implementation is merged, the PM closes the task in a separate `pm-task-definition` PR. A close transition changes only `pm_acceptance/active_task.json`, sets `task_id` to `NO_ACTIVE_IMPLEMENTATION`, and leaves `allowed_paths` and `required_paths` empty. Frozen task tests and contract documents remain in history and are not edited by the close PR.
 
 No implementation PR may merge while `NO_ACTIVE_IMPLEMENTATION` is active, because production path changes fail task-scope validation.
+
+For every non-probe PR, autonomous merge additionally requires the expected head SHA to remain unchanged, every required status to be successful, exact scope verification, and zero unresolved review threads. Unknown, pending, stale, skipped, cancelled, or failing status is not approval. Required checks may never be bypassed, and force merge is forbidden.
+
+## Staged execution authority
+
+Implementation authority remains offline-only by default. An active task's path allowlist never by itself authorizes network access, credentials, private Bybit API calls, Telegram, orders, positions, wallet access, or native-grid mutation. Those capabilities remain forbidden until a later base-controlled control-plane contract explicitly defines the current execution stage and freezes its risk, credential, human-approval, kill-switch, rollback, and audit gates. Production secrets may exist only in an approved runtime secret store and never in repository or agent-visible content.
+
+Withdrawal and ordinary-order mutation are never authorized in V1. Any later execution authority is limited to the native Bybit grid lifecycle and cannot be inferred from a production path allowlist.
+
+This governance revision does not enable private or live execution. The existing no-live source audit remains mandatory and unchanged.
+
+## Aggregate head status
+
+The base-owned `pull_request_target` workflow publishes a `pm-acceptance` commit status on the exact pull-request head SHA. A minimal pending job publishes the Actions run URL before acceptance. A final `always()` job reports success only when the pending publication, protected-path job, and complete acceptance matrix all succeeded and the PR is Ready, owner-authored, and not on a `probe/` branch. Every other completed result publishes failure or error. The status remains pending only if the finalizer cannot publish its result.
+
+Only the two status publisher jobs receive `statuses: write`. They do not check out or execute pull-request head code. The protected-path and acceptance jobs retain read-only permissions. This makes the run URL and aggregate result discoverable from the head SHA without transferring a user-supplied Actions URL and without exposing a write token to untrusted head code.
 
 The active-task schema intentionally has no `required_commands` field. Control-plane v1 uses fixed base-controlled workflow commands and never executes arbitrary shell strings from JSON.
 
@@ -59,6 +75,7 @@ For an opening transition, the base-owned checker reads the head task bytes with
 
 The repository owner must manually enable these required checks on `main`:
 
+- `pm-acceptance`
 - `PM Acceptance / protected-paths`
 - `PM Acceptance / acceptance (3.12)`
 - `PM Acceptance / acceptance (3.14)`
@@ -68,11 +85,12 @@ The repository owner must manually enable these required checks on `main`:
 The owner must manually require:
 
 - pull request before merge
-- CODEOWNER approval only after review identity is operationally satisfiable
+- repository auto-merge enabled for green non-probe pull requests
+- CODEOWNER approval only after review identity is operationally satisfiable; otherwise objective required checks and conversation resolution remain the merge gate
 - conversation resolution
 - no force pushes
 - no bypass
 
-GitHub does not permit a PR author to approve their own PR. Before enabling required CODEOWNER approval, the repository must choose one of these review-identity models: Codex or another bot creates implementation PRs and `brullik` reviews them, or a second trusted reviewer/team is added as an owner.
+GitHub does not permit a PR author to approve their own PR. Required CODEOWNER approval therefore remains disabled unless a second trusted reviewer or bot identity is added. Standing owner authorization permits autonomous merge only through the objective conditions in this contract; it is not a substitute for a GitHub approval when branch protection requires one.
 
 These settings are not created automatically by this repository change and must be configured in the repository hosting settings.
