@@ -78,4 +78,3 @@ receipts, nested receipt shape failures, and canonical-byte mismatch errors.
 
 The tests must be RED on the unmodified task base and GREEN only through changes to the two
 allowed production files.
-
