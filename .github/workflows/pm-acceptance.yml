@@ -1,7 +1,7 @@
 name: PM Acceptance
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
 permissions:
   contents: read
   pull-requests: read
@@ -18,17 +18,19 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
+          fetch-depth: 0
       - name: Fetch PR head for diff only
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: git fetch --no-tags --depth=1 origin "$HEAD_SHA"
-      - name: Check protected paths and task scope
+        run: git fetch --no-tags origin "$HEAD_SHA"
+      - name: Check PR mode, protected paths, and task scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_ACTOR: ${{ github.event.pull_request.user.login }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
-          python scripts/check_protected_paths.py --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
-          python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
+          python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --actor "$PR_ACTOR" --labels "$PR_LABELS"
 
   acceptance:
     name: acceptance (${{ matrix.python-version }})
@@ -42,35 +44,53 @@ jobs:
       matrix:
         python-version: ['3.12', '3.14']
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout base control plane
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Checkout PR head production code
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          path: head
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Restore base-controlled acceptance files
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          git checkout "$BASE_SHA" -- pm_acceptance
-          git checkout "$BASE_SHA" -- AGENTS.md scripts/check_protected_paths.py scripts/check_task_scope.py docs/frozen_contracts
       # Security: PR code is executed with a read-only token, persist-credentials=false, no secrets, and base-controlled acceptance tests.
-      - name: Install dependencies
+      - name: Stage base-controlled acceptance harness
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          cp -R base/pm_acceptance "$RUNNER_TEMP/pm_acceptance"
+          cp -R base/docs/frozen_contracts "$RUNNER_TEMP/frozen_contracts"
+          cp base/scripts/check_protected_paths.py "$RUNNER_TEMP/check_protected_paths.py"
+          cp base/scripts/check_task_scope.py "$RUNNER_TEMP/check_task_scope.py"
+          printf '[pytest]\n' > "$RUNNER_TEMP/pytest.ini"
+      - name: Install PR package
+        working-directory: head
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .[dev]
       - name: Run PM acceptance checks
+        working-directory: head
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
         run: |
           python scripts/check_numeric_environment.py
           python -m pip check
           python scripts/check_no_live_execution.py
-          python -m compileall -q src tests scripts pm_acceptance
-          python -m pytest pm_acceptance -q
+          python -m compileall -q src tests scripts "$RUNNER_TEMP/pm_acceptance"
+          cd "$RUNNER_TEMP"
+          python -m pytest pm_acceptance -q -c pytest.ini --confcutdir="$RUNNER_TEMP/pm_acceptance"
+          cd "$GITHUB_WORKSPACE/head"
           python -m pytest -q
           ruff check .
           git diff --check "$BASE_SHA"..."$HEAD_SHA"

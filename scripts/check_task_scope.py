@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Validate changed paths against the PM active-task scope."""
+"""Validate changed paths against the PM active-task scope and PR mode."""
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from scripts.check_protected_paths import _path_error, _SHA_RE
+from scripts.check_protected_paths import _path_error, _SHA_RE, changed_paths_from_git, protected_path_errors
 
-_KEYS = ("allowed_paths", "forbidden_paths", "required_commands", "required_paths", "schema", "task_id")
+_KEYS = ("allowed_paths", "forbidden_paths", "required_paths", "schema", "task_id")
 _SCHEMA = "pm_active_task_v1"
+_OWNER = "brullik"
+_MODE_LABELS = frozenset({"pm-task-definition", "pm-control-plane"})
 _CONTROL_PLANE_ALLOWED = frozenset({
     "AGENTS.md",
     ".github/CODEOWNERS",
@@ -26,6 +27,8 @@ _CONTROL_PLANE_ALLOWED = frozenset({
     "pm_acceptance/test_control_plane_self.py",
     "docs/frozen_contracts/control_plane_v1.md",
 })
+_FORBIDDEN_ALWAYS = ("src/", "tests/")
+_FORBIDDEN_EXACT = {"pyproject.toml"}
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,6 @@ class ActiveTask:
     allowed_paths: tuple[str, ...]
     required_paths: tuple[str, ...]
     forbidden_paths: tuple[str, ...]
-    required_commands: tuple[str, ...]
 
 
 def _reject_constant(value: str) -> None:
@@ -63,7 +65,7 @@ def _validate_rule(rule: str) -> None:
         raise ValueError(f"invalid_rule:{rule}")
 
 
-def _strings(name: str, value: Any, *, paths: bool) -> tuple[str, ...]:
+def _strings(name: str, value: Any) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise ValueError(f"not_list:{name}")
     out: list[str] = []
@@ -73,8 +75,7 @@ def _strings(name: str, value: Any, *, paths: bool) -> tuple[str, ...]:
             raise ValueError(f"non_string:{name}")
         if item in seen:
             raise ValueError(f"duplicate_entry:{name}:{item}")
-        if paths:
-            _validate_rule(item)
+        _validate_rule(item)
         seen.add(item)
         out.append(item)
     return tuple(out)
@@ -96,11 +97,11 @@ def parse_active_task_bytes(data: bytes) -> ActiveTask:
     if not isinstance(obj["task_id"], str) or not obj["task_id"]:
         raise ValueError("invalid_task_id")
     task = ActiveTask(
-        schema=obj["schema"], task_id=obj["task_id"],
-        allowed_paths=_strings("allowed_paths", obj["allowed_paths"], paths=True),
-        required_paths=_strings("required_paths", obj["required_paths"], paths=True),
-        forbidden_paths=_strings("forbidden_paths", obj["forbidden_paths"], paths=True),
-        required_commands=_strings("required_commands", obj["required_commands"], paths=False),
+        schema=obj["schema"],
+        task_id=obj["task_id"],
+        allowed_paths=_strings("allowed_paths", obj["allowed_paths"]),
+        required_paths=_strings("required_paths", obj["required_paths"]),
+        forbidden_paths=_strings("forbidden_paths", obj["forbidden_paths"]),
     )
     canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     if data != canonical:
@@ -114,10 +115,10 @@ def _matches(rule: str, path: str) -> bool:
     return path == rule
 
 
-def task_scope_errors(task: ActiveTask, changed_paths: tuple[str, ...]) -> tuple[str, ...]:
+def _changed_path_errors(changed_paths: tuple[str, ...]) -> list[str]:
     errors: list[str] = []
     if type(changed_paths) is not tuple:
-        return ("changed_paths_not_tuple",)
+        return ["changed_paths_not_tuple"]
     seen: set[str] = set()
     for path in changed_paths:
         err = _path_error(path)
@@ -126,6 +127,11 @@ def task_scope_errors(task: ActiveTask, changed_paths: tuple[str, ...]) -> tuple
         elif path in seen:
             errors.append(f"duplicate_path:{path}")
         seen.add(path)
+    return errors
+
+
+def task_scope_errors(task: ActiveTask, changed_paths: tuple[str, ...]) -> tuple[str, ...]:
+    errors = _changed_path_errors(changed_paths)
     valid = [p for p in changed_paths if isinstance(p, str) and _path_error(p) is None]
     if task.task_id == "NO_ACTIVE_IMPLEMENTATION":
         for path in valid:
@@ -146,17 +152,56 @@ def task_scope_errors(task: ActiveTask, changed_paths: tuple[str, ...]) -> tuple
     return tuple(sorted(errors))
 
 
-def _changed_paths(base_sha: str, head_sha: str) -> tuple[str, ...]:
-    proc = subprocess.run(["git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", f"{base_sha}...{head_sha}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError("git_diff_failed")
-    if proc.stderr:
-        proc.stderr.decode("utf-8", "strict")
-    return tuple(line for line in proc.stdout.decode("utf-8", "strict").split("\n") if line)
+def classify_pr_mode(actor: str, labels: tuple[str, ...], changed_paths: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
+    errors = _changed_path_errors(changed_paths)
+    if type(labels) is not tuple:
+        return "invalid", ("labels_not_tuple",)
+    mode_labels = sorted(label for label in labels if label in _MODE_LABELS)
+    unknown = sorted(label for label in labels if label.startswith("pm-") and label not in _MODE_LABELS)
+    if unknown:
+        errors.extend(f"unknown_mode_label:{label}" for label in unknown)
+    if len(mode_labels) > 1:
+        errors.append("multiple_mode_labels")
+        return "invalid", tuple(sorted(errors))
+    valid = [p for p in changed_paths if isinstance(p, str) and _path_error(p) is None]
+    if len(mode_labels) == 1:
+        label = mode_labels[0]
+        if actor != _OWNER:
+            errors.append(f"wrong_author:{actor}")
+        if label == "pm-task-definition":
+            mode = "pm-task-definition"
+            for path in valid:
+                if not (path.startswith("pm_acceptance/") or path.startswith("docs/frozen_contracts/")):
+                    errors.append(f"pm_task_definition_out_of_scope:{path}")
+        else:
+            mode = "pm-control-plane"
+            for path in valid:
+                if path not in _CONTROL_PLANE_ALLOWED:
+                    errors.append(f"pm_control_plane_out_of_scope:{path}")
+        for path in valid:
+            if path.startswith(_FORBIDDEN_ALWAYS) or path in _FORBIDDEN_EXACT:
+                errors.append(f"production_path_forbidden_in_pm_mode:{path}")
+        return mode, tuple(sorted(errors))
+    for path in valid:
+        if path in _CONTROL_PLANE_ALLOWED or path.startswith(("pm_acceptance/", "docs/frozen_contracts/", ".github/workflows/", ".github/actions/")):
+            errors.append(f"missing_required_mode_label:{path}")
+    return "implementation", tuple(sorted(errors))
 
 
-def _emit(changed_count: int, errors: tuple[str, ...]) -> int:
-    print(json.dumps({"changed_count": changed_count, "errors": list(errors), "ok": not errors}, sort_keys=True, separators=(",", ":")))
+def pr_mode_scope_errors(task: ActiveTask, changed_paths: tuple[str, ...], *, actor: str, labels: tuple[str, ...]) -> tuple[str, ...]:
+    mode, mode_errors = classify_pr_mode(actor, labels, changed_paths)
+    if mode_errors:
+        return mode_errors
+    if mode == "implementation":
+        return tuple(sorted((*protected_path_errors(changed_paths), *task_scope_errors(task, changed_paths))))
+    return ()
+
+
+def _emit(changed_count: int, errors: tuple[str, ...], mode: str | None = None) -> int:
+    payload: dict[str, object] = {"changed_count": changed_count, "errors": list(errors), "ok": not errors}
+    if mode is not None:
+        payload["mode"] = mode
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     return 0 if not errors else 1
 
 
@@ -165,6 +210,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--actor", default="")
+    parser.add_argument("--labels", default="")
     args = parser.parse_args(argv)
     errors: list[str] = []
     if args.task_file != "pm_acceptance/active_task.json":
@@ -177,8 +224,15 @@ def main(argv: list[str] | None = None) -> int:
         return _emit(0, tuple(sorted(errors)))
     try:
         task = parse_active_task_bytes(Path(args.task_file).read_bytes())
-        changed = _changed_paths(args.base_sha, args.head_sha)
-        return _emit(len(changed), task_scope_errors(task, changed))
+        changed = changed_paths_from_git(args.base_sha, args.head_sha)
+        labels = tuple(label for label in args.labels.split(",") if label)
+        mode, mode_errors = classify_pr_mode(args.actor, labels, changed)
+        if mode_errors:
+            return _emit(len(changed), mode_errors, mode)
+        if mode == "implementation":
+            errors_tuple = tuple(sorted((*protected_path_errors(changed), *task_scope_errors(task, changed))))
+            return _emit(len(changed), errors_tuple, mode)
+        return _emit(len(changed), (), mode)
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as exc:
         return _emit(0, (str(exc),))
 

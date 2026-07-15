@@ -11,11 +11,21 @@ import sys
 _PROTECTED_EXACT = frozenset({
     "AGENTS.md",
     ".github/CODEOWNERS",
-    ".github/workflows/pm-acceptance.yml",
     "scripts/check_protected_paths.py",
     "scripts/check_task_scope.py",
+    "scripts/check_numeric_environment.py",
+    "scripts/check_no_live_execution.py",
+    "conftest.py",
+    "pytest.ini",
+    "setup.py",
+    "setup.cfg",
+    "tox.ini",
+    "noxfile.py",
+    "sitecustomize.py",
+    "usercustomize.py",
 })
-_PROTECTED_PREFIXES = ("pm_acceptance/", "docs/frozen_contracts/")
+_PROTECTED_PREFIXES = (".github/workflows/", ".github/actions/", "pm_acceptance/", "docs/frozen_contracts/")
+_UNSUPPORTED_MODES = {"120000", "160000"}
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
@@ -52,7 +62,6 @@ def _validate_changed_paths(changed_paths: tuple[str, ...]) -> list[str]:
 
 
 def protected_path_errors(changed_paths: tuple[str, ...]) -> tuple[str, ...]:
-    """Return stable errors for unsafe or protected changed paths."""
     errors = _validate_changed_paths(changed_paths)
     for path in changed_paths if type(changed_paths) is tuple else ():
         if isinstance(path, str) and _path_error(path) is None:
@@ -61,19 +70,58 @@ def protected_path_errors(changed_paths: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(errors))
 
 
-def _changed_paths(base_sha: str, head_sha: str) -> tuple[str, ...]:
+def parse_git_diff_raw_z(data: bytes) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    fields = data.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    paths: list[str] = []
+    errors: list[str] = []
+    i = 0
+    while i < len(fields):
+        header = fields[i].decode("ascii", "strict")
+        i += 1
+        parts = header.split()
+        if len(parts) != 5 or not parts[0].startswith(":"):
+            errors.append("unsupported_git_diff_entry")
+            break
+        old_mode = parts[0][1:]
+        new_mode = parts[1]
+        status = parts[4]
+        if status.startswith("R") or status.startswith("C"):
+            errors.append(f"unsupported_git_diff_status:{status}")
+        if old_mode in _UNSUPPORTED_MODES:
+            errors.append(f"unsupported_git_diff_mode:{old_mode}")
+        if new_mode in _UNSUPPORTED_MODES:
+            errors.append(f"unsupported_git_diff_mode:{new_mode}")
+        if i >= len(fields):
+            errors.append("unsupported_git_diff_entry")
+            break
+        try:
+            path = fields[i].decode("utf-8", "strict")
+        except UnicodeDecodeError:
+            errors.append("invalid_utf8_path")
+            i += 1
+            continue
+        i += 1
+        paths.append(path)
+    return tuple(paths), tuple(sorted(errors))
+
+
+def changed_paths_from_git(base_sha: str, head_sha: str) -> tuple[str, ...]:
     proc = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", f"{base_sha}...{head_sha}"],
+        ["git", "diff", "--raw", "-z", "--no-renames", "--diff-filter=ACDMRTUXB", f"{base_sha}...{head_sha}"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
     )
     if proc.returncode != 0:
         raise RuntimeError("git_diff_failed")
-    text = proc.stdout.decode("utf-8", "strict")
     if proc.stderr:
         proc.stderr.decode("utf-8", "strict")
-    return tuple(line for line in text.split("\n") if line)
+    paths, errors = parse_git_diff_raw_z(proc.stdout)
+    if errors:
+        raise RuntimeError(errors[0])
+    return paths
 
 
 def _emit(changed_count: int, errors: tuple[str, ...]) -> int:
@@ -94,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     if errors:
         return _emit(0, tuple(sorted(errors)))
     try:
-        changed = _changed_paths(args.base_sha, args.head_sha)
+        changed = changed_paths_from_git(args.base_sha, args.head_sha)
         return _emit(len(changed), protected_path_errors(changed))
     except (RuntimeError, UnicodeDecodeError) as exc:
         return _emit(0, (str(exc),))

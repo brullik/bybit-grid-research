@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from scripts.check_protected_paths import protected_path_errors
-from scripts.check_task_scope import ActiveTask, parse_active_task_bytes, task_scope_errors
+from scripts.check_protected_paths import parse_git_diff_raw_z, protected_path_errors, changed_paths_from_git
+from scripts.check_task_scope import ActiveTask, classify_pr_mode, parse_active_task_bytes, task_scope_errors
 
 CANONICAL = json.dumps({
     "schema": "pm_active_task_v1",
@@ -13,15 +17,12 @@ CANONICAL = json.dumps({
     "allowed_paths": [],
     "required_paths": [],
     "forbidden_paths": [
-        "AGENTS.md",
-        ".github/CODEOWNERS",
-        ".github/workflows/pm-acceptance.yml",
-        "pm_acceptance/**",
-        "docs/frozen_contracts/**",
-        "scripts/check_protected_paths.py",
-        "scripts/check_task_scope.py",
+        "AGENTS.md", ".github/CODEOWNERS", ".github/workflows/**", ".github/actions/**",
+        "pm_acceptance/**", "docs/frozen_contracts/**", "scripts/check_protected_paths.py",
+        "scripts/check_task_scope.py", "scripts/check_numeric_environment.py", "scripts/check_no_live_execution.py",
+        "conftest.py", "pytest.ini", "setup.py", "setup.cfg", "tox.ini", "noxfile.py",
+        "sitecustomize.py", "usercustomize.py",
     ],
-    "required_commands": [],
 }, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
@@ -51,6 +52,10 @@ def test_absolute_path_rejected():
 
 def test_dotdot_component_rejected():
     assert protected_path_errors(("src/../x.py",)) == ("unsafe_path:src/../x.py",)
+
+
+def test_control_character_path_rejected():
+    assert protected_path_errors(("src/bad\nname.py",)) == ("unsafe_path:src/bad\nname.py",)
 
 
 def test_duplicate_changed_path_rejected():
@@ -91,27 +96,27 @@ def test_inactive_task_rejects_implementation_source_change():
 
 
 def test_active_task_accepts_allowed_exact_file():
-    task = ActiveTask("pm_active_task_v1", "TASK", ("src/x.py",), (), (), ())
+    task = ActiveTask("pm_active_task_v1", "TASK", ("src/x.py",), (), ())
     assert task_scope_errors(task, ("src/x.py",)) == ()
 
 
 def test_active_task_accepts_allowed_prefix():
-    task = ActiveTask("pm_active_task_v1", "TASK", ("src/**",), (), (), ())
+    task = ActiveTask("pm_active_task_v1", "TASK", ("src/**",), (), ())
     assert task_scope_errors(task, ("src/pkg/x.py",)) == ()
 
 
 def test_active_task_rejects_out_of_scope_file():
-    task = ActiveTask("pm_active_task_v1", "TASK", ("src/**",), (), (), ())
+    task = ActiveTask("pm_active_task_v1", "TASK", ("src/**",), (), ())
     assert task_scope_errors(task, ("docs/x.md",)) == ("out_of_scope_path:docs/x.md",)
 
 
 def test_forbidden_rule_wins_over_allowed_rule():
-    task = ActiveTask("pm_active_task_v1", "TASK", ("src/**",), (), ("src/secret.py",), ())
+    task = ActiveTask("pm_active_task_v1", "TASK", ("src/**",), (), ("src/secret.py",))
     assert task_scope_errors(task, ("src/secret.py",)) == ("forbidden_path_changed:src/secret.py",)
 
 
 def test_missing_required_path_rejected():
-    task = ActiveTask("pm_active_task_v1", "TASK", ("src/**",), ("src/required.py",), (), ())
+    task = ActiveTask("pm_active_task_v1", "TASK", ("src/**",), ("src/required.py",), ())
     assert task_scope_errors(task, ("src/other.py",)) == ("required_path_missing:src/required.py",)
 
 
@@ -120,4 +125,105 @@ def test_json_lists_are_converted_to_immutable_tuples():
     assert isinstance(task.allowed_paths, tuple)
     assert isinstance(task.required_paths, tuple)
     assert isinstance(task.forbidden_paths, tuple)
-    assert isinstance(task.required_commands, tuple)
+
+
+def test_pr_mode_labels_and_scope_fail_closed():
+    assert classify_pr_mode("alice", ("pm-task-definition",), ("pm_acceptance/x.py",))[1] == ("wrong_author:alice",)
+    assert classify_pr_mode("brullik", ("pm-task-definition", "pm-control-plane"), ("pm_acceptance/x.py",))[1] == ("multiple_mode_labels",)
+    assert classify_pr_mode("brullik", ("pm-unknown",), ("src/x.py",))[1] == ("unknown_mode_label:pm-unknown",)
+    assert classify_pr_mode("brullik", (), ("pm_acceptance/x.py",))[1] == ("missing_required_mode_label:pm_acceptance/x.py",)
+    assert classify_pr_mode("brullik", ("pm-task-definition",), ("src/x.py",))[1] == (
+        "pm_task_definition_out_of_scope:src/x.py",
+        "production_path_forbidden_in_pm_mode:src/x.py",
+    )
+    assert classify_pr_mode("brullik", ("pm-control-plane",), ("AGENTS.md",))[1] == ()
+
+
+def test_parse_raw_diff_rejects_symlink_and_submodule_modes():
+    symlink = b":000000 120000 0000000 1111111 A\0link\0"
+    submodule = b":000000 160000 0000000 1111111 A\0module\0"
+    assert parse_git_diff_raw_z(symlink)[1] == ("unsupported_git_diff_mode:120000",)
+    assert parse_git_diff_raw_z(submodule)[1] == ("unsupported_git_diff_mode:160000",)
+
+
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(["git", *args], cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    return result.stdout.strip()
+
+
+def test_multi_commit_diff_and_rename_paths(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "pm@example.test")
+    _git(repo, "config", "user.name", "PM")
+    (repo / "AGENTS.md").write_text("rules\n")
+    (repo / "plain.txt").write_text("plain\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "head")
+    (repo / "a.txt").write_text("a\n")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-q", "-m", "one")
+    (repo / "b.txt").write_text("b\n")
+    _git(repo, "add", "b.txt")
+    _git(repo, "commit", "-q", "-m", "two")
+    head = _git(repo, "rev-parse", "HEAD")
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert changed_paths_from_git(base, head) == ("a.txt", "b.txt")
+        _git(repo, "mv", "AGENTS.md", "moved.txt")
+        _git(repo, "mv", "plain.txt", "pm_acceptance_file.txt")
+        _git(repo, "commit", "-q", "-m", "renames")
+        renamed = changed_paths_from_git(head, _git(repo, "rev-parse", "HEAD"))
+    finally:
+        os.chdir(old_cwd)
+    assert renamed == ("AGENTS.md", "moved.txt", "plain.txt", "pm_acceptance_file.txt")
+    assert "protected_path_changed:AGENTS.md" in protected_path_errors(renamed)
+
+
+def test_protected_deletion_is_reported_by_raw_diff(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "pm@example.test")
+    _git(repo, "config", "user.name", "PM")
+    (repo / "AGENTS.md").write_text("rules\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "AGENTS.md").unlink()
+    _git(repo, "add", "AGENTS.md")
+    _git(repo, "commit", "-q", "-m", "delete")
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        changed = changed_paths_from_git(base, _git(repo, "rev-parse", "HEAD"))
+    finally:
+        os.chdir(old_cwd)
+    assert changed == ("AGENTS.md",)
+    assert protected_path_errors(changed) == ("protected_path_changed:AGENTS.md",)
+
+
+def test_isolated_acceptance_ignores_malicious_root_conftest(tmp_path: Path):
+    head = tmp_path / "head"
+    acc = tmp_path / "pm_acceptance"
+    head.mkdir()
+    acc.mkdir()
+    (head / "conftest.py").write_text("import pytest\ndef pytest_collection_modifyitems(items):\n    pytest.skip('malicious skip')\n")
+    (acc / "test_acceptance.py").write_text("def test_acceptance_runs():\n    assert True\n")
+    env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(acc), "-q", f"--confcutdir={acc}", "-c", os.devnull],
+        cwd=head,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "1 passed" in result.stdout
+    assert "malicious skip" not in result.stdout + result.stderr
