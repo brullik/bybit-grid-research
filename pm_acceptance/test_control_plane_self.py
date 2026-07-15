@@ -444,8 +444,12 @@ def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
     assert "actions/checkout" not in final
     assert "statuses: write" not in acceptance
     assert "needs: [status-pending, protected-paths, acceptance]" in final
-    assert 'successful = all(result == "success" for result in results.values())' in final
-    assert 'elif any(result == "failure" for result in results.values())' in final
+    assert 'upstream_success = all(result == "success" for result in results.values())' in final
+    assert 'ready = os.environ["PR_DRAFT"] == "false"' in final
+    assert 'owner_authored = os.environ["PR_AUTHOR"] == "brullik"' in final
+    assert 'non_probe = not os.environ["HEAD_REF"].startswith("probe/")' in final
+    assert "successful = upstream_success and ready and owner_authored and non_probe" in final
+    assert 'elif upstream_success or any(result == "failure" for result in results.values())' in final
     assert 'state = "error"' in final
     assert 'summary[:140]' in final
     assert 'raise SystemExit("pm_acceptance_failed")' in final
@@ -467,6 +471,8 @@ def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
         assert "artifact" not in status_job
         assert "cache" not in status_job
         assert "urllib.request.urlopen" in status_job
+
+    assert "converted_to_draft" in workflow
 
 
 def test_direct_task_scope_cli_import_shape_from_repository_root():
