@@ -16,6 +16,8 @@
 /noxfile.py @brullik
 /sitecustomize.py @brullik
 /usercustomize.py @brullik
+/sitecustomize/ @brullik
+/usercustomize/ @brullik
 /pyproject.toml @brullik
 /requirements.txt @brullik
 /requirements-dev.txt @brullik
@@ -26,3 +28,5 @@
 /Pipfile.lock @brullik
 /src/sitecustomize.py @brullik
 /src/usercustomize.py @brullik
+/src/sitecustomize/ @brullik
+/src/usercustomize/ @brullik
