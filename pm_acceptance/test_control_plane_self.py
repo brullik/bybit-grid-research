@@ -426,6 +426,49 @@ def test_workflow_collects_only_the_head_task_id_directory():
     assert 'cp -R head/pm_acceptance "$RUNNER_TEMP/head_task_definition/pm_acceptance"' not in workflow
 
 
+def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    pending = workflow.split("\n  status-pending:\n", 1)[1].split("\n  protected-paths:\n", 1)[0]
+    acceptance = workflow.split("\n  acceptance:\n", 1)[1].split("\n  status-final:\n", 1)[0]
+    final = workflow.split("\n  status-final:\n", 1)[1]
+
+    assert workflow.count("statuses: write") == 2
+    assert workflow.count('"context": "pm-acceptance"') == 2
+    assert pending.count("github.event.pull_request.head.sha") == 1
+    assert final.count("github.event.pull_request.head.sha") == 1
+    assert pending.count('"brullik/bybit-grid-research"') == 1
+    assert final.count('"brullik/bybit-grid-research"') == 1
+    assert pending.count("timeout-minutes: 2") == 1
+    assert final.count("timeout-minutes: 2") == 1
+    assert "actions/checkout" not in pending
+    assert "actions/checkout" not in final
+    assert "statuses: write" not in acceptance
+    assert "needs: [status-pending, protected-paths, acceptance]" in final
+    assert 'successful = all(result == "success" for result in results.values())' in final
+    assert 'elif any(result == "failure" for result in results.values())' in final
+    assert 'state = "error"' in final
+    assert 'summary[:140]' in final
+    assert 'raise SystemExit("pm_acceptance_failed")' in final
+
+
+def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    pending = workflow.split("\n  status-pending:\n", 1)[1].split("\n  protected-paths:\n", 1)[0]
+    final = workflow.split("\n  status-final:\n", 1)[1]
+
+    for status_job in (pending, final):
+        assert "statuses: write" in status_job
+        assert "contents: read" not in status_job
+        assert "actions/checkout" not in status_job
+        assert "\n      - uses:" not in status_job
+        assert "working-directory:" not in status_job
+        assert "pull_request.head.repo" not in status_job
+        assert "secrets." not in status_job
+        assert "artifact" not in status_job
+        assert "cache" not in status_job
+        assert "urllib.request.urlopen" in status_job
+
+
 def test_direct_task_scope_cli_import_shape_from_repository_root():
     repo_root = Path(__file__).resolve().parents[1]
     result = subprocess.run(
