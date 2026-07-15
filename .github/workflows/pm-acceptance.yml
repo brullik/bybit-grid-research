@@ -1,0 +1,184 @@
+name: PM Acceptance
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  protected-paths:
+    name: protected-paths
+    runs-on: ubuntu-latest
+    outputs:
+      pr-mode: ${{ steps.scope.outputs.pr_mode }}
+      task-id: ${{ steps.scope.outputs.task_id }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Fetch PR head for diff only
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+      - name: Check PR mode, protected paths, and task scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_ACTOR: ${{ github.event.pull_request.user.login }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set +e
+          json=$(python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --actor "$PR_ACTOR" --labels-json "$PR_LABELS_JSON")
+          status=$?
+          printf '%s\n' "$json"
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane"}, mode; print(mode)')
+          task_id=$(JSON_PAYLOAD="$json" python -c 'import json, os; task_id=json.loads(os.environ["JSON_PAYLOAD"]).get("task_id"); assert isinstance(task_id, str) and task_id; print(task_id)')
+          printf 'pr_mode=%s\n' "$pr_mode" >> "$GITHUB_OUTPUT"
+          printf 'task_id=%s\n' "$task_id" >> "$GITHUB_OUTPUT"
+
+  acceptance:
+    name: acceptance (${{ matrix.python-version }})
+    needs: protected-paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.14']
+    steps:
+      - name: Checkout base control plane
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Checkout PR head production code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Security: PR code is executed with a read-only token, persist-credentials=false, no secrets, and base-controlled acceptance tests.
+      - name: Stage base-controlled acceptance harness
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          rm -rf "$RUNNER_TEMP/pm_acceptance" "$RUNNER_TEMP/scripts" "$RUNNER_TEMP/frozen_contracts" "$RUNNER_TEMP/.github"
+          cp -R base/pm_acceptance "$RUNNER_TEMP/pm_acceptance"
+          cp -R base/docs/frozen_contracts "$RUNNER_TEMP/frozen_contracts"
+          mkdir -p "$RUNNER_TEMP/scripts"
+          mkdir -p "$RUNNER_TEMP/.github/workflows"
+          printf '' > "$RUNNER_TEMP/scripts/__init__.py"
+          cp base/scripts/check_protected_paths.py "$RUNNER_TEMP/scripts/check_protected_paths.py"
+          cp base/scripts/check_task_scope.py "$RUNNER_TEMP/scripts/check_task_scope.py"
+          cp base/.github/workflows/pm-acceptance.yml "$RUNNER_TEMP/.github/workflows/pm-acceptance.yml"
+          printf '[pytest]\n' > "$RUNNER_TEMP/pytest.ini"
+      - name: Install PR package
+        working-directory: head
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+      - name: Run base isolated acceptance harness
+        if: needs.protected-paths.outputs.pr-mode != 'pm-task-definition'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ${{ runner.temp }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python -m pytest pm_acceptance -q \
+            -c "$RUNNER_TEMP/pytest.ini" \
+            --confcutdir="$RUNNER_TEMP/pm_acceptance"
+      - name: Run base control-plane self-tests for task-definition PRs
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ${{ runner.temp }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python -m pytest pm_acceptance/test_control_plane_self.py -q \
+            -c "$RUNNER_TEMP/pytest.ini" \
+            --confcutdir="$RUNNER_TEMP/pm_acceptance"
+      - name: Stage head control-plane self-tests
+        if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          rm -rf "$RUNNER_TEMP/head_control"
+          mkdir -p "$RUNNER_TEMP/head_control/scripts" "$RUNNER_TEMP/head_control/.github/workflows"
+          cp -R head/pm_acceptance "$RUNNER_TEMP/head_control/pm_acceptance"
+          printf '' > "$RUNNER_TEMP/head_control/scripts/__init__.py"
+          cp head/scripts/check_protected_paths.py "$RUNNER_TEMP/head_control/scripts/check_protected_paths.py"
+          cp head/scripts/check_task_scope.py "$RUNNER_TEMP/head_control/scripts/check_task_scope.py"
+          cp head/.github/workflows/pm-acceptance.yml "$RUNNER_TEMP/head_control/.github/workflows/pm-acceptance.yml"
+          printf '[pytest]\n' > "$RUNNER_TEMP/head_control/pytest.ini"
+      - name: Run head control-plane self-tests
+        if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
+        working-directory: ${{ runner.temp }}/head_control
+        env:
+          PYTHONPATH: ${{ runner.temp }}/head_control
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          python -m pytest pm_acceptance/test_control_plane_self.py -q \
+            -c pytest.ini \
+            --confcutdir=pm_acceptance
+      - name: Stage head task-definition acceptance tree
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition' && needs.protected-paths.outputs.task-id != 'NO_ACTIVE_IMPLEMENTATION'
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          TASK_ID: ${{ needs.protected-paths.outputs.task-id }}
+        run: |
+          rm -rf "$RUNNER_TEMP/head_task_definition"
+          mkdir -p "$RUNNER_TEMP/head_task_definition/pm_acceptance/tasks"
+          cp -R "head/pm_acceptance/tasks/$TASK_ID" \
+            "$RUNNER_TEMP/head_task_definition/pm_acceptance/tasks/$TASK_ID"
+          printf '[pytest]\n' > "$RUNNER_TEMP/head_task_definition/pytest.ini"
+      - name: Compile and collect head task-definition acceptance tests
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition' && needs.protected-paths.outputs.task-id != 'NO_ACTIVE_IMPLEMENTATION'
+        env:
+          HEAD_ACCEPTANCE_TEMP: ${{ runner.temp }}/head_task_definition
+          TASK_ID: ${{ needs.protected-paths.outputs.task-id }}
+          PYTHONPATH: ${{ runner.temp }}/head_task_definition
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          task_path="$HEAD_ACCEPTANCE_TEMP/pm_acceptance/tasks/$TASK_ID"
+          python -m compileall -q "$task_path"
+          python -m pytest "$task_path" --collect-only -q \
+            -c "$HEAD_ACCEPTANCE_TEMP/pytest.ini" \
+            --confcutdir="$task_path"
+      - name: Run supplemental PR checks
+        working-directory: head
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_MODE: ${{ needs.protected-paths.outputs.pr-mode }}
+        run: |
+          python scripts/check_numeric_environment.py
+          python -m pip check
+          python scripts/check_no_live_execution.py
+          python -m compileall -q src tests scripts
+          if [ "$PR_MODE" = "pm-task-definition" ]; then
+            python -m pytest tests -q
+          else
+            python -m pytest -q
+          fi
+          ruff check .
+          git diff --check "$BASE_SHA"..."$HEAD_SHA"
