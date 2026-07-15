@@ -426,6 +426,21 @@ def test_workflow_collects_only_the_head_task_id_directory():
     assert 'cp -R head/pm_acceptance "$RUNNER_TEMP/head_task_definition/pm_acceptance"' not in workflow
 
 
+def test_direct_task_scope_cli_import_shape_from_repository_root():
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "scripts/check_task_scope.py", "--help"],
+        cwd=repo_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "--task-file" in result.stdout
+    assert result.stderr == ""
+
+
 def test_parse_raw_diff_rejects_symlink_and_submodule_modes():
     symlink = b":000000 120000 0000000 1111111 A\0link\0"
     submodule = b":000000 160000 0000000 1111111 A\0module\0"
