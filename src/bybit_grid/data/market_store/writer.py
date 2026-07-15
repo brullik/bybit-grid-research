@@ -114,7 +114,7 @@ def _semantic_validate_chunk_dir(d, kind, manifest):
         t = pq.read_table(data)
     except (pa.ArrowException, OSError, UnicodeError) as exc:
         raise MarketStoreError("parquet_read_invalid") from exc
-    if t.schema != schema_for(kind):
+    if not t.schema.equals(schema_for(kind), check_metadata=True):
         raise MarketStoreError("schema_mismatch")
     try:
         rows = tuple(t.to_pylist())
@@ -171,6 +171,23 @@ def _one_month(rows, kind):
         raise MarketStoreError("mixed_symbols")
 
 
+def _rel_for_rows(kind, rows, keys, logical_hash):
+    first = rows[0]
+    if kind is MarketDatasetKind.instrument_snapshot:
+        return rel_chunk_path(
+            kind,
+            snapshot_server_time_ms=first["snapshot_server_time_ms"],
+            logical_hash=logical_hash,
+        )
+    return rel_chunk_path(
+        kind,
+        symbol=first["symbol"],
+        min_ms=keys[0][1],
+        max_ms=keys[-1][1],
+        logical_hash=logical_hash,
+    )
+
+
 def _planned_table_bytes(kind, rows):
     table = _rows_to_table(kind, rows)
     sink = pa.BufferOutputStream()
@@ -187,12 +204,9 @@ def build_planned_chunk(kind, rows, *, existing_store_root=None):
     keys = [row_key(kind, r) for r in rows]
     if len(set(keys)) != len(keys):
         raise MarketStoreError("duplicate_incoming_key")
+    _rel_for_rows(kind, rows, keys, "0" * 64)
     lh = logical_rows_sha256(kind, rows)
-    d0 = rows[0]
-    if kind is MarketDatasetKind.instrument_snapshot:
-        rel = rel_chunk_path(kind, snapshot_server_time_ms=d0["snapshot_server_time_ms"], logical_hash=lh)
-    else:
-        rel = rel_chunk_path(kind, symbol=d0["symbol"], min_ms=keys[0][1], max_ms=keys[-1][1], logical_hash=lh)
+    rel = _rel_for_rows(kind, rows, keys, lh)
     parquet_bytes = _planned_table_bytes(kind, rows)
     psha = hashlib.sha256(parquet_bytes).hexdigest()
     manifest = StoreChunkManifest(kind.value, rel.as_posix(), len(rows), PK_COLUMNS[kind], keys[0], keys[-1], psha, lh)
@@ -227,21 +241,9 @@ def write_chunk_atomic(store_root, kind, rows, *, fail_at=None):
         raise MarketStoreError("duplicate_incoming_key")
     if fail_at == "early":
         raise MarketStoreError("injected_chunk_failure_early")
+    _rel_for_rows(kind, rows, keys, "0" * 64)
     lh = logical_rows_sha256(kind, rows)
-    d0 = rows[0]
-    if kind is MarketDatasetKind.instrument_snapshot:
-        rel = rel_chunk_path(
-            kind, snapshot_server_time_ms=d0["snapshot_server_time_ms"], logical_hash=lh
-        )
-    else:
-        tsidx = 1
-        rel = rel_chunk_path(
-            kind,
-            symbol=d0["symbol"],
-            min_ms=keys[0][tsidx],
-            max_ms=keys[-1][tsidx],
-            logical_hash=lh,
-        )
+    rel = _rel_for_rows(kind, rows, keys, lh)
     final = store_root / rel
     ensure_safe_store_path(store_root, final)
     if final.exists():
