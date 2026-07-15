@@ -3,8 +3,6 @@ import hashlib
 import os
 import shutil
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 from .models import (
@@ -17,8 +15,12 @@ from .models import (
 )
 from .schemas import schema_for, ensure_decimal128_38_18
 from .canonical import logical_rows_sha256, row_key, canonical_json_bytes
-from .parsing import parse_chunk_manifest_bytes
-from .paths import rel_chunk_path
+from .paths import (
+    _absolute_lexical_path,
+    _safe_dataset_kind,
+    ensure_safe_store_path,
+    rel_chunk_path,
+)
 
 DEC_FIELDS = {
     "instrument_snapshot": (
@@ -86,19 +88,40 @@ def _rows_to_table(kind, rows):
     return pa.Table.from_arrays(arrays, schema=sch)
 
 
-def _semantic_validate_chunk_dir(d, kind, manifest):
-    if sorted(p.name for p in d.iterdir()) != ["chunk_manifest.json", "data.parquet"]:
+def _validate_chunk_dir_entries(d):
+    if d.is_symlink() or not d.is_dir():
         raise MarketStoreError("chunk_dir_contract_invalid")
+    entries = sorted(d.iterdir(), key=lambda path: path.name)
+    if [p.name for p in entries] != ["chunk_manifest.json", "data.parquet"]:
+        raise MarketStoreError("chunk_dir_contract_invalid")
+    if any(path.is_symlink() or not path.is_file() for path in entries):
+        raise MarketStoreError("chunk_dir_contract_invalid")
+
+
+def _semantic_validate_chunk_dir(d, kind, manifest):
+    _validate_chunk_dir_entries(d)
+    if manifest.dataset != kind.value:
+        raise MarketStoreError("manifest_schema_invalid")
+    if tuple(manifest.primary_key_columns) != PK_COLUMNS[kind]:
+        raise MarketStoreError("primary_key_schema_invalid")
     mb = (d / "chunk_manifest.json").read_bytes()
     if mb != canonical_json_bytes(manifest):
         raise MarketStoreError("manifest_canonical_mismatch")
     data = d / "data.parquet"
     if hashlib.sha256(data.read_bytes()).hexdigest() != manifest.parquet_sha256:
         raise MarketStoreError("parquet_sha256_mismatch")
-    t = pq.read_table(data)
-    if t.schema != schema_for(kind):
+    try:
+        t = pq.read_table(data)
+    except (pa.ArrowException, OSError, UnicodeError) as exc:
+        raise MarketStoreError("parquet_read_invalid") from exc
+    if not t.schema.equals(schema_for(kind), check_metadata=True):
         raise MarketStoreError("schema_mismatch")
-    rows = tuple(t.to_pylist())
+    try:
+        rows = tuple(t.to_pylist())
+    except (pa.ArrowException, OSError, UnicodeError) as exc:
+        raise MarketStoreError("parquet_read_invalid") from exc
+    if not rows:
+        raise MarketStoreError("empty_chunk")
     keys = tuple(row_key(kind, r) for r in rows)
     if tuple(sorted(keys)) != keys or len(set(keys)) != len(keys):
         raise MarketStoreError("primary_key_order_invalid")
@@ -108,8 +131,32 @@ def _semantic_validate_chunk_dir(d, kind, manifest):
         or keys[-1] != tuple(manifest.max_key)
     ):
         raise MarketStoreError("manifest_row_bounds_invalid")
-    if logical_rows_sha256(kind, rows) != manifest.logical_rows_sha256:
+    logical_hash = logical_rows_sha256(kind, rows)
+    if logical_hash != manifest.logical_rows_sha256:
         raise MarketStoreError("logical_hash_mismatch")
+    first = rows[0]
+    if kind is MarketDatasetKind.instrument_snapshot:
+        snaps = {r["snapshot_server_time_ms"] for r in rows}
+        if len(snaps) != 1:
+            raise MarketStoreError("chunk_path_semantic_mismatch")
+        expected_rel = rel_chunk_path(
+            kind,
+            snapshot_server_time_ms=first["snapshot_server_time_ms"],
+            logical_hash=logical_hash,
+        ).as_posix()
+    else:
+        symbols = {r["symbol"] for r in rows}
+        if len(symbols) != 1:
+            raise MarketStoreError("chunk_path_semantic_mismatch")
+        expected_rel = rel_chunk_path(
+            kind,
+            symbol=first["symbol"],
+            min_ms=keys[0][1],
+            max_ms=keys[-1][1],
+            logical_hash=logical_hash,
+        ).as_posix()
+    if manifest.relative_path != expected_rel:
+        raise MarketStoreError("chunk_path_semantic_mismatch")
     return rows
 
 
@@ -122,18 +169,23 @@ def _one_month(rows, kind):
     symbols = {r.get("symbol") for r in rows}
     if len(symbols) != 1:
         raise MarketStoreError("mixed_symbols")
-    tsname = (
-        "funding_time_ms" if kind is MarketDatasetKind.funding_rate else "open_time_ms"
-    )
-    months = {
-        (
-            datetime.fromtimestamp(r[tsname] / 1000, tz=timezone.utc).year,
-            datetime.fromtimestamp(r[tsname] / 1000, tz=timezone.utc).month,
+
+
+def _rel_for_rows(kind, rows, keys, logical_hash):
+    first = rows[0]
+    if kind is MarketDatasetKind.instrument_snapshot:
+        return rel_chunk_path(
+            kind,
+            snapshot_server_time_ms=first["snapshot_server_time_ms"],
+            logical_hash=logical_hash,
         )
-        for r in rows
-    }
-    if len(months) != 1:
-        raise MarketStoreError("chunk_crosses_utc_month")
+    return rel_chunk_path(
+        kind,
+        symbol=first["symbol"],
+        min_ms=keys[0][1],
+        max_ms=keys[-1][1],
+        logical_hash=logical_hash,
+    )
 
 
 def _planned_table_bytes(kind, rows):
@@ -144,7 +196,7 @@ def _planned_table_bytes(kind, rows):
 
 
 def build_planned_chunk(kind, rows, *, existing_store_root=None):
-    kind = MarketDatasetKind(kind)
+    kind = _safe_dataset_kind(kind)
     rows = tuple(sorted((_validate_row(kind, r) for r in rows), key=lambda r: row_key(kind, r)))
     if not rows:
         raise MarketStoreError("empty_chunk_input")
@@ -152,28 +204,32 @@ def build_planned_chunk(kind, rows, *, existing_store_root=None):
     keys = [row_key(kind, r) for r in rows]
     if len(set(keys)) != len(keys):
         raise MarketStoreError("duplicate_incoming_key")
+    _rel_for_rows(kind, rows, keys, "0" * 64)
     lh = logical_rows_sha256(kind, rows)
-    d0 = rows[0]
-    if kind is MarketDatasetKind.instrument_snapshot:
-        rel = rel_chunk_path(kind, snapshot_server_time_ms=d0["snapshot_server_time_ms"], logical_hash=lh)
-    else:
-        rel = rel_chunk_path(kind, symbol=d0["symbol"], min_ms=keys[0][1], max_ms=keys[-1][1], logical_hash=lh)
+    rel = _rel_for_rows(kind, rows, keys, lh)
     parquet_bytes = _planned_table_bytes(kind, rows)
     psha = hashlib.sha256(parquet_bytes).hexdigest()
     manifest = StoreChunkManifest(kind.value, rel.as_posix(), len(rows), PK_COLUMNS[kind], keys[0], keys[-1], psha, lh)
     manifest_bytes = canonical_json_bytes(manifest)
     reuse = False
-    if existing_store_root is not None and (Path(existing_store_root) / rel).exists():
-        from .reader import read_and_validate_chunk
-        read_and_validate_chunk(Path(existing_store_root), Path(existing_store_root)/rel, expected_manifest=manifest)
-        reuse = True
+    if existing_store_root is not None:
+        root = _absolute_lexical_path(existing_store_root)
+        candidate = root / rel
+        ensure_safe_store_path(root, root)
+        ensure_safe_store_path(root, candidate)
+        if candidate.exists():
+            from .reader import read_and_validate_chunk
+
+            read_and_validate_chunk(root, candidate, expected_manifest=manifest)
+            reuse = True
     frozen_rows = tuple(freeze_immutable(r, field_name="rows") for r in rows)
     return PlannedChunk(kind, frozen_rows, manifest, parquet_bytes, manifest_bytes, reuse)
 
 
 def write_chunk_atomic(store_root, kind, rows, *, fail_at=None):
-    store_root = Path(store_root)
-    kind = MarketDatasetKind(kind)
+    kind = _safe_dataset_kind(kind)
+    store_root = _absolute_lexical_path(store_root)
+    ensure_safe_store_path(store_root, store_root)
     rows = tuple(
         sorted((_validate_row(kind, r) for r in rows), key=lambda r: row_key(kind, r))
     )
@@ -185,30 +241,21 @@ def write_chunk_atomic(store_root, kind, rows, *, fail_at=None):
         raise MarketStoreError("duplicate_incoming_key")
     if fail_at == "early":
         raise MarketStoreError("injected_chunk_failure_early")
+    _rel_for_rows(kind, rows, keys, "0" * 64)
     lh = logical_rows_sha256(kind, rows)
-    d0 = rows[0]
-    if kind is MarketDatasetKind.instrument_snapshot:
-        rel = rel_chunk_path(
-            kind, snapshot_server_time_ms=d0["snapshot_server_time_ms"], logical_hash=lh
-        )
-    else:
-        tsidx = 1
-        rel = rel_chunk_path(
-            kind,
-            symbol=d0["symbol"],
-            min_ms=keys[0][tsidx],
-            max_ms=keys[-1][tsidx],
-            logical_hash=lh,
-        )
+    rel = _rel_for_rows(kind, rows, keys, lh)
     final = store_root / rel
+    ensure_safe_store_path(store_root, final)
     if final.exists():
-        mf = parse_chunk_manifest_bytes((final / "chunk_manifest.json").read_bytes())
-        _semantic_validate_chunk_dir(final, kind, mf)
+        from .reader import read_and_validate_chunk
+
+        mf, _ = read_and_validate_chunk(store_root, final)
         if mf.logical_rows_sha256 == lh:
             return mf
         raise MarketStoreError("immutable_chunk_path_conflict")
     staging_root = store_root / ".building" / str(uuid.uuid4())
     staging = staging_root / rel
+    ensure_safe_store_path(store_root, staging)
     try:
         staging.mkdir(parents=True)
         if fail_at == "mid":
