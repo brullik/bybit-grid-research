@@ -1,7 +1,7 @@
 name: PM Acceptance
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
 permissions:
   contents: read
   pull-requests: read
@@ -258,6 +258,9 @@ jobs:
           PENDING_RESULT: ${{ needs.status-pending.result }}
           PROTECTED_RESULT: ${{ needs.protected-paths.result }}
           ACCEPTANCE_RESULT: ${{ needs.acceptance.result }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           python - <<'PY'
           import json
@@ -275,13 +278,22 @@ jobs:
               "protected": os.environ["PROTECTED_RESULT"],
               "acceptance": os.environ["ACCEPTANCE_RESULT"],
           }
-          successful = all(result == "success" for result in results.values())
+          upstream_success = all(result == "success" for result in results.values())
+          ready = os.environ["PR_DRAFT"] == "false"
+          owner_authored = os.environ["PR_AUTHOR"] == "brullik"
+          non_probe = not os.environ["HEAD_REF"].startswith("probe/")
+          successful = upstream_success and ready and owner_authored and non_probe
           if successful:
               state = "success"
-          elif any(result == "failure" for result in results.values()):
+          elif upstream_success or any(result == "failure" for result in results.values()):
               state = "failure"
           else:
               state = "error"
+          results.update({
+              "ready": str(ready).lower(),
+              "owner": str(owner_authored).lower(),
+              "non_probe": str(non_probe).lower(),
+          })
           summary = ", ".join(f"{name}={result}" for name, result in results.items())
           payload = {
               "state": state,
