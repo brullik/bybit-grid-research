@@ -23,6 +23,8 @@ _PROTECTED_EXACT = frozenset({
     "noxfile.py",
     "sitecustomize.py",
     "usercustomize.py",
+    "src/sitecustomize.py",
+    "src/usercustomize.py",
     "pyproject.toml",
     "requirements.txt",
     "requirements-dev.txt",

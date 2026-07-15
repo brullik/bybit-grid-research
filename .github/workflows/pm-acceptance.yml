@@ -162,11 +162,16 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_MODE: ${{ needs.protected-paths.outputs.pr-mode }}
         run: |
           python scripts/check_numeric_environment.py
           python -m pip check
           python scripts/check_no_live_execution.py
           python -m compileall -q src tests scripts
-          python -m pytest -q
+          if [ "$PR_MODE" = "pm-task-definition" ]; then
+            python -m pytest tests -q
+          else
+            python -m pytest -q
+          fi
           ruff check .
           git diff --check "$BASE_SHA"..."$HEAD_SHA"

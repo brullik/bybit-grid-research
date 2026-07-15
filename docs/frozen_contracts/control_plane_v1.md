@@ -30,7 +30,7 @@ Implementation PRs cannot edit:
 - `scripts/check_no_live_execution.py`
 - root `conftest.py`
 - `pytest.ini`, `setup.py`, `setup.cfg`, `tox.ini`, `noxfile.py`
-- `sitecustomize.py`, `usercustomize.py`
+- `sitecustomize.py`, `usercustomize.py`, `src/sitecustomize.py`, `src/usercustomize.py`
 - `pyproject.toml`, `requirements.txt`, `requirements-dev.txt`, `requirements/*.txt`
 - `uv.lock`, `poetry.lock`, `Pipfile`, `Pipfile.lock`
 

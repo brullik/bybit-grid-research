@@ -24,3 +24,5 @@
 /poetry.lock @brullik
 /Pipfile @brullik
 /Pipfile.lock @brullik
+/src/sitecustomize.py @brullik
+/src/usercustomize.py @brullik

@@ -21,7 +21,7 @@ CANONICAL = json.dumps({
         "pm_acceptance/**", "docs/frozen_contracts/**", "scripts/check_protected_paths.py",
         "scripts/check_task_scope.py", "scripts/check_numeric_environment.py", "scripts/check_no_live_execution.py",
         "conftest.py", "pytest.ini", "setup.py", "setup.cfg", "tox.ini", "noxfile.py",
-        "sitecustomize.py", "usercustomize.py",
+        "sitecustomize.py", "usercustomize.py", "src/sitecustomize.py", "src/usercustomize.py",
         "pyproject.toml", "requirements.txt", "requirements-dev.txt", "requirements/*.txt",
         "uv.lock", "poetry.lock", "Pipfile", "Pipfile.lock",
     ],
@@ -133,6 +133,11 @@ def test_dependency_paths_are_protected_with_exact_errors():
     assert protected_path_errors(("pyproject.toml",)) == ("protected_path_changed:pyproject.toml",)
     assert protected_path_errors(("uv.lock",)) == ("protected_path_changed:uv.lock",)
     assert protected_path_errors(("requirements/base.txt",)) == ("protected_path_changed:requirements/base.txt",)
+
+
+def test_src_customization_paths_are_protected_with_exact_errors():
+    assert protected_path_errors(("src/sitecustomize.py",)) == ("protected_path_changed:src/sitecustomize.py",)
+    assert protected_path_errors(("src/usercustomize.py",)) == ("protected_path_changed:src/usercustomize.py",)
 
 
 def test_no_required_commands_or_shell_command_field_exists():
@@ -295,7 +300,7 @@ def test_head_task_definition_collection_valid_and_syntax_error(tmp_path: Path):
     good = tmp_path / "good"
     good.mkdir()
     _stage_isolated_tree(good)
-    (good / "pm_acceptance/test_acceptance.py").write_text("def test_collectable():\n    assert True\n")
+    (good / "pm_acceptance/test_acceptance.py").write_text("def test_collectable():\n    assert False\n")
     env = dict(os.environ, PYTHONPATH=str(good), PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
     compile_good = subprocess.run([sys.executable, "-m", "compileall", "-q", str(good)], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     collect_good = subprocess.run(
@@ -305,6 +310,7 @@ def test_head_task_definition_collection_valid_and_syntax_error(tmp_path: Path):
     assert compile_good.returncode == 0
     assert collect_good.returncode == 0
     assert "test_acceptance.py::test_collectable" in collect_good.stdout
+    assert "failed" not in collect_good.stdout.lower()
 
     bad = tmp_path / "bad"
     bad.mkdir()
