@@ -21,7 +21,7 @@ def decimal_to_text(d: Decimal) -> str:
         raise MarketStoreError("decimal_invalid")
     if d == 0:
         return "0"
-    s = format(d.normalize(), "f")
+    s = format(d, "f")
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return "0" if s in ("-0", "") else s
