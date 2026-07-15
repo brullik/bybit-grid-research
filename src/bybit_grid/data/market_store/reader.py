@@ -50,7 +50,7 @@ def read_and_validate_chunk(store_root: Path, chunk_dir: Path, *, expected_manif
         t = pq.read_table(data)
     except (pa.ArrowException, OSError, UnicodeError) as exc:
         raise MarketStoreError("parquet_read_invalid") from exc
-    if t.schema != schema_for(kind):
+    if not t.schema.equals(schema_for(kind), check_metadata=True):
         raise MarketStoreError("schema_mismatch")
     try:
         py_rows = t.to_pylist()
