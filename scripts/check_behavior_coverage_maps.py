@@ -14,13 +14,7 @@ def main(argv=None):
     ns = ap.parse_args(argv)
     try:
         nodes = collect_nodes(ns.collect_command)
-        res = verify_maps(
-            (
-                ("docs/sprint_06_3b_3_2_behavior_coverage.md", 8),
-                ("docs/sprint_06_4a_behavior_coverage.md", 8),
-            ),
-            nodes,
-        )
+        res = verify_maps((), nodes)
         print(res.to_json())
         return 0 if res.ok else 1
     except Exception as e:

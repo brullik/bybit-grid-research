@@ -14,7 +14,7 @@ def audit_market_store(root):
     keys = {}
     if not root.exists():
         return MarketStoreAudit(False, ("store_root_missing",), 0, 0)
-    allowed = {"store_version.json", "datasets", "imports", "evidence", ".building"}
+    allowed = {"store_version.json", "datasets", "imports", "evidence"}
     entries = list(root.iterdir())
     if not entries:
         failures.append("empty_store_root")
@@ -23,8 +23,8 @@ def audit_market_store(root):
             failures.append(f"unexpected_root_entry:{p.name}")
         if p.is_symlink():
             failures.append(f"unsafe_symlink:{p.relative_to(root).as_posix()}")
-        if p.name == ".building" and p.exists() and any(p.iterdir()):
-            failures.append("stale_building_entry")
+        if p.name.startswith(".building") or ".txn-" in p.name:
+            failures.append("stale_transaction_entry")
     ver = root / "store_version.json"
     if not ver.exists():
         failures.append("store_version_missing")
@@ -83,6 +83,21 @@ def audit_market_store(root):
         failures.append("receipt_without_chunks")
     for rel in sorted(actual_chunks - receipt_chunks):
         failures.append(f"orphan_chunk:{rel}")
+    actual_evidence_archives = {p.parent.relative_to(root).as_posix() for p in (root / "evidence").glob("sha256=*/review_pack.zip")} if (root / "evidence").exists() else set()
+    actual_evidence_refs = {p.parent.relative_to(root).as_posix() for p in (root / "evidence").glob("sha256=*/evidence_reference.json")} if (root / "evidence").exists() else set()
+    required_evidence = set()
+    for rr in (root / "imports").glob("**/import_receipt.json") if (root / "imports").exists() else []:
+        try:
+            r = parse_import_receipt_bytes(rr.read_bytes())
+            required_evidence.add(f"evidence/sha256={r.source_review_pack_sha256}")
+        except Exception:
+            pass
+    orphan_evidence = (actual_evidence_archives | actual_evidence_refs) - required_evidence
+    for rel in sorted(orphan_evidence):
+        failures.append(f"orphan_evidence:{rel}")
     if (root / "evidence").exists() and not receipts:
         failures.append("evidence_without_receipt")
-    return MarketStoreAudit(not failures, tuple(failures), chunks, receipts)
+    dataset_counts = {}
+    for (_kind, _key), _row in keys.items():
+        dataset_counts[_kind] = dataset_counts.get(_kind, 0) + 1
+    return MarketStoreAudit(not failures, tuple(failures), chunks, receipts, len(actual_evidence_archives), len(actual_evidence_refs), len(actual_chunks - receipt_chunks), len(orphan_evidence), sum(1 for f in failures if "stale_transaction" in f), dataset_counts)
