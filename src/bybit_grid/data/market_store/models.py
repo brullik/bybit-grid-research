@@ -22,6 +22,10 @@ class MarketDatasetKind(str, Enum):
     funding_rate = "funding_rate"
 
 
+_DATASET_NAMES = frozenset(kind.value for kind in MarketDatasetKind)
+_PORTABLE_RUN_ID_RE = _re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
 def strict_int(v, n):
     if type(v) is not int:
         raise MarketStoreError(f"{n}_not_exact_int")
@@ -78,6 +82,67 @@ def _safe_relative(v, n):
         raise MarketStoreError(f"{n}_invalid")
     return v
 
+
+def _portable_run_id(v):
+    if (
+        type(v) is not str
+        or ".." in v
+        or _PORTABLE_RUN_ID_RE.fullmatch(v) is None
+    ):
+        raise MarketStoreError("run_id_unsafe")
+    return v
+
+
+def _manifest_dataset(v):
+    if type(v) is not str or v not in _DATASET_NAMES:
+        raise MarketStoreError("dataset_invalid")
+    return v
+
+
+def _manifest_relative_path(v):
+    if type(v) is not str:
+        raise MarketStoreError("relative_path_invalid")
+    parts = v.split("/")
+    has_control = any(
+        ord(char) < 32
+        or 127 <= ord(char) <= 159
+        or 0xD800 <= ord(char) <= 0xDFFF
+        for char in v
+    )
+    if (
+        len(parts) < 2
+        or parts[0] != "datasets"
+        or "\\" in v
+        or ":" in v
+        or has_control
+        or any(part in ("", ".", "..") for part in parts)
+    ):
+        raise MarketStoreError("relative_path_invalid")
+    return v
+
+
+def _manifest_primary_key_columns(v):
+    if (
+        type(v) is not tuple
+        or not v
+        or any(type(column) is not str or not column for column in v)
+        or len(set(v)) != len(v)
+    ):
+        raise MarketStoreError("primary_key_columns_invalid")
+    return v
+
+
+def _manifest_key(v, name, arity):
+    if type(v) is not tuple or len(v) != arity:
+        raise MarketStoreError(f"{name}_invalid")
+    for atom in v:
+        if type(atom) is int:
+            if atom < 0:
+                raise MarketStoreError(f"{name}_invalid")
+        elif type(atom) is not str or not atom:
+            raise MarketStoreError(f"{name}_invalid")
+    return v
+
 _SHA_RE = _re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -123,7 +188,7 @@ class StoreEvidenceReference:
     source_review_pack_sha256: str
 
     def __post_init__(self):
-        strict_str(self.run_id, "run_id")
+        _portable_run_id(self.run_id)
         _sha(self.source_review_pack_sha256, "source_review_pack_sha256")
 
 
@@ -214,25 +279,25 @@ class StoreChunkManifest:
     storage_schema_version: str = STORE_SCHEMA_VERSION
 
     def __post_init__(self):
-        if self.storage_schema_version != STORE_SCHEMA_VERSION:
-            raise MarketStoreError("storage_schema_version_invalid")
-        MarketDatasetKind(self.dataset)
         if (
-            type(self.relative_path) is not str
-            or not self.relative_path
-            or "\\" in self.relative_path
-            or ".." in self.relative_path.split("/")
-            or not self.relative_path.startswith("datasets/")
+            type(self.storage_schema_version) is not str
+            or self.storage_schema_version != STORE_SCHEMA_VERSION
         ):
-            raise MarketStoreError("relative_path_invalid")
+            raise MarketStoreError("storage_schema_version_invalid")
+        _manifest_dataset(self.dataset)
+        _manifest_relative_path(self.relative_path)
         strict_int(self.row_count, "row_count")
         if self.row_count <= 0:
             raise MarketStoreError("row_count_invalid")
-        _tuple_exact(self.primary_key_columns, "primary_key_columns")
-        if any(type(x) is not str or not x for x in self.primary_key_columns):
-            raise MarketStoreError("primary_key_columns_invalid")
-        _tuple_exact(self.min_key, "min_key")
-        _tuple_exact(self.max_key, "max_key")
+        _manifest_primary_key_columns(self.primary_key_columns)
+        arity = len(self.primary_key_columns)
+        _manifest_key(self.min_key, "min_key", arity)
+        _manifest_key(self.max_key, "max_key", arity)
+        if any(
+            type(min_atom) is not type(max_atom)
+            for min_atom, max_atom in zip(self.min_key, self.max_key, strict=True)
+        ):
+            raise MarketStoreError("max_key_invalid")
         if self.min_key > self.max_key:
             raise MarketStoreError("key_order_invalid")
         _sha(self.parquet_sha256, "parquet_sha256")
@@ -247,12 +312,18 @@ class StoreImportReceipt:
     storage_schema_version: str = STORE_SCHEMA_VERSION
 
     def __post_init__(self):
-        if self.storage_schema_version != STORE_SCHEMA_VERSION:
+        if (
+            type(self.storage_schema_version) is not str
+            or self.storage_schema_version != STORE_SCHEMA_VERSION
+        ):
             raise MarketStoreError("storage_schema_version_invalid")
-        strict_str(self.run_id, "run_id")
+        _portable_run_id(self.run_id)
         _sha(self.source_review_pack_sha256, "source_review_pack_sha256")
-        _tuple_exact(self.chunks, "chunks")
-        if any(type(c) is not StoreChunkManifest for c in self.chunks):
+        if (
+            type(self.chunks) is not tuple
+            or not self.chunks
+            or any(type(c) is not StoreChunkManifest for c in self.chunks)
+        ):
             raise MarketStoreError("chunks_invalid")
 
 
