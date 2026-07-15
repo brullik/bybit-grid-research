@@ -113,6 +113,9 @@ def _semantic_validate_chunk_dir(d, kind, manifest):
 
 
 def _one_month(rows, kind):
+    symbols = {r.get("symbol") for r in rows}
+    if len(symbols) != 1:
+        raise MarketStoreError("mixed_symbols")
     if kind is MarketDatasetKind.instrument_snapshot:
         snaps = {r["snapshot_server_time_ms"] for r in rows}
         if len(snaps) != 1:
@@ -139,7 +142,7 @@ def write_chunk_atomic(store_root, kind, rows, *, fail_at=None):
         sorted((_validate_row(kind, r) for r in rows), key=lambda r: row_key(kind, r))
     )
     if not rows:
-        return None
+        raise MarketStoreError("empty_chunk_input")
     _one_month(rows, kind)
     keys = [row_key(kind, r) for r in rows]
     if len(set(keys)) != len(keys):

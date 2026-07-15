@@ -225,3 +225,29 @@ class StoreReproducibilityAudit:
         strict_bool(self.ok, "ok")
         _strict_failures(self.failures)
         object.__setattr__(self, "values", _strict_mapping(self.values, "values"))
+
+
+@dataclass(frozen=True)
+class FundingReplayObservation:
+    funding_time_ms: int
+    funding_rate: Decimal
+    mark_open: Decimal
+
+    def __post_init__(self):
+        strict_int(self.funding_time_ms, "funding_time_ms")
+        strict_dec(self.funding_rate, "funding_rate")
+        strict_dec(self.mark_open, "mark_open")
+
+
+@dataclass(frozen=True)
+class ReplaySlice:
+    instrument: MappingProxyType
+    trade_klines: tuple[MappingProxyType, ...]
+    mark_klines: tuple[MappingProxyType, ...]
+    funding_observations: tuple[FundingReplayObservation, ...]
+
+    def __post_init__(self):
+        object.__setattr__(self, "instrument", _strict_mapping(self.instrument, "instrument"))
+        _tuple_exact(self.trade_klines, "trade_klines")
+        _tuple_exact(self.mark_klines, "mark_klines")
+        _tuple_exact(self.funding_observations, "funding_observations")

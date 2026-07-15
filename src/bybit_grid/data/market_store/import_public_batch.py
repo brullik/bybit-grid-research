@@ -71,10 +71,20 @@ def _prov(rows, evidence, plan_id, source_name):
 
 def import_validated_public_batch_to_store(evidence, store_root):
     store_root = Path(store_root)
-    (store_root / ".building").mkdir(parents=True, exist_ok=True)
+    rb = evidence.reconstructed
+    dataset_inputs = (
+        (MarketDatasetKind.instrument_snapshot, rb["instrument_rows"], "instrument_primary_1000"),
+        (MarketDatasetKind.trade_kline_1m, rb["trade_rows"], "trade_primary_1000"),
+        (MarketDatasetKind.mark_kline_1m, rb["mark_rows"], "mark_primary_1000"),
+        (MarketDatasetKind.funding_rate, rb["funding_rows"], "funding_primary_backward_200"),
+    )
+    planned = []
+    for kind, rows0, plan_id in dataset_inputs:
+        rows = _prov(rows0, evidence, plan_id, "bybit_public_batch")
+        planned.extend((kind, e.rows) for e in partition_validated_rows(kind, rows))
     ver = store_root / "store_version.json"
-    if not ver.exists():
-        ver.write_bytes(canonical_json_bytes({"storage_schema_version": STORE_SCHEMA_VERSION}))
+    if ver.exists() and ver.read_bytes() != canonical_json_bytes({"storage_schema_version": STORE_SCHEMA_VERSION}):
+        raise MarketStoreError("store_version_invalid")
     rr = store_root / receipt_rel(evidence.run_id, evidence.review_pack_sha256)
     if rr.exists():
         raw = json.loads(rr.read_text())
@@ -91,21 +101,17 @@ def import_validated_public_batch_to_store(evidence, store_root):
             )
             for c in raw["chunks"]
         )
-        return StoreImportReceipt(
-            raw["run_id"], raw["source_review_pack_sha256"], chunks0, raw["storage_schema_version"]
-        )
+        from .reader import _read_chunk
+        for c in chunks0:
+            _read_chunk(store_root / c.relative_path, c.dataset)
+        er0 = store_root / evidence_rel(evidence.review_pack_sha256) / "review_pack.zip"
+        if hashlib.sha256(er0.read_bytes()).hexdigest() != evidence.review_pack_sha256:
+            raise MarketStoreError("evidence_archive_sha256_mismatch")
+        return StoreImportReceipt(raw["run_id"], raw["source_review_pack_sha256"], chunks0, raw["storage_schema_version"])
+    (store_root / ".building").mkdir(parents=True, exist_ok=True)
+    if not ver.exists():
+        ver.write_bytes(canonical_json_bytes({"storage_schema_version": STORE_SCHEMA_VERSION}))
     chunks = []
-    rb = evidence.reconstructed
-    dataset_inputs = (
-        (MarketDatasetKind.instrument_snapshot, rb["instrument_rows"], "instrument_primary_1000"),
-        (MarketDatasetKind.trade_kline_1m, rb["trade_rows"], "trade_primary_1000"),
-        (MarketDatasetKind.mark_kline_1m, rb["mark_rows"], "mark_primary_1000"),
-        (MarketDatasetKind.funding_rate, rb["funding_rows"], "funding_primary_backward_200"),
-    )
-    planned = []
-    for kind, rows0, plan_id in dataset_inputs:
-        rows = _prov(rows0, evidence, plan_id, "bybit_public_batch")
-        planned.extend((kind, e.rows) for e in partition_validated_rows(kind, rows))
     for kind, rows in planned:
         chunks.append(write_chunk_atomic(store_root, kind, rows))
     er = store_root / evidence_rel(evidence.review_pack_sha256)
