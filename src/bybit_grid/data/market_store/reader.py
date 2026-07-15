@@ -156,3 +156,4 @@ def read_replay_slice(root, *, symbol, start_ms, end_ms, snapshot_server_time_ms
             raise MarketStoreError("funding_mark_join_missing")
         funding.append(FundingReplayObservation(ts, r["funding_rate"], mark_by_ts[ts]["open"]))
     return ReplaySlice(inst[0], tr, mk, tuple(funding))
+# RED acceptance probe only: no behavioral implementation; do not merge.
