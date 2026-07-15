@@ -32,6 +32,12 @@ def partition_validated_rows(kind, rows):
         buckets.setdefault(key, []).append(r)
     entries = []
     for key, rs in sorted(buckets.items(), key=lambda kv: kv[0]):
+        keys = [row_key(kind, r) for r in rs]
+        if len(set(keys)) != len(keys):
+            raise MarketStoreError("duplicate_incoming_key")
+        provenance = {(r.get("source_run_id"), r.get("source_review_pack_sha256"), r.get("source_plan_id"), r.get("source_name"), r.get("storage_schema_version")) for r in rs}
+        if len(provenance) != 1:
+            raise MarketStoreError("provenance_mismatch")
         if (
             kind is not MarketDatasetKind.instrument_snapshot
             and len({r["symbol"] for r in rs}) != 1

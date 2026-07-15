@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections import Counter
+from .paths import safe_symbol
 from .models import (
     CoverageInterval,
     FundingObservedRangeAudit,
@@ -10,9 +11,7 @@ from .models import (
 
 
 def _validate_symbol(symbol):
-    if type(symbol) is not str or not symbol or "/" in symbol or "\\" in symbol or ".." in symbol:
-        raise MarketStoreError("unsafe_symbol")
-    return symbol
+    return safe_symbol(symbol)
 
 
 def _validate_minute_ts(v, name="timestamp"):
@@ -72,6 +71,8 @@ def scan_minute_coverage(symbol, start_ms, end_ms, timestamps):
 
 
 def plan_missing_minute_windows(audit, max_rows=1000):
+    if type(audit) is not MinuteCoverageAudit:
+        raise MarketStoreError("minute_coverage_audit_invalid")
     if type(max_rows) is not int or max_rows <= 0 or max_rows > 1000:
         raise MarketStoreError("max_rows_invalid")
     out = []
@@ -85,6 +86,10 @@ def plan_missing_minute_windows(audit, max_rows=1000):
 
 
 def plan_trade_mark_repairs(trade_audit, mark_audit, max_rows=1000):
+    if type(trade_audit) is not MinuteCoverageAudit or type(mark_audit) is not MinuteCoverageAudit:
+        raise MarketStoreError("minute_coverage_audit_invalid")
+    if (trade_audit.symbol, trade_audit.start_open_time_ms, trade_audit.end_open_time_ms) != (mark_audit.symbol, mark_audit.start_open_time_ms, mark_audit.end_open_time_ms):
+        raise MarketStoreError("coverage_window_mismatch")
     return {
         "trade_missing_windows": plan_missing_minute_windows(trade_audit, max_rows),
         "mark_missing_windows": plan_missing_minute_windows(mark_audit, max_rows),

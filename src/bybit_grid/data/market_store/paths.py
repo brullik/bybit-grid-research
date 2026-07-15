@@ -67,6 +67,12 @@ def evidence_rel(sha):
     return Path("evidence") / f"sha256={sha}"
 
 
+def safe_posix_relative_text(value, name="relative_path"):
+    if type(value) is not str or not value or value.startswith("/") or "\\" in value or ":" in value or any(part in ("", ".", "..") for part in value.split("/")):
+        raise MarketStoreError(f"{name}_invalid")
+    return value
+
+
 def ensure_safe_store_path(root, p):
     p = Path(p)
     if p.is_symlink() or (p.exists() and not (p.is_dir() or p.is_file())):

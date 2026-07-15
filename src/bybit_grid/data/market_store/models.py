@@ -4,13 +4,15 @@ from enum import Enum
 from decimal import Decimal
 from types import MappingProxyType
 import re as _re
+from pathlib import Path
 
 STORE_SCHEMA_VERSION = "bybit_public_parquet_store_v1"
 MINUTE_MS = 60000
 
 
 class MarketStoreError(ValueError):
-    pass
+    """Stable market-store contract violation."""
+
 
 
 class MarketDatasetKind(str, Enum):
@@ -44,6 +46,33 @@ def strict_dec(v, n):
     return v
 
 
+
+
+def freeze_immutable(value, *, field_name):
+    if type(value) is MappingProxyType:
+        return MappingProxyType({k: freeze_immutable(v, field_name=field_name) for k, v in value.items()})
+    if type(value) is dict:
+        out = {}
+        for k, v in value.items():
+            if type(k) is not str or not k:
+                raise MarketStoreError(f"{field_name}_key_invalid")
+            out[k] = freeze_immutable(v, field_name=field_name)
+        return MappingProxyType(out)
+    if type(value) is tuple:
+        return tuple(freeze_immutable(v, field_name=field_name) for v in value)
+    if type(value) is list:
+        raise MarketStoreError(f"{field_name}_mutable_sequence_forbidden")
+    if value is None or type(value) in (str, int, bool, Decimal) or isinstance(value, Enum):
+        return value
+    if isinstance(value, (float, bytes, bytearray, Path, set, frozenset)):
+        raise MarketStoreError(f"{field_name}_type_forbidden")
+    raise MarketStoreError(f"{field_name}_type_unknown:{type(value).__name__}")
+
+def _safe_relative(v, n):
+    if type(v) is not str or not v or v.startswith('/') or '\\' in v or ':' in v or any(part in ('', '.', '..') for part in v.split('/')):
+        raise MarketStoreError(f"{n}_invalid")
+    return v
+
 _SHA_RE = _re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -66,13 +95,105 @@ def _strict_failures(v, n="failures"):
 
 
 def _strict_mapping(v, n):
-    if type(v) is dict:
-        v = MappingProxyType(dict(v))
-    if type(v) is not MappingProxyType:
+    frozen = freeze_immutable(v, field_name=n)
+    if type(frozen) is not MappingProxyType:
         raise MarketStoreError(f"{n}_not_immutable_mapping")
-    if any(type(k) is not str or not k for k in v):
-        raise MarketStoreError(f"{n}_key_invalid")
-    return v
+    return frozen
+
+
+
+
+@dataclass(frozen=True)
+class StoreVersion:
+    storage_schema_version: str
+
+    def __post_init__(self):
+        if type(self.storage_schema_version) is not str or self.storage_schema_version != STORE_SCHEMA_VERSION:
+            raise MarketStoreError("storage_schema_version_invalid")
+
+
+@dataclass(frozen=True)
+class StoreEvidenceReference:
+    run_id: str
+    source_review_pack_sha256: str
+
+    def __post_init__(self):
+        strict_str(self.run_id, "run_id")
+        _sha(self.source_review_pack_sha256, "source_review_pack_sha256")
+
+
+@dataclass(frozen=True)
+class StoreFileInventoryEntry:
+    relative_path: str
+    entry_type: str
+    size: int
+    sha256: str | None
+    mtime_ns: int
+
+    def __post_init__(self):
+        _safe_relative(self.relative_path, "relative_path")
+        if self.entry_type not in ("file", "directory") or type(self.entry_type) is not str:
+            raise MarketStoreError("entry_type_invalid")
+        strict_int(self.size, "size")
+        strict_int(self.mtime_ns, "mtime_ns")
+        if self.entry_type == "file":
+            _sha(self.sha256, "sha256")
+        elif self.sha256 is not None:
+            raise MarketStoreError("sha256_invalid")
+
+
+@dataclass(frozen=True)
+class PlannedChunk:
+    dataset: MarketDatasetKind
+    rows: tuple[MappingProxyType, ...]
+    manifest: StoreChunkManifest
+    parquet_bytes: bytes
+    manifest_bytes: bytes
+    reuse_existing_bool: bool
+
+    def __post_init__(self):
+        if type(self.dataset) is not MarketDatasetKind:
+            raise MarketStoreError("dataset_invalid")
+        _tuple_exact(self.rows, "rows")
+        object.__setattr__(self, "rows", tuple(_strict_mapping(r, "rows") for r in self.rows))
+        if type(self.manifest) is not StoreChunkManifest:
+            raise MarketStoreError("manifest_invalid")
+        if type(self.parquet_bytes) is not bytes or not self.parquet_bytes:
+            raise MarketStoreError("parquet_bytes_invalid")
+        if type(self.manifest_bytes) is not bytes or not self.manifest_bytes:
+            raise MarketStoreError("manifest_bytes_invalid")
+        strict_bool(self.reuse_existing_bool, "reuse_existing_bool")
+
+
+@dataclass(frozen=True)
+class ImportPreflightPlan:
+    evidence: object
+    store_root: Path
+    version: StoreVersion
+    chunks: tuple[PlannedChunk, ...]
+    evidence_reference: StoreEvidenceReference
+    receipt: StoreImportReceipt
+    receipt_bytes: bytes
+    evidence_reference_bytes: bytes
+    source_archive_bytes: bytes
+    existing_store_bool: bool
+
+    def __post_init__(self):
+        if type(self.store_root) is not Path:
+            raise MarketStoreError("store_root_invalid")
+        if type(self.version) is not StoreVersion:
+            raise MarketStoreError("version_invalid")
+        _tuple_exact(self.chunks, "chunks")
+        if any(type(c) is not PlannedChunk for c in self.chunks):
+            raise MarketStoreError("chunks_invalid")
+        if type(self.evidence_reference) is not StoreEvidenceReference:
+            raise MarketStoreError("evidence_reference_invalid")
+        if type(self.receipt) is not StoreImportReceipt:
+            raise MarketStoreError("receipt_invalid")
+        for name in ("receipt_bytes", "evidence_reference_bytes", "source_archive_bytes"):
+            if type(getattr(self, name)) is not bytes or not getattr(self, name):
+                raise MarketStoreError(f"{name}_invalid")
+        strict_bool(self.existing_store_bool, "existing_store_bool")
 
 
 @dataclass(frozen=True)

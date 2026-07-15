@@ -3,7 +3,7 @@ import argparse
 import json
 import sys
 import traceback
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
@@ -22,9 +22,14 @@ def to_jsonable(v):
     if isinstance(v, Enum):
         return v.value
     if is_dataclass(v):
-        return to_jsonable(asdict(v))
+        return {f.name: to_jsonable(getattr(v, f.name)) for f in fields(v)}
     if isinstance(v, MappingProxyType) or isinstance(v, dict):
-        return {str(k): to_jsonable(v[k]) for k in sorted(v)}
+        out = {}
+        for k in sorted(v):
+            if type(k) is not str or not k:
+                raise TypeError("mapping_key_invalid")
+            out[k] = to_jsonable(v[k])
+        return out
     if isinstance(v, tuple):
         return [to_jsonable(x) for x in v]
     if isinstance(v, list):

@@ -51,9 +51,14 @@ def check_seed_review_pack(path):
             raise MarketStoreError("duplicate_zip_member")
         for n in names:
             _safe(n)
-        man = json.loads(z.read("review_pack_manifest.json"))["members"]
+        raw_manifest = json.loads(z.read("review_pack_manifest.json"))
+        if set(raw_manifest) != {"members"}:
+            raise MarketStoreError("manifest_schema_invalid")
+        man = raw_manifest["members"]
         if type(man) is not dict or not man:
             raise MarketStoreError("empty_manifest")
+        if not any(str(n).startswith("store/") or str(n).startswith("datasets/") for n in man):
+            raise MarketStoreError("semantic_store_members_missing")
         for n, h in man.items():
             if n not in names:
                 raise MarketStoreError("missing_zip_member")

@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from enum import Enum
 from types import MappingProxyType
-from .models import MarketStoreError, MarketDatasetKind
+from .models import MarketStoreError, MarketDatasetKind, freeze_immutable
 
 PK = {
     MarketDatasetKind.instrument_snapshot: ("snapshot_server_time_ms", "symbol"),
@@ -72,7 +72,7 @@ def canonical_jsonl_bytes(kind, rows) -> bytes:
     kind = MarketDatasetKind(kind)
     out = []
     for r in sorted(rows, key=lambda x: row_key(kind, x)):
-        d = {f.name: getattr(r, f.name) for f in fields(r)} if is_dataclass(r) else dict(r)
+        d = {f.name: getattr(r, f.name) for f in fields(r)} if is_dataclass(r) else freeze_immutable(dict(r), field_name="row")
         out.append(
             json.dumps(
                 plain(d), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
