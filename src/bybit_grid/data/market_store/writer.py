@@ -245,3 +245,4 @@ def write_chunk_atomic(store_root, kind, rows, *, fail_at=None):
         return manifest
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
+# RED acceptance probe only: no behavioral implementation; do not merge.
