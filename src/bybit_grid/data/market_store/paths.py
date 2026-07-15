@@ -77,3 +77,4 @@ def ensure_safe_store_path(root, p):
     p = Path(p)
     if p.is_symlink() or (p.exists() and not (p.is_dir() or p.is_file())):
         raise MarketStoreError("unsafe_store_entry")
+# RED acceptance probe only: no behavioral implementation; do not merge.
