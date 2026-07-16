@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Mandatory RED probe after frozen erratum v2; no implementation behavior.
+
 import binascii
 import hashlib
 import os
