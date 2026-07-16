@@ -12,6 +12,7 @@ import stat
 import struct
 import tempfile
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 import zipfile
 
 import pytest
@@ -32,19 +33,175 @@ from bybit_grid.data.market_store.parsing import parse_import_receipt_bytes
 from bybit_grid.data.market_store.paths import evidence_rel, receipt_rel
 from bybit_grid.data.market_store.writer import write_chunk_atomic
 from bybit_grid.data.public_batch import evidence as public_evidence
+from bybit_grid.data.public_batch.capture import run_capture_plans
+from bybit_grid.data.public_batch.evidence import (
+    CANONICAL_MEMBERS as PUBLIC_CANONICAL_MEMBERS,
+    NON_STATUS_ARTIFACT_COUNT as PUBLIC_NON_STATUS_ARTIFACT_COUNT,
+    build_manifest as build_public_manifest,
+    canonical_json_bytes as public_canonical_json_bytes,
+    canonical_jsonl_bytes as public_canonical_jsonl_bytes,
+)
 from bybit_grid.data.public_batch.models import PublicBatchError
-from scripts import make_bybit_public_batch_review_pack as public_pack_builder
-from scripts import run_bybit_public_batch_evidence as public_pack_runner
-from tests.helpers.synthetic_market_store_fixture import (
-    KLINE_ROW_COUNT,
-    SYMBOL,
-    synthetic_client,
+from bybit_grid.data.public_batch.recording import RecordingPublicClient
+from bybit_grid.data.public_batch.reconstruct import (
+    artifact_bytes as public_artifact_bytes,
+    build_capture_plan,
+    records_from_jsonl,
+    reconstruct_from_records,
 )
 
 
 RUN_ID = "bybit_public_batch_063b_btcusdt_v1"
+SYMBOL = "BTCUSDT"
+KLINE_ROW_COUNT = 1001
+_FUNDING_ROW_COUNT = 300
+_INSTRUMENT_ROW_COUNT = 721
+_END_MS = 1_704_067_200_000
+_MINUTE_MS = 60_000
+_FUNDING_INTERVAL_MINUTES = 8 * 60
+_SERVER_TIME_MS = _END_MS + _MINUTE_MS
+_FUNDING_START_MS = _END_MS - 120 * 24 * 60 * _MINUTE_MS
+_FUNDING_TIMES = tuple(
+    _FUNDING_START_MS + index * _FUNDING_INTERVAL_MINUTES * _MINUTE_MS
+    for index in range(_FUNDING_ROW_COUNT)
+)
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 _INSTALL_TEMP_GLOB = ".bybit-grid-seed-install-*.tmp"
+
+
+class _SyntheticResponse:
+    status = 200
+    headers = {"content-type": "application/json; charset=utf-8"}
+
+    def __init__(self, payload):
+        self._body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+    def getcode(self):
+        return self.status
+
+    def read(self):
+        return self._body
+
+    def close(self):
+        pass
+
+
+def _instrument(symbol: str):
+    return {
+        "symbol": symbol,
+        "contractType": "LinearPerpetual",
+        "status": "Trading",
+        "baseCoin": symbol[:-4],
+        "quoteCoin": "USDT",
+        "settleCoin": "USDT",
+        "launchTime": "0",
+        "deliveryTime": "0",
+        "isPreListing": False,
+        "fundingInterval": str(_FUNDING_INTERVAL_MINUTES),
+        "priceFilter": {"tickSize": "0.1"},
+        "lotSizeFilter": {
+            "qtyStep": "0.001",
+            "minOrderQty": "0.001",
+            "minNotionalValue": "5",
+        },
+        "leverageFilter": {
+            "minLeverage": "1",
+            "maxLeverage": "100",
+            "leverageStep": "0.01",
+        },
+    }
+
+
+_INSTRUMENTS = (_instrument(SYMBOL),) + tuple(
+    _instrument(f"COIN{index:03d}USDT") for index in range(1, _INSTRUMENT_ROW_COUNT)
+)
+
+
+def _synthetic_client(base_url: str):
+    def opener(request, timeout=30):
+        parsed = urlparse(request.full_url)
+        endpoint = parsed.path
+        query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+        if endpoint == "/v5/market/time":
+            return _SyntheticResponse(
+                {
+                    "retCode": 0,
+                    "result": {
+                        "timeNano": str(_SERVER_TIME_MS * 1_000_000),
+                        "timeSecond": str(_SERVER_TIME_MS // 1000),
+                    },
+                    "time": _SERVER_TIME_MS,
+                }
+            )
+        if endpoint == "/v5/market/instruments-info":
+            limit = int(query["limit"])
+            start = int(query.get("cursor") or 0)
+            rows = _INSTRUMENTS[start : start + limit]
+            next_cursor = str(start + limit) if start + limit < len(_INSTRUMENTS) else ""
+            return _SyntheticResponse(
+                {
+                    "retCode": 0,
+                    "result": {
+                        "category": "linear",
+                        "list": rows,
+                        "nextPageCursor": next_cursor,
+                    },
+                }
+            )
+        if endpoint in {"/v5/market/kline", "/v5/market/mark-price-kline"}:
+            start = int(query["start"])
+            end = int(query["end"])
+            is_mark = endpoint.endswith("mark-price-kline")
+            rows = []
+            for open_time_ms in range(start, end + 1, _MINUTE_MS):
+                price = "50000.0" if is_mark else "50001.0"
+                rows.append(
+                    [str(open_time_ms), price, price, price, price]
+                    if is_mark
+                    else [
+                        str(open_time_ms),
+                        price,
+                        price,
+                        price,
+                        price,
+                        "1.0",
+                        "50000.0",
+                    ]
+                )
+            return _SyntheticResponse(
+                {
+                    "retCode": 0,
+                    "result": {"category": "linear", "symbol": SYMBOL, "list": rows},
+                }
+            )
+        if endpoint == "/v5/market/funding/history":
+            start = int(query["startTime"])
+            end = int(query["endTime"])
+            limit = int(query["limit"])
+            times = [value for value in _FUNDING_TIMES if start <= value <= end][-limit:]
+            return _SyntheticResponse(
+                {
+                    "retCode": 0,
+                    "result": {
+                        "list": [
+                            {
+                                "symbol": SYMBOL,
+                                "fundingRateTimestamp": str(value),
+                                "fundingRate": "0.0001",
+                            }
+                            for value in times
+                        ]
+                    },
+                }
+            )
+        raise AssertionError(endpoint)
+
+    return RecordingPublicClient(
+        base_url=base_url,
+        opener=opener,
+        max_attempts=1,
+        timeout_seconds=30,
+    )
 
 
 class _NestedValidationZipFile(zipfile.ZipFile):
@@ -69,27 +226,52 @@ def _isolated_nested_validation_zipfile():
 def _valid_public_review_pack_bytes():
     base_url = "https://api.bybit.com"
     with tempfile.TemporaryDirectory(prefix="bybit-grid-public-fixture-") as directory:
-        root = Path(directory) / "public-runs"
-        output = Path(directory) / "review-pack.zip"
-        arguments = SimpleNamespace(
+        capture_plan = build_capture_plan(
             run_id=RUN_ID,
             symbol=SYMBOL,
-            kline_row_count=KLINE_ROW_COUNT,
-            funding_lookback_days=100,
-            output_root=str(root),
             base_url=base_url,
             timeout_seconds=30,
         )
-        result = public_pack_runner._run(arguments, client=synthetic_client(base_url))
-        assert result == {"ok": True, "status": "complete", "run_id": RUN_ID}
-        assert (
-            public_pack_builder.main(
-                ["--run-id", RUN_ID, "--input-root", str(root), "--output", str(output)]
-            )
-            == 0
+        client = _synthetic_client(base_url)
+        run_capture_plans(
+            client,
+            symbol=SYMBOL,
+            kline_row_count=KLINE_ROW_COUNT,
+            funding_lookback_days=100,
         )
-        with zipfile.ZipFile(output) as archive:
-            payloads = {info.filename: archive.read(info) for info in archive.infolist()}
+        recorded_bytes = public_canonical_jsonl_bytes(client.records)
+        records = records_from_jsonl(recorded_bytes, capture_plan=capture_plan)
+        evidence = reconstruct_from_records(
+            records,
+            symbol=SYMBOL,
+            kline_row_count=KLINE_ROW_COUNT,
+            funding_lookback_days=100,
+        )
+        payloads = public_artifact_bytes(
+            evidence,
+            run_id=RUN_ID,
+            symbol=SYMBOL,
+            base_url=base_url,
+            timeout_seconds=30,
+        )
+        payloads["recorded_public_responses.jsonl"] = recorded_bytes
+        payloads["public_batch_run_status.json"] = public_canonical_json_bytes(
+            {
+                "run_id": RUN_ID,
+                "status": "complete",
+                "evidence_validation_ok": True,
+                "non_status_artifact_count": PUBLIC_NON_STATUS_ARTIFACT_COUNT,
+            }
+        )
+        member_bytes = {
+            name: payloads[name]
+            for name in PUBLIC_CANONICAL_MEMBERS
+            if name != "review_pack_manifest.json"
+        }
+        payloads["review_pack_manifest.json"] = public_canonical_json_bytes(
+            build_public_manifest(member_bytes, run_id=RUN_ID, symbol=SYMBOL)
+        )
+        assert set(payloads) == set(PUBLIC_CANONICAL_MEMBERS)
         normalized = Path(directory) / "deterministic-review-pack.zip"
         _write_pack(normalized, payloads)
         validation = public_evidence.validate_review_pack(normalized, RUN_ID)
