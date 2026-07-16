@@ -4,6 +4,7 @@ import ast
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from decimal import Decimal
 import importlib
+import importlib.util
 import inspect
 import json
 from pathlib import Path
@@ -69,6 +70,7 @@ def _api():
         raise RuntimeError(UNAVAILABLE) from caught
     if any(not hasattr(module, name) for name in (*EXPECTED_POLICY_SURFACE, "__all__")):
         raise RuntimeError(UNAVAILABLE)
+    _install_repo_universe_script(module)
     return module
 
 
@@ -86,6 +88,35 @@ def _audit_api():
 
 def _config_api():
     return importlib.import_module("bybit_grid.config")
+
+
+def _install_repo_universe_script(policy_module) -> None:
+    module_name = "scripts.validate_universe_fgrid_constraints"
+    if module_name in sys.modules:
+        return
+    repo_root = Path(policy_module.__file__).resolve(strict=True).parents[3]
+    path = (repo_root / "scripts/validate_universe_fgrid_constraints.py").resolve(
+        strict=True
+    )
+    scripts_package = importlib.import_module("scripts")
+    scripts_path = str(path.parent)
+    appended = scripts_path not in scripts_package.__path__
+    if appended:
+        scripts_package.__path__.append(scripts_path)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could_not_load_repo_script:validate_universe_fgrid_constraints")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    loaded = False
+    try:
+        spec.loader.exec_module(module)
+        loaded = True
+    finally:
+        if appended:
+            scripts_package.__path__.remove(scripts_path)
+        if not loaded:
+            sys.modules.pop(module_name, None)
 
 
 def _payload() -> dict[str, object]:
