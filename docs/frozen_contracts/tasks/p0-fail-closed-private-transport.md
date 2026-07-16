@@ -155,7 +155,15 @@ proxy or TLS trust, and redirects cannot move a signed request. Both explicit ex
 keywords are mandatory; relying on defaults fails. Before preparation and again before each
 signed attempt, `private_http.base_url` must be the canonical HTTPS origin; drift is
 `private_http_origin_forbidden` before credentials on the outer boundary and before signing on
-a retry.
+a retry. The rate limiter is an untrusted call boundary: after every `rate_limiter.wait()` and
+immediately before the matching relative-path HTTP dispatch, the actual private-client origin is
+checked again. If the limiter or any concurrent callback changes the origin, that attempt raises
+`private_http_origin_forbidden` and performs no HTTP call; signed headers are never delivered to
+the changed origin for either GET or POST. At the same outer, per-attempt, and post-limiter
+checkpoints, the private client's effective redirect policy must remain exact false and its owned
+trust-environment policy must remain exact false. Replacement or mutation to a redirect-following
+or environment-trusting transport is `private_http_policy_forbidden` before dispatch. In
+particular a 307 response can never carry `X-BAPI-*` headers to another origin.
 
 ## Exact signed private GET boundary
 
@@ -183,6 +191,20 @@ retry-decorated signed GET helper and has no endpoint, params, settings, environ
 credential argument. It rejects a foreign/subclassed/malformed prepared value as
 `private_get_prepared_request_invalid` before signing/rate limiting/HTTP and always sends the
 same exact path-plus-query with `params=None` and the same credential snapshot.
+
+Factory issuance is an instance-bound, single-public-call capability rather than module-global
+authorization. Only the exact `BybitClient` instance that issued a prepared GET may use it. The
+capability remains valid across all internal attempts of that one decorated retry call, then the
+outer `private_get` boundary consumes it in a `finally` path on either success or failure. A
+cross-client use or any second helper invocation with the captured object is
+`private_get_prepared_request_invalid` before signing, rate limiting, or HTTP.
+
+Python's `object.__setattr__` can bypass a frozen dataclass, so issuance also retains an external,
+client-owned immutable reference snapshot of every prepared atom. Before every retry attempt, the
+helper compares the exact current object and all fields with that external snapshot. A different
+still-schema-valid query and matching request target is therefore
+`private_get_prepared_request_invalid` before signing, rate limiting, or HTTP. The external record
+is removed in the same outer `finally` that consumes the capability.
 
 ## Exact validate payload and SL-only schema
 
@@ -243,6 +265,23 @@ One retryable call performs one credential check and up to four signing/rate-lim
 over identical endpoint, origin policy, body bytes, API key/secret, and receive window. Mutating
 the caller payload or `Settings` after the first failure cannot change later attempts.
 
+Validate prepared issuance has the same instance-bound, single-public-call lifetime. It remains
+valid for every internal attempt of exactly one `_private_validate_post` retry call and is
+consumed by `validate_grid_bot` in a `finally` path after that retry call finishes. Another client
+or any later helper invocation receives `validate_prepared_request_invalid` before signing, rate
+limiting, or HTTP. No module-global issuance registry may authorize either prepared type.
+
+The immutable snapshot still contains the exact API key and secret required for internal retries,
+but both dataclass fields have `repr=False`; neither credential value may appear in `repr` of a
+prepared GET or validate object. The capability is not retained beyond its one public call by an
+issuance registry.
+
+Validate issuance likewise retains and checks an external exact reference snapshot on every
+attempt. Mutating the frozen object's JSON body to a different but otherwise valid payload between
+retry attempts is `validate_prepared_request_invalid` before signing, rate limiting, or HTTP. The
+reference snapshot and capability record are removed after both successful and failed outer calls;
+they remain available only long enough to authorize internal retries.
+
 `private_post(self, endpoint, body)` remains only as an undecorated compatibility refusal. After
 an optional docstring its exact sole statement is:
 
@@ -280,6 +319,11 @@ reload configuration. Its first handler around `validate_grid_bot` is
 same guarded client boundary; unchecked environment values and swallowed policy refusals cannot
 reach or remain inside a thread.
 
+`--purge-skipped-constraints` is a local maintenance operation and does not require private
+credentials, but it is not a dry run: `main` must load the authority settings object and execute
+the same captured exact settings/origin policy preflight before calling
+`purge_skipped_constraints` or performing any purge filesystem work.
+
 `create_grid_bot` and `close_grid_bot`, after an optional docstring, each have exactly one direct
 `raise NotImplementedError(...)`, no decorator, call, branch, nested decoy, credential/signing/
 retry/HTTP access, or following statement. Ordinary-order create/amend/cancel, withdrawal,
@@ -305,7 +349,9 @@ transfer, wallet mutation, position mutation, and live-execution methods remain 
   `validate-only boundary error must be re-raised before broad handler`.
 
 Adversarial AST covers dynamic endpoint variables, direct/raw transport, absolute/query targets,
-and nested/unreachable/misordered `NotImplementedError`.
+and nested/unreachable/misordered `NotImplementedError`. Script preflight recognition is likewise
+control-flow structural rather than line-number-only: a guard beneath `if False`, a conditional or
+nested decoy that does not dominate every protected path, or a guard after a purge is rejected.
 
 ## Mandatory ordinary-test migration
 
@@ -338,7 +384,7 @@ No collection/import/setup/fixture failure is allowed. Record that exact all-nod
 `probe/` PR. Because all eight implementation paths are required by scope, the probe changes
 exactly all eight without behavior: the new module contains only
 `# RED probe only: validate_only_boundary_unavailable`, and each existing required file receives
-only `# RED probe only: no behavior`. This makes scope green while all 21 frozen nodes fail only
+only `# RED probe only: no behavior`. This makes scope green while all 28 frozen nodes fail only
 at `_api()` with the sentinel; ordinary and supplemental checks remain otherwise green. Close
 that probe unmerged. Implement from fresh `main`, change all and only the eight
 required paths, make frozen/ordinary/supplemental checks green, and close the task in a separate
