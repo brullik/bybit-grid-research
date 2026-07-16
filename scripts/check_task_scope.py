@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from dataclasses import dataclass
+import hashlib
 import json
 import re
 import subprocess
@@ -32,7 +34,25 @@ _OWNER = "brullik"
 _TASK_FILE = "pm_acceptance/active_task.json"
 _INACTIVE_TASK_ID = "NO_ACTIVE_IMPLEMENTATION"
 _TASK_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
-_MODE_LABELS = frozenset({"pm-task-definition", "pm-control-plane"})
+_MODE_LABELS = frozenset({"pm-task-definition", "pm-control-plane", "pm-frozen-erratum"})
+_ERRATUM_SCHEMA = "pm_frozen_erratum_v1"
+_ERRATUM_PREFIX = "pm_acceptance/errata/"
+_ERRATUM_KEYS = frozenset({
+    "base_sha256",
+    "expected_red_failed_node_ids",
+    "expected_red_passed_node_ids",
+    "head_active_task_sha256",
+    "head_sha256",
+    "historical_active_task_commit_sha",
+    "issue_number",
+    "reason_code",
+    "schema",
+    "task_id",
+    "test_path",
+})
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_REASON_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _CONTROL_PLANE_ALLOWED = frozenset({
     "AGENTS.md",
     ".github/CODEOWNERS",
@@ -100,6 +120,21 @@ class ActiveTask:
     allowed_paths: tuple[str, ...]
     required_paths: tuple[str, ...]
     forbidden_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FrozenErratumManifest:
+    schema: str
+    task_id: str
+    issue_number: int
+    test_path: str
+    base_sha256: str
+    head_sha256: str
+    head_active_task_sha256: str
+    historical_active_task_commit_sha: str
+    reason_code: str
+    expected_red_failed_node_ids: tuple[str, ...]
+    expected_red_passed_node_ids: tuple[str, ...]
 
 
 def _reject_constant(value: str) -> None:
@@ -194,6 +229,108 @@ def parse_active_task_bytes(data: bytes) -> ActiveTask:
     return task
 
 
+def _erratum_node_ids(name: str, value: Any, test_path: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"not_list:{name}")
+    out: list[str] = []
+    seen: set[str] = set()
+    prefix = f"{test_path}::"
+    for node_id in value:
+        if not isinstance(node_id, str):
+            raise ValueError(f"non_string:{name}")
+        if not node_id.startswith(prefix) or any(ord(ch) < 32 or ord(ch) == 127 for ch in node_id):
+            raise ValueError(f"invalid_node_id:{name}:{node_id}")
+        if node_id in seen:
+            raise ValueError(f"duplicate_entry:{name}:{node_id}")
+        seen.add(node_id)
+        out.append(node_id)
+    return tuple(out)
+
+
+def parse_frozen_erratum_manifest_bytes(data: bytes) -> FrozenErratumManifest:
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("utf8_bom")
+    text = data.decode("utf-8", "strict")
+    obj = json.loads(
+        text,
+        object_pairs_hook=_pairs_hook,
+        parse_float=_reject_float,
+        parse_constant=_reject_constant,
+    )
+    if not isinstance(obj, dict):
+        raise ValueError("erratum_not_object")
+    if set(obj) != _ERRATUM_KEYS:
+        unknown = sorted(set(obj) - _ERRATUM_KEYS)
+        missing = sorted(_ERRATUM_KEYS - set(obj))
+        raise ValueError(
+            f"invalid_erratum_keys:missing={','.join(missing)}:unknown={','.join(unknown)}"
+        )
+    if not isinstance(obj["schema"], str) or obj["schema"] != _ERRATUM_SCHEMA:
+        raise ValueError("invalid_erratum_schema")
+    task_id = obj["task_id"]
+    if (
+        not isinstance(task_id, str)
+        or task_id == _INACTIVE_TASK_ID
+        or not _TASK_ID_RE.fullmatch(task_id)
+    ):
+        raise ValueError("invalid_erratum_task_id")
+    issue_number = obj["issue_number"]
+    if type(issue_number) is not int or issue_number <= 0:
+        raise ValueError("invalid_erratum_issue_number")
+    test_path = obj["test_path"]
+    if (
+        not isinstance(test_path, str)
+        or _path_error(test_path) is not None
+        or not _erratum_test_path(task_id, test_path)
+    ):
+        raise ValueError("invalid_erratum_test_path")
+    for key in ("base_sha256", "head_sha256", "head_active_task_sha256"):
+        if not isinstance(obj[key], str) or not _SHA256_RE.fullmatch(obj[key]):
+            raise ValueError(f"invalid_erratum_{key}")
+    if obj["base_sha256"] == obj["head_sha256"]:
+        raise ValueError("unchanged_erratum_test_sha256")
+    historical_active_task_commit_sha = obj["historical_active_task_commit_sha"]
+    if (
+        not isinstance(historical_active_task_commit_sha, str)
+        or not _COMMIT_SHA_RE.fullmatch(historical_active_task_commit_sha)
+    ):
+        raise ValueError("invalid_erratum_historical_active_task_commit_sha")
+    reason_code = obj["reason_code"]
+    if not isinstance(reason_code, str) or not _REASON_CODE_RE.fullmatch(reason_code):
+        raise ValueError("invalid_erratum_reason_code")
+    failed = _erratum_node_ids(
+        "expected_red_failed_node_ids",
+        obj["expected_red_failed_node_ids"],
+        test_path,
+    )
+    passed = _erratum_node_ids(
+        "expected_red_passed_node_ids",
+        obj["expected_red_passed_node_ids"],
+        test_path,
+    )
+    if not failed:
+        raise ValueError("expected_red_failed_node_ids_empty")
+    overlap = sorted(set(failed) & set(passed))
+    if overlap:
+        raise ValueError(f"red_node_id_outcome_overlap:{overlap[0]}")
+    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if data != canonical:
+        raise ValueError("noncanonical_erratum_bytes")
+    return FrozenErratumManifest(
+        schema=obj["schema"],
+        task_id=task_id,
+        issue_number=issue_number,
+        test_path=test_path,
+        base_sha256=obj["base_sha256"],
+        head_sha256=obj["head_sha256"],
+        head_active_task_sha256=obj["head_active_task_sha256"],
+        historical_active_task_commit_sha=historical_active_task_commit_sha,
+        reason_code=reason_code,
+        expected_red_failed_node_ids=failed,
+        expected_red_passed_node_ids=passed,
+    )
+
+
 def _matches(rule: str, path: str) -> bool:
     if rule == "requirements/*.txt":
         rest = path.removeprefix("requirements/")
@@ -227,6 +364,16 @@ def _rule_targets_protected_path(rule: str) -> bool:
 def _task_test_path(task_id: str, path: str) -> bool:
     prefix = f"pm_acceptance/tasks/{task_id}/"
     return path.startswith(prefix) and path.endswith(".py") and len(path) > len(prefix)
+
+
+def _erratum_test_path(task_id: str, path: str) -> bool:
+    expected_parent = f"pm_acceptance/tasks/{task_id}"
+    parsed = Path(path)
+    return (
+        parsed.parent.as_posix() == expected_parent
+        and parsed.name.startswith("test_")
+        and parsed.suffix == ".py"
+    )
 
 
 def _task_contract_path(task_id: str) -> str:
@@ -373,6 +520,19 @@ def classify_pr_mode(actor: str, labels: tuple[str, ...], changed_paths: tuple[s
                     errors.append(f"pm_task_definition_out_of_scope:{path}")
                 if task_path and Path(path).name == "conftest.py":
                     errors.append(f"task_local_conftest_forbidden:{path}")
+        elif label == "pm-frozen-erratum":
+            mode = "pm-frozen-erratum"
+            for path in valid:
+                parts = Path(path).parts
+                task_test = (
+                    len(parts) == 4
+                    and parts[:2] == ("pm_acceptance", "tasks")
+                    and bool(_TASK_ID_RE.fullmatch(parts[2]))
+                    and _erratum_test_path(parts[2], path)
+                )
+                erratum_manifest = path.startswith(_ERRATUM_PREFIX) and path.endswith(".json")
+                if path != _TASK_FILE and not task_test and not erratum_manifest:
+                    errors.append(f"pm_frozen_erratum_out_of_scope:{path}")
         else:
             mode = "pm-control-plane"
             for path in valid:
@@ -404,6 +564,11 @@ def acceptance_plan_for_mode(mode: str) -> tuple[str, ...]:
         return ("base-isolated-acceptance", "head-control-plane-self-tests")
     if mode == "pm-task-definition":
         return ("base-control-plane-self-tests", "head-task-definition-collect-only")
+    if mode == "pm-frozen-erratum":
+        return (
+            "base-control-plane-self-tests",
+            "head-frozen-erratum-exact-red",
+        )
     raise ValueError(f"invalid_mode:{mode}")
 
 
@@ -435,6 +600,261 @@ def git_object_exists(ref: str, path: str) -> bool:
         check=False,
     )
     return proc.returncode == 0
+
+
+def git_is_ancestor(ancestor_sha: str, descendant_sha: str) -> bool:
+    if not _COMMIT_SHA_RE.fullmatch(ancestor_sha):
+        raise ValueError("invalid_git_ancestor_ref")
+    if not _SHA_RE.fullmatch(descendant_sha):
+        raise ValueError("invalid_git_descendant_ref")
+    proc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    raise RuntimeError("git_ancestor_check_failed")
+
+
+def _erratum_manifest_path(task_id: str) -> str:
+    return f"{_ERRATUM_PREFIX}{task_id}.json"
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _qualified_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _qualified_name(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return None
+
+
+def _contains_unsafe_exception(node: ast.AST | None) -> bool:
+    if node is None:
+        return True
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return any(_contains_unsafe_exception(item) for item in node.elts)
+    name = _qualified_name(node)
+    return name in {"Exception", "BaseException", "builtins.Exception", "builtins.BaseException"}
+
+
+class _FrozenTestInspector(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.scope: list[str] = []
+        self.test_functions: list[tuple[str, str]] = []
+        self.unsafe: list[str] = []
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        qualified = ".".join((*self.scope, node.name))
+        if node.name.startswith("test_"):
+            self.test_functions.append((qualified, ast.dump(node, include_attributes=False)))
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+        self._visit_function(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
+
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+        called = _qualified_name(node.func)
+        if called in {"pytest.skip", "pytest.xfail", "pytest.importorskip", "skip", "xfail", "importorskip"}:
+            self.unsafe.append("skip_or_xfail")
+        if called in {"pytest.raises", "raises"}:
+            expected = node.args[0] if node.args else next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "expected_exception"),
+                None,
+            )
+            if _contains_unsafe_exception(expected):
+                self.unsafe.append("broad_pytest_raises")
+        self.generic_visit(node)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:  # noqa: N802
+        if _contains_unsafe_exception(node.type):
+            self.unsafe.append("broad_exception_handler")
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
+        if node.attr.lower() in {"skip", "skipif", "skipunless", "xfail"}:
+            name = _qualified_name(node)
+            if name and (name.startswith("pytest.mark.") or name.startswith("unittest.")):
+                self.unsafe.append("skip_or_xfail")
+        self.generic_visit(node)
+
+
+def _inspect_frozen_test(data: bytes) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    text = data.decode("utf-8", "strict")
+    tree = ast.parse(text)
+    inspector = _FrozenTestInspector()
+    inspector.visit(tree)
+    return tuple(inspector.test_functions), tuple(sorted(set(inspector.unsafe)))
+
+
+def _active_erratum_task_errors(task: ActiveTask) -> list[str]:
+    errors: list[str] = []
+    if task.task_id == _INACTIVE_TASK_ID:
+        return ["erratum_head_task_inactive"]
+    if not _TASK_ID_RE.fullmatch(task.task_id):
+        errors.append(f"unsafe_task_id:{task.task_id}")
+    if not task.allowed_paths:
+        errors.append("open_task_allowed_paths_empty")
+    if not task.required_paths:
+        errors.append("open_task_required_paths_empty")
+    missing_forbidden = sorted(_MANDATORY_FORBIDDEN_RULES - set(task.forbidden_paths))
+    errors.extend(f"mandatory_forbidden_rule_missing:{rule}" for rule in missing_forbidden)
+    for required_rule in task.required_paths:
+        if not any(_rule_covers(allowed_rule, required_rule) for allowed_rule in task.allowed_paths):
+            errors.append(f"required_rule_not_allowed:{required_rule}")
+        if any(_rule_covers(forbidden_rule, required_rule) for forbidden_rule in task.forbidden_paths):
+            errors.append(f"required_rule_forbidden:{required_rule}")
+    for field_name, rules in (("allowed", task.allowed_paths), ("required", task.required_paths)):
+        for rule in rules:
+            if _rule_targets_protected_path(rule):
+                errors.append(f"protected_{field_name}_rule:{rule}")
+    return errors
+
+
+def frozen_erratum_transition_errors(
+    base_sha: str,
+    head_sha: str,
+    base_task: ActiveTask,
+    head_task: ActiveTask,
+    changed_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    errors = _changed_path_errors(changed_paths)
+    valid = [p for p in changed_paths if isinstance(p, str) and _path_error(p) is None]
+    if base_task.task_id != _INACTIVE_TASK_ID:
+        errors.append(f"erratum_base_task_not_inactive:{base_task.task_id}")
+    errors.extend(_active_erratum_task_errors(head_task))
+    if head_task.task_id == _INACTIVE_TASK_ID or not _TASK_ID_RE.fullmatch(head_task.task_id):
+        return tuple(sorted(errors))
+
+    manifest_path = _erratum_manifest_path(head_task.task_id)
+    expected_fixed_paths = {_TASK_FILE, manifest_path}
+    if len(valid) != 3:
+        errors.append(f"frozen_erratum_changed_path_count:{len(valid)}")
+    if _TASK_FILE not in valid:
+        errors.append("active_task_file_not_changed")
+    if manifest_path not in valid:
+        errors.append(f"erratum_manifest_path_missing:{manifest_path}")
+    for path in valid:
+        task_test = _erratum_test_path(head_task.task_id, path)
+        if path not in expected_fixed_paths and not task_test:
+            errors.append(f"pm_frozen_erratum_out_of_scope:{path}")
+
+    task_root = f"pm_acceptance/tasks/{head_task.task_id}"
+    if not git_object_exists(base_sha, task_root):
+        errors.append(f"erratum_base_task_missing:{head_task.task_id}")
+    if not git_object_exists(base_sha, _task_contract_path(head_task.task_id)):
+        errors.append(f"erratum_base_contract_missing:{head_task.task_id}")
+    if git_object_exists(base_sha, manifest_path):
+        errors.append(f"erratum_manifest_already_exists:{manifest_path}")
+    if not git_object_exists(head_sha, manifest_path):
+        errors.append(f"head_erratum_manifest_missing:{manifest_path}")
+        return tuple(sorted(errors))
+
+    try:
+        manifest_bytes = git_blob_from_ref(head_sha, manifest_path)
+        manifest = parse_frozen_erratum_manifest_bytes(manifest_bytes)
+    except (RuntimeError, UnicodeDecodeError, ValueError) as exc:
+        errors.append(str(exc))
+        return tuple(sorted(errors))
+    if manifest.task_id != head_task.task_id:
+        errors.append(f"erratum_task_id_mismatch:{manifest.task_id}")
+    if manifest.head_active_task_sha256 != _sha256(_task_bytes_for_hash(head_task)):
+        errors.append("head_active_task_sha256_mismatch")
+    try:
+        historical_is_ancestor = git_is_ancestor(
+            manifest.historical_active_task_commit_sha,
+            base_sha,
+        )
+    except (RuntimeError, ValueError) as exc:
+        errors.append(str(exc))
+        historical_is_ancestor = False
+    if not historical_is_ancestor:
+        errors.append("historical_active_task_commit_not_ancestor")
+    else:
+        try:
+            historical_task_bytes = git_blob_from_ref(
+                manifest.historical_active_task_commit_sha,
+                _TASK_FILE,
+            )
+            head_task_bytes = git_blob_from_ref(head_sha, _TASK_FILE)
+            parse_active_task_bytes(historical_task_bytes)
+        except (RuntimeError, UnicodeDecodeError, ValueError) as exc:
+            errors.append(f"historical_active_task_unreadable:{type(exc).__name__}")
+        else:
+            if historical_task_bytes != head_task_bytes:
+                errors.append("historical_active_task_bytes_mismatch")
+
+    test_paths = [path for path in valid if _erratum_test_path(head_task.task_id, path)]
+    if test_paths != [manifest.test_path]:
+        errors.append("erratum_test_path_scope_mismatch")
+    if not git_object_exists(base_sha, manifest.test_path):
+        errors.append(f"base_erratum_test_missing:{manifest.test_path}")
+        return tuple(sorted(errors))
+    if not git_object_exists(head_sha, manifest.test_path):
+        errors.append(f"head_erratum_test_missing:{manifest.test_path}")
+        return tuple(sorted(errors))
+
+    try:
+        base_test = git_blob_from_ref(base_sha, manifest.test_path)
+        head_test = git_blob_from_ref(head_sha, manifest.test_path)
+        base_functions, _ = _inspect_frozen_test(base_test)
+        head_functions, unsafe = _inspect_frozen_test(head_test)
+    except (RuntimeError, SyntaxError, UnicodeDecodeError) as exc:
+        errors.append(f"erratum_test_unreadable:{type(exc).__name__}")
+        return tuple(sorted(errors))
+    if _sha256(base_test) != manifest.base_sha256:
+        errors.append("base_erratum_test_sha256_mismatch")
+    if _sha256(head_test) != manifest.head_sha256:
+        errors.append("head_erratum_test_sha256_mismatch")
+    if base_functions != head_functions:
+        errors.append("frozen_test_function_ast_changed")
+    if not head_functions:
+        errors.append("frozen_test_functions_missing")
+    errors.extend(f"unsafe_frozen_test_pattern:{kind}" for kind in unsafe)
+
+    expected_node_ids = (
+        *manifest.expected_red_failed_node_ids,
+        *manifest.expected_red_passed_node_ids,
+    )
+    declared_test_names = {
+        node_id.rsplit("::", 1)[-1].split("[", 1)[0]
+        for node_id in expected_node_ids
+    }
+    actual_test_names = {qualified.rsplit(".", 1)[-1] for qualified, _dump in head_functions}
+    unknown_names = sorted(declared_test_names - actual_test_names)
+    missing_names = sorted(actual_test_names - declared_test_names)
+    errors.extend(f"unknown_erratum_red_test:{name}" for name in unknown_names)
+    errors.extend(f"missing_erratum_red_test:{name}" for name in missing_names)
+    return tuple(sorted(errors))
+
+
+def _task_bytes_for_hash(task: ActiveTask) -> bytes:
+    obj = {
+        "allowed_paths": list(task.allowed_paths),
+        "forbidden_paths": list(task.forbidden_paths),
+        "required_paths": list(task.required_paths),
+        "schema": task.schema,
+        "task_id": task.task_id,
+    }
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
 def task_definition_head_path_errors(
@@ -529,6 +949,16 @@ def main(argv: list[str] | None = None) -> int:
                 *task_definition_head_path_errors(args.head_sha, head_task, changed),
             )))
             return _emit(len(changed), transition_errors, mode, head_task.task_id)
+        if mode == "pm-frozen-erratum":
+            head_task = parse_active_task_bytes(git_blob_from_ref(args.head_sha, _TASK_FILE))
+            erratum_errors = frozen_erratum_transition_errors(
+                args.base_sha,
+                args.head_sha,
+                task,
+                head_task,
+                changed,
+            )
+            return _emit(len(changed), erratum_errors, mode, head_task.task_id)
         return _emit(len(changed), (), mode, task.task_id)
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as exc:
         return _emit(0, (str(exc),))

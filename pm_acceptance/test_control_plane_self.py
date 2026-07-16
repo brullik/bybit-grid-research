@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -13,9 +14,11 @@ from scripts.check_protected_paths import parse_git_diff_raw_z, protected_path_e
 from scripts.check_task_scope import (
     ActiveTask,
     acceptance_plan_for_mode,
+    frozen_erratum_transition_errors,
     main as check_task_scope_main,
     classify_pr_mode,
     parse_active_task_bytes,
+    parse_frozen_erratum_manifest_bytes,
     parse_labels_json,
     pr_mode_scope_errors,
     task_definition_base_path_errors,
@@ -68,6 +71,36 @@ def _task_bytes(task: ActiveTask) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode() + b"\n"
+
+
+def _erratum_bytes(
+    *,
+    task: ActiveTask,
+    base_test: bytes,
+    head_test: bytes,
+    test_path: str = "pm_acceptance/tasks/task-a/test_contract.py",
+    failed: tuple[str, ...] | None = None,
+    passed: tuple[str, ...] = (),
+    issue_number: int = 98,
+    reason_code: str = "invalid_deterministic_fixture",
+    historical_active_task_commit_sha: str = "1" * 40,
+) -> bytes:
+    if failed is None:
+        failed = (f"{test_path}::test_contract",)
+    obj = {
+        "base_sha256": hashlib.sha256(base_test).hexdigest(),
+        "expected_red_failed_node_ids": list(failed),
+        "expected_red_passed_node_ids": list(passed),
+        "head_active_task_sha256": hashlib.sha256(_task_bytes(task)).hexdigest(),
+        "head_sha256": hashlib.sha256(head_test).hexdigest(),
+        "historical_active_task_commit_sha": historical_active_task_commit_sha,
+        "issue_number": issue_number,
+        "reason_code": reason_code,
+        "schema": "pm_frozen_erratum_v1",
+        "task_id": task.task_id,
+        "test_path": test_path,
+    }
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
 def test_safe_unprotected_source_file_accepted():
@@ -234,7 +267,7 @@ def test_no_required_commands_or_shell_command_field_exists():
         parse_active_task_bytes(raw)
 
 
-def test_output_mode_for_three_valid_modes():
+def test_output_mode_for_all_valid_modes():
     assert classify_pr_mode("codex", (), ("src/x.py",))[0] == "implementation"
     assert classify_pr_mode(
         "brullik",
@@ -242,12 +275,25 @@ def test_output_mode_for_three_valid_modes():
         ("pm_acceptance/active_task.json", "pm_acceptance/tasks/task-a/test_x.py"),
     )[0] == "pm-task-definition"
     assert classify_pr_mode("brullik", ("pm-control-plane",), ("AGENTS.md",))[0] == "pm-control-plane"
+    assert classify_pr_mode(
+        "brullik",
+        ("pm-frozen-erratum",),
+        (
+            "pm_acceptance/active_task.json",
+            "pm_acceptance/errata/task-a.json",
+            "pm_acceptance/tasks/task-a/test_x.py",
+        ),
+    )[0] == "pm-frozen-erratum"
 
 
 def test_mode_acceptance_plan_selection():
     assert acceptance_plan_for_mode("implementation") == ("base-isolated-acceptance",)
     assert acceptance_plan_for_mode("pm-control-plane") == ("base-isolated-acceptance", "head-control-plane-self-tests")
     assert acceptance_plan_for_mode("pm-task-definition") == ("base-control-plane-self-tests", "head-task-definition-collect-only")
+    assert acceptance_plan_for_mode("pm-frozen-erratum") == (
+        "base-control-plane-self-tests",
+        "head-frozen-erratum-exact-red",
+    )
 
 
 def test_pr_mode_labels_and_scope_fail_closed():
@@ -267,6 +313,14 @@ def test_pr_mode_labels_and_scope_fail_closed():
         "production_path_forbidden_in_pm_mode:src/x.py",
     )
     assert classify_pr_mode("brullik", ("pm-control-plane",), ("AGENTS.md",))[1] == ()
+    assert classify_pr_mode(
+        "brullik",
+        ("pm-frozen-erratum",),
+        ("src/example.py",),
+    )[1] == (
+        "pm_frozen_erratum_out_of_scope:src/example.py",
+        "production_path_forbidden_in_pm_mode:src/example.py",
+    )
 
 
 def test_comma_containing_label_cannot_select_privileged_mode():
@@ -285,6 +339,96 @@ def test_labels_json_rejects_duplicates_and_non_strings():
         parse_labels_json('["pm-task-definition","pm-task-definition"]')
     with pytest.raises(ValueError, match="^label_not_string$"):
         parse_labels_json('[1]')
+
+
+def test_canonical_frozen_erratum_manifest_parses_exact_evidence():
+    task = _active_task()
+    base_test = b"def test_contract():\n    assert False\n"
+    head_test = b"HELPER = 1\n\ndef test_contract():\n    assert False\n"
+    manifest = parse_frozen_erratum_manifest_bytes(
+        _erratum_bytes(
+            task=task,
+            base_test=base_test,
+            head_test=head_test,
+            passed=("pm_acceptance/tasks/task-a/test_contract.py::test_compatibility",),
+        )
+    )
+    assert manifest.schema == "pm_frozen_erratum_v1"
+    assert manifest.task_id == "task-a"
+    assert manifest.issue_number == 98
+    assert manifest.historical_active_task_commit_sha == "1" * 40
+    assert manifest.reason_code == "invalid_deterministic_fixture"
+    assert manifest.expected_red_failed_node_ids == (
+        "pm_acceptance/tasks/task-a/test_contract.py::test_contract",
+    )
+
+
+def test_frozen_erratum_manifest_is_strict_canonical_and_typed():
+    task = _active_task()
+    base_test = b"def test_contract():\n    assert False\n"
+    head_test = b"X = 1\n" + base_test
+    canonical = _erratum_bytes(task=task, base_test=base_test, head_test=head_test)
+    with pytest.raises(ValueError, match="^noncanonical_erratum_bytes$"):
+        parse_frozen_erratum_manifest_bytes(
+            json.dumps(json.loads(canonical), indent=2).encode() + b"\n"
+        )
+    bad_issue = dict(json.loads(canonical))
+    bad_issue["issue_number"] = True
+    with pytest.raises(ValueError, match="^invalid_erratum_issue_number$"):
+        parse_frozen_erratum_manifest_bytes(
+            json.dumps(bad_issue, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        )
+    bad_sha = dict(json.loads(canonical))
+    bad_sha["head_sha256"] = "A" * 64
+    with pytest.raises(ValueError, match="^invalid_erratum_head_sha256$"):
+        parse_frozen_erratum_manifest_bytes(
+            json.dumps(bad_sha, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        )
+    bad_historical = dict(json.loads(canonical))
+    bad_historical["historical_active_task_commit_sha"] = "A" * 40
+    with pytest.raises(
+        ValueError,
+        match="^invalid_erratum_historical_active_task_commit_sha$",
+    ):
+        parse_frozen_erratum_manifest_bytes(
+            json.dumps(bad_historical, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        )
+
+
+def test_frozen_erratum_manifest_rejects_ambiguous_red_outcomes():
+    task = _active_task()
+    base_test = b"def test_contract():\n    assert False\n"
+    head_test = b"X = 1\n" + base_test
+    node_id = "pm_acceptance/tasks/task-a/test_contract.py::test_contract"
+    overlap = _erratum_bytes(
+        task=task,
+        base_test=base_test,
+        head_test=head_test,
+        failed=(node_id,),
+        passed=(node_id,),
+    )
+    with pytest.raises(ValueError, match="^red_node_id_outcome_overlap:"):
+        parse_frozen_erratum_manifest_bytes(overlap)
+    empty = dict(json.loads(overlap))
+    empty["expected_red_failed_node_ids"] = []
+    empty["expected_red_passed_node_ids"] = []
+    raw = json.dumps(empty, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    with pytest.raises(ValueError, match="^expected_red_failed_node_ids_empty$"):
+        parse_frozen_erratum_manifest_bytes(raw)
+
+
+def test_frozen_erratum_requires_owner_and_label_for_protected_payload():
+    paths = (
+        "pm_acceptance/active_task.json",
+        "pm_acceptance/errata/task-a.json",
+        "pm_acceptance/tasks/task-a/test_contract.py",
+    )
+    assert classify_pr_mode("alice", ("pm-frozen-erratum",), paths)[1] == (
+        "wrong_author:alice",
+    )
+    assert classify_pr_mode("brullik", (), paths)[1] == tuple(
+        f"missing_required_mode_label:{path}" for path in paths
+    )
 
 
 def test_pm_task_definition_cannot_modify_frozen_control_plane_files():
@@ -476,6 +620,47 @@ def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
     assert "converted_to_draft" in workflow
 
 
+def test_workflow_stages_sha_pinned_frozen_erratum_and_requires_exact_red_outcomes():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    stage = workflow.split("      - name: Stage SHA-pinned head frozen erratum\n", 1)[1].split(
+        "      - name: Run corrected head erratum and verify exact RED manifest\n",
+        1,
+    )[0]
+    execute = workflow.split(
+        "      - name: Run corrected head erratum and verify exact RED manifest\n",
+        1,
+    )[1].split("      - name: Run supplemental PR checks\n", 1)[0]
+    supplemental = workflow.split("      - name: Run supplemental PR checks\n", 1)[1].split(
+        "\n  status-final:",
+        1,
+    )[0]
+
+    assert '"pm-frozen-erratum"' in workflow
+    assert "pr-mode != 'pm-frozen-erratum'" in workflow
+    assert "pr-mode == 'pm-frozen-erratum'" in workflow
+    assert 'Path("head/pm_acceptance/errata") / f"{task_id}.json"' in stage
+    assert 'base_source = Path("base") / Path(*test_path.parts)' in stage
+    assert 'head_source = Path("head") / Path(*test_path.parts)' in stage
+    assert 'Path("head/pm_acceptance/active_task.json").read_bytes()' in stage
+    assert 'manifest["base_sha256"]' in stage
+    assert 'manifest["head_sha256"]' in stage
+    assert 'manifest["head_active_task_sha256"]' in stage
+    assert "shutil.copyfile(base_source, destination_base_test)" in stage
+    assert "shutil.copyfile(head_source, destination_head_test)" in stage
+    assert "cp -R head/pm_acceptance" not in stage
+    assert 'head_result["exit_code"] != 1' in execute
+    assert "forbidden_outcomes=" in execute
+    assert "failed_node_ids_mismatch" in execute
+    assert "passed_node_ids_mismatch" in execute
+    assert "expected_node_ids_vs_base_collection_mismatch" in execute
+    assert "head_outcome_union_vs_base_collection_mismatch" in execute
+    assert "subprocess.run(" in execute
+    assert "report.when != \"call\"" in execute
+    assert "report.failed or report.skipped" in execute
+    assert 'if [ "$PR_MODE" = "pm-task-definition" ] || [ "$PR_MODE" = "pm-frozen-erratum" ]' in supplemental
+    assert "python -m pytest tests -q" in supplemental
+
+
 def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | None, dict[str, str]]:
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     final = workflow.split("\n  status-final:\n", 1)[1]
@@ -577,6 +762,220 @@ def test_parse_raw_diff_rejects_symlink_and_submodule_modes():
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(["git", *args], cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     return result.stdout.strip()
+
+
+def _build_frozen_erratum_repo(
+    tmp_path: Path,
+    *,
+    head_test: bytes | None = None,
+    manifest_transform=None,
+) -> tuple[Path, str, str, ActiveTask, bytes, bytes]:
+    repo = tmp_path / "erratum-repo"
+    test_path = repo / "pm_acceptance/tasks/task-a/test_contract.py"
+    contract_path = repo / "docs/frozen_contracts/tasks/task-a.md"
+    active_path = repo / "pm_acceptance/active_task.json"
+    test_path.parent.mkdir(parents=True)
+    contract_path.parent.mkdir(parents=True)
+    base_test = (
+        b'FIXTURE = b"invalid"\n\n'
+        b"def helper():\n    return FIXTURE\n\n"
+        b"def test_contract():\n    assert helper()\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    if head_test is None:
+        head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid-zip"')
+    test_path.write_bytes(base_test)
+    contract_path.write_text("# Frozen task\n")
+    active_path.parent.mkdir(parents=True, exist_ok=True)
+    task = _active_task()
+    active_path.write_bytes(_task_bytes(task))
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "pm@example.test")
+    _git(repo, "config", "user.name", "PM")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "historical active task")
+    historical_active = _git(repo, "rev-parse", "HEAD")
+    active_path.write_bytes(CANONICAL)
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "inactive base with frozen task")
+    base = _git(repo, "rev-parse", "HEAD")
+
+    active_path.write_bytes(_task_bytes(task))
+    test_path.write_bytes(head_test)
+    manifest_path = repo / "pm_acceptance/errata/task-a.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest = _erratum_bytes(
+        task=task,
+        base_test=base_test,
+        head_test=head_test,
+        failed=("pm_acceptance/tasks/task-a/test_contract.py::test_contract",),
+        passed=("pm_acceptance/tasks/task-a/test_contract.py::test_compatibility",),
+        historical_active_task_commit_sha=historical_active,
+    )
+    if manifest_transform is not None:
+        manifest = manifest_transform(manifest)
+    manifest_path.write_bytes(manifest)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "frozen erratum")
+    head = _git(repo, "rev-parse", "HEAD")
+    return repo, base, head, task, base_test, head_test
+
+
+def _erratum_errors(repo: Path, base: str, head: str, task: ActiveTask) -> tuple[str, ...]:
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        return frozen_erratum_transition_errors(
+            base,
+            head,
+            parse_active_task_bytes(CANONICAL),
+            task,
+            changed_paths_from_git(base, head),
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_frozen_erratum_accepts_exact_reactivation_and_helper_only_fix(tmp_path: Path):
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(tmp_path)
+    assert _erratum_errors(repo, base, head, task) == ()
+
+
+def test_frozen_erratum_rejects_historical_active_task_byte_mismatch(tmp_path: Path):
+    repo, base, _head, task, _base_test, _head_test = _build_frozen_erratum_repo(tmp_path)
+    manifest_path = repo / "pm_acceptance/errata/task-a.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["historical_active_task_commit_sha"] = base
+    manifest_path.write_bytes(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    )
+    _git(repo, "add", str(manifest_path.relative_to(repo)))
+    _git(repo, "commit", "-q", "--amend", "--no-edit")
+    head = _git(repo, "rev-parse", "HEAD")
+    assert "historical_active_task_bytes_mismatch" in _erratum_errors(
+        repo,
+        base,
+        head,
+        task,
+    )
+
+
+def test_frozen_erratum_requires_inactive_base_and_exact_three_paths(tmp_path: Path):
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(tmp_path)
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        changed = changed_paths_from_git(base, head)
+        assert frozen_erratum_transition_errors(base, head, task, task, changed) == (
+            "erratum_base_task_not_inactive:task-a",
+        )
+        errors = frozen_erratum_transition_errors(
+            base,
+            head,
+            parse_active_task_bytes(CANONICAL),
+            task,
+            changed[:-1],
+        )
+    finally:
+        os.chdir(old_cwd)
+    assert "frozen_erratum_changed_path_count:2" in errors
+    assert "erratum_test_path_scope_mismatch" in errors
+
+
+def test_frozen_erratum_rejects_changed_test_function_ast(tmp_path: Path):
+    head_test = (
+        b'FIXTURE = b"valid"\n\n'
+        b"def helper():\n    return FIXTURE\n\n"
+        b"def test_contract():\n    assert helper() == b'other'\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    repo, base, head, task, _base_test, _ = _build_frozen_erratum_repo(
+        tmp_path,
+        head_test=head_test,
+    )
+    assert "frozen_test_function_ast_changed" in _erratum_errors(repo, base, head, task)
+
+
+@pytest.mark.parametrize(
+    ("unsafe_source", "expected"),
+    (
+        (b"\npytestmark = pytest.mark.xfail\n", "unsafe_frozen_test_pattern:skip_or_xfail"),
+        (
+            b"\ndef helper_unsafe():\n    with pytest.raises(Exception):\n        pass\n",
+            "unsafe_frozen_test_pattern:broad_pytest_raises",
+        ),
+        (
+            b"\ndef helper_unsafe():\n    try:\n        pass\n    except BaseException:\n        pass\n",
+            "unsafe_frozen_test_pattern:broad_exception_handler",
+        ),
+    ),
+)
+def test_frozen_erratum_rejects_skip_xfail_and_broad_exception_patterns(
+    tmp_path: Path,
+    unsafe_source: bytes,
+    expected: str,
+):
+    base = (
+        b"import pytest\n\n"
+        b'FIXTURE = b"invalid"\n\n'
+        b"def helper():\n    return FIXTURE\n\n"
+        b"def test_contract():\n    assert helper()\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"') + unsafe_source
+    repo, base_sha, head, task, _base_test, _ = _build_frozen_erratum_repo(
+        tmp_path,
+        head_test=head_test,
+    )
+    assert expected in _erratum_errors(repo, base_sha, head, task)
+
+
+def test_frozen_erratum_rejects_hash_and_red_node_manifest_lies(tmp_path: Path):
+    def transform(raw: bytes) -> bytes:
+        obj = json.loads(raw)
+        obj["base_sha256"] = "0" * 64
+        obj["expected_red_failed_node_ids"] = [
+            "pm_acceptance/tasks/task-a/test_contract.py::test_not_present"
+        ]
+        return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        manifest_transform=transform,
+    )
+    errors = _erratum_errors(repo, base, head, task)
+    assert "base_erratum_test_sha256_mismatch" in errors
+    assert "missing_erratum_red_test:test_contract" in errors
+    assert "unknown_erratum_red_test:test_not_present" in errors
+
+
+def test_frozen_erratum_cli_emits_reactivated_head_task_id(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    repo, base, head, _task, _base_test, _head_test = _build_frozen_erratum_repo(tmp_path)
+    _git(repo, "checkout", "-q", base)
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        status = check_task_scope_main([
+            "--task-file", "pm_acceptance/active_task.json",
+            "--base-sha", base,
+            "--head-sha", head,
+            "--actor", "brullik",
+            "--labels-json", '["pm-frozen-erratum"]',
+        ])
+        payload = json.loads(capsys.readouterr().out)
+    finally:
+        os.chdir(old_cwd)
+    assert status == 0, payload
+    assert payload == {
+        "changed_count": 3,
+        "errors": [],
+        "mode": "pm-frozen-erratum",
+        "ok": True,
+        "task_id": "task-a",
+    }
 
 
 def test_cli_reads_and_validates_head_active_task_via_git_show(
