@@ -7,6 +7,7 @@ import importlib
 import inspect
 import json
 from pathlib import Path
+import sys
 import textwrap
 
 import httpx
@@ -127,11 +128,33 @@ class _Limiter:
         self.events.append("rate_limit")
 
 
+class _MutatingLimiter:
+    def __init__(self, events: list[str], mutation):
+        self.events = events
+        self.mutation = mutation
+
+    def wait(self):
+        self.events.append("rate_limit")
+        self.mutation()
+
+
+class _OriginDriftLimiter:
+    def __init__(self, events: list[str], private_http: _Http):
+        self.events = events
+        self.private_http = private_http
+
+    def wait(self):
+        self.events.append("rate_limit")
+        self.private_http.base_url = httpx.URL("https://attacker.invalid")
+
+
 class _Http:
     def __init__(self, events: list[str]):
         self.events = events
         self.calls: list[tuple[object, object, object]] = []
         self.base_url = httpx.URL(CANONICAL_BASE_URL)
+        self.follow_redirects = False
+        self._trust_env = False
 
     def post(self, endpoint, *, content, headers):
         self.events.append("http")
@@ -180,6 +203,32 @@ class _FailingGetHttp(_Http):
             self.on_first()
         request = httpx.Request("GET", f"https://api.bybit.com{endpoint}")
         raise httpx.ConnectError("injected retryable transport failure", request=request)
+
+
+class _RetryOnceHttp(_Http):
+    def post(self, endpoint, *, content, headers):
+        self.events.append("http")
+        self.calls.append((endpoint, content, headers))
+        request = httpx.Request("POST", f"https://api.bybit.com{endpoint}")
+        if len(self.calls) == 1:
+            raise httpx.ConnectError("injected first-attempt failure", request=request)
+        return httpx.Response(
+            200,
+            json={"retCode": 0, "retMsg": "OK", "result": {"checkCode": "0"}},
+            request=request,
+        )
+
+    def get(self, endpoint, *, params, headers):
+        self.events.append("http")
+        self.calls.append((endpoint, params, dict(headers)))
+        request = httpx.Request("GET", f"https://api.bybit.com{endpoint}")
+        if len(self.calls) == 1:
+            raise httpx.ConnectError("injected first-attempt failure", request=request)
+        return httpx.Response(
+            200,
+            json={"retCode": 0, "retMsg": "OK", "result": {}},
+            request=request,
+        )
 
 
 def _client(settings, events: list[str], http=None):
@@ -1811,3 +1860,397 @@ def test_source_audit_rejects_dynamic_or_variant_transport_and_misleading_stubs(
             "BaseException",
         }
     assert api.CANONICAL_FGRID_VALIDATE_ENDPOINT == CANONICAL_ENDPOINT
+
+
+def test_signed_get_and_validate_recheck_origin_after_rate_limit_before_http(monkeypatch):
+    api = _api()
+    client_api = _client_api()
+    monkeypatch.setattr(
+        _config_api().Settings,
+        "require_private_credentials",
+        lambda self: None,
+    )
+    monkeypatch.setattr(client_api, "sign_v5", lambda secret, target: "signature")
+
+    get_events: list[str] = []
+    get_http = _Http(get_events)
+    get_client = _client(_settings(), get_events, http=get_http)
+    get_client.rate_limiter = _OriginDriftLimiter(get_events, get_http)
+    _assert_boundary_error(
+        api,
+        "private_http_origin_forbidden",
+        lambda: get_client.private_get("/v5/account/info"),
+    )
+    assert get_events == ["rate_limit"]
+    assert get_http.calls == []
+
+    post_events: list[str] = []
+    post_http = _Http(post_events)
+    post_client = _client(_settings(), post_events, http=post_http)
+    post_client.rate_limiter = _OriginDriftLimiter(post_events, post_http)
+    _assert_boundary_error(
+        api,
+        "private_http_origin_forbidden",
+        lambda: post_client.validate_grid_bot(_payload()),
+    )
+    assert post_events == ["rate_limit"]
+    assert post_http.calls == []
+
+
+def test_prepared_capabilities_are_client_bound_single_use_and_retry_scoped(monkeypatch):
+    api = _api()
+    client_api = _client_api()
+    monkeypatch.setattr(
+        _config_api().Settings,
+        "require_private_credentials",
+        lambda self: None,
+    )
+    monkeypatch.setattr(client_api, "sign_v5", lambda secret, target: "signature")
+    monkeypatch.setattr(client_api.BybitClient._private_get.retry, "sleep", lambda delay: None)
+    monkeypatch.setattr(
+        client_api.BybitClient._private_validate_post.retry,
+        "sleep",
+        lambda delay: None,
+    )
+
+    get_events: list[str] = []
+    get_http = _RetryOnceHttp(get_events)
+    get_owner = _client(_settings(), get_events, http=get_http)
+    get_foreign = _client(_settings(), [])
+    original_get = get_owner._private_get
+    captured_get: list[object] = []
+
+    def get_with_cross_client_probe(prepared):
+        captured_get.append(prepared)
+        _assert_boundary_error(
+            api,
+            "private_get_prepared_request_invalid",
+            lambda: client_api.BybitClient._private_get.__wrapped__(get_foreign, prepared),
+        )
+        return original_get(prepared)
+
+    get_owner._private_get = get_with_cross_client_probe
+    assert get_owner.private_get("/v5/account/info")["retCode"] == 0
+    assert len(get_http.calls) == 2
+    assert len(captured_get) == 1
+    _assert_boundary_error(
+        api,
+        "private_get_prepared_request_invalid",
+        lambda: client_api.BybitClient._private_get.__wrapped__(
+            get_owner,
+            captured_get[0],
+        ),
+    )
+    assert len(get_http.calls) == 2
+
+    post_events: list[str] = []
+    post_http = _RetryOnceHttp(post_events)
+    post_owner = _client(_settings(), post_events, http=post_http)
+    post_foreign = _client(_settings(), [])
+    original_post = post_owner._private_validate_post
+    captured_post: list[object] = []
+
+    def post_with_cross_client_probe(prepared):
+        captured_post.append(prepared)
+        _assert_boundary_error(
+            api,
+            "validate_prepared_request_invalid",
+            lambda: client_api.BybitClient._private_validate_post.__wrapped__(
+                post_foreign,
+                prepared,
+            ),
+        )
+        return original_post(prepared)
+
+    post_owner._private_validate_post = post_with_cross_client_probe
+    assert post_owner.validate_grid_bot(_payload())["retCode"] == 0
+    assert len(post_http.calls) == 2
+    assert len(captured_post) == 1
+    _assert_boundary_error(
+        api,
+        "validate_prepared_request_invalid",
+        lambda: client_api.BybitClient._private_validate_post.__wrapped__(
+            post_owner,
+            captured_post[0],
+        ),
+    )
+    assert len(post_http.calls) == 2
+
+
+def test_prepared_capability_repr_never_exposes_snapshot_credentials():
+    api = _api()
+    secret_key = "repr-key-7f0de915"
+    secret_value = "repr-secret-94f2c301"
+    settings = _settings(bybit_api_key=secret_key, bybit_api_secret=secret_value)
+    client = _client(settings, [])
+    prepared_values: list[object] = []
+    client._private_get = lambda prepared: prepared_values.append(prepared) or {"retCode": 0}
+    client._private_validate_post = (
+        lambda prepared: prepared_values.append(prepared) or {"retCode": 0}
+    )
+
+    assert client.private_get("/v5/account/info")["retCode"] == 0
+    assert client.validate_grid_bot(_payload())["retCode"] == 0
+    assert len(prepared_values) == 2
+    for prepared in prepared_values:
+        prepared_fields = {field.name: field for field in fields(prepared)}
+        assert prepared_fields["api_key"].repr is False
+        assert prepared_fields["api_secret"].repr is False
+        prepared_repr = repr(prepared)
+        assert secret_key not in prepared_repr
+        assert secret_value not in prepared_repr
+    assert api.CANONICAL_BYBIT_API_BASE_URL == CANONICAL_BASE_URL
+
+
+def test_source_audit_rejects_unreachable_sample_and_universe_policy_preflights(tmp_path):
+    api = _api()
+    audit_api = _audit_api()
+    root = tmp_path / "unreachable-preflights"
+    _write_source(
+        root,
+        "scripts/validate_sample_grid.py",
+        """
+        def main():
+            settings = load_settings()
+            if False:
+                enforce_validate_only_settings(settings=settings)
+            client = BybitClient(settings)
+            return client
+        """,
+    )
+    _write_source(
+        root,
+        "scripts/validate_universe_fgrid_constraints.py",
+        """
+        def main():
+            settings = load_settings()
+            if False:
+                _enforce_validate_only_settings(settings=settings)
+            settings.require_private_credentials()
+            pool = ThreadPoolExecutor(max_workers=10)
+            return pool
+        """,
+    )
+    result = audit_api.audit_source_tree(root)
+    joined = "\n".join(result.violations)
+    assert result.ok is False
+    assert "validate sample policy preflight must precede side effects" in joined
+    assert "validate universe policy preflight must precede credentials and threads" in joined
+    assert api.CANONICAL_FGRID_VALIDATE_ENDPOINT == CANONICAL_ENDPOINT
+
+
+def test_universe_purge_runs_only_after_settings_policy_preflight(monkeypatch):
+    api = _api()
+    universe_api = importlib.import_module("scripts.validate_universe_fgrid_constraints")
+    settings = _settings()
+    events: list[str] = []
+
+    def load_settings_for_purge():
+        events.append("load_settings")
+        return settings
+
+    def policy_preflight_for_purge(*, settings):
+        assert settings is settings_for_purge
+        events.append("policy_preflight")
+
+    def purge_after_preflight():
+        events.append("purge")
+
+    settings_for_purge = settings
+    monkeypatch.setattr(universe_api, "load_settings", load_settings_for_purge)
+    monkeypatch.setattr(
+        universe_api,
+        "_enforce_validate_only_settings",
+        policy_preflight_for_purge,
+    )
+    monkeypatch.setattr(universe_api, "purge_skipped_constraints", purge_after_preflight)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["validate_universe_fgrid_constraints.py", "--purge-skipped-constraints"],
+    )
+
+    assert universe_api.main() is None
+    assert events == ["load_settings", "policy_preflight", "purge"]
+    assert api.CANONICAL_BYBIT_ENV == "mainnet"
+
+
+def test_private_transport_policy_drift_is_refused_after_limiter_before_dispatch(monkeypatch):
+    api = _api()
+    client_api = _client_api()
+    monkeypatch.setattr(
+        _config_api().Settings,
+        "require_private_credentials",
+        lambda self: None,
+    )
+    monkeypatch.setattr(client_api, "sign_v5", lambda secret, target: "signature")
+
+    redirect_deliveries: list[tuple[str, str | None]] = []
+
+    def redirect_handler(request: httpx.Request) -> httpx.Response:
+        redirect_deliveries.append(
+            (str(request.url), request.headers.get("X-BAPI-API-KEY"))
+        )
+        if request.url.host == "api.bybit.com":
+            return httpx.Response(
+                307,
+                headers={"Location": "https://attacker.invalid/capture"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"retCode": 0, "retMsg": "OK", "result": {}},
+            request=request,
+        )
+
+    redirect_events: list[str] = []
+    with httpx.Client(
+        base_url=CANONICAL_BASE_URL,
+        trust_env=False,
+        follow_redirects=False,
+        transport=httpx.MockTransport(redirect_handler),
+    ) as redirect_http:
+        redirect_client = _client(_settings(), redirect_events, http=redirect_http)
+        redirect_client.rate_limiter = _MutatingLimiter(
+            redirect_events,
+            lambda: setattr(redirect_http, "follow_redirects", True),
+        )
+        _assert_boundary_error(
+            api,
+            "private_http_policy_forbidden",
+            lambda: redirect_client.private_get("/v5/account/info"),
+        )
+    assert redirect_deliveries == []
+
+    trust_deliveries: list[str] = []
+
+    def trust_handler(request: httpx.Request) -> httpx.Response:
+        trust_deliveries.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={"retCode": 0, "retMsg": "OK", "result": {"checkCode": "0"}},
+            request=request,
+        )
+
+    trust_events: list[str] = []
+    with httpx.Client(
+        base_url=CANONICAL_BASE_URL,
+        trust_env=False,
+        follow_redirects=False,
+        transport=httpx.MockTransport(trust_handler),
+    ) as trust_http:
+        trust_client = _client(_settings(), trust_events, http=trust_http)
+        trust_client.rate_limiter = _MutatingLimiter(
+            trust_events,
+            lambda: setattr(trust_http, "_trust_env", True),
+        )
+        _assert_boundary_error(
+            api,
+            "private_http_policy_forbidden",
+            lambda: trust_client.validate_grid_bot(_payload()),
+        )
+    assert trust_deliveries == []
+
+
+def test_retry_rejects_prepared_object_mutation_against_external_fingerprint(monkeypatch):
+    api = _api()
+    client_api = _client_api()
+    monkeypatch.setattr(
+        _config_api().Settings,
+        "require_private_credentials",
+        lambda self: None,
+    )
+    sign_targets: list[str] = []
+    monkeypatch.setattr(
+        client_api,
+        "sign_v5",
+        lambda secret, target: sign_targets.append(target) or "signature",
+    )
+    monkeypatch.setattr(client_api.BybitClient._private_get.retry, "sleep", lambda delay: None)
+    monkeypatch.setattr(
+        client_api.BybitClient._private_validate_post.retry,
+        "sleep",
+        lambda delay: None,
+    )
+
+    get_events: list[str] = []
+    get_http = _FailingGetHttp(get_events)
+    get_client = _client(_settings(), get_events, http=get_http)
+    original_get = get_client._private_get
+    captured_get: list[object] = []
+
+    def get_with_prepared_mutation(prepared):
+        captured_get.append(prepared)
+
+        def mutate_get_prepared():
+            object.__setattr__(prepared, "query_string", "category=linear&symbol=ETHUSDT")
+            object.__setattr__(
+                prepared,
+                "request_target",
+                "/v5/account/fee-rate?category=linear&symbol=ETHUSDT",
+            )
+
+        get_http.on_first = mutate_get_prepared
+        return original_get(prepared)
+
+    get_client._private_get = get_with_prepared_mutation
+    _assert_boundary_error(
+        api,
+        "private_get_prepared_request_invalid",
+        lambda: get_client.private_get(
+            "/v5/account/fee-rate",
+            {"category": "linear", "symbol": "BTCUSDT"},
+        ),
+    )
+    assert len(get_http.calls) == 1
+    assert get_events == ["rate_limit", "http"]
+    assert len(sign_targets) == 1
+    assert len(captured_get) == 1
+    _assert_boundary_error(
+        api,
+        "private_get_prepared_request_invalid",
+        lambda: client_api.BybitClient._private_get.__wrapped__(
+            get_client,
+            captured_get[0],
+        ),
+    )
+
+    sign_targets.clear()
+    post_events: list[str] = []
+    post_http = _FailingHttp(post_events)
+    post_client = _client(_settings(), post_events, http=post_http)
+    original_post = post_client._private_validate_post
+    captured_post: list[object] = []
+
+    def post_with_prepared_mutation(prepared):
+        captured_post.append(prepared)
+
+        def mutate_post_prepared():
+            changed_payload = {**_payload(), "symbol": "ETHUSDT"}
+            object.__setattr__(
+                prepared,
+                "json_body",
+                json.dumps(changed_payload, separators=(",", ":"), ensure_ascii=False),
+            )
+
+        post_http.on_first = mutate_post_prepared
+        return original_post(prepared)
+
+    post_client._private_validate_post = post_with_prepared_mutation
+    _assert_boundary_error(
+        api,
+        "validate_prepared_request_invalid",
+        lambda: post_client.validate_grid_bot(_payload()),
+    )
+    assert len(post_http.calls) == 1
+    assert post_events == ["rate_limit", "http"]
+    assert len(sign_targets) == 1
+    assert len(captured_post) == 1
+    _assert_boundary_error(
+        api,
+        "validate_prepared_request_invalid",
+        lambda: client_api.BybitClient._private_validate_post.__wrapped__(
+            post_client,
+            captured_post[0],
+        ),
+    )
