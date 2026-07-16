@@ -92,3 +92,4 @@ def test_redaction_covers_headers_and_raw_strings():
     assert data["apiKey"] == "***REDACTED***"
     assert data["apiSecret"] == "***REDACTED***"
     assert "abc" not in data["raw"] and "sig" not in data["raw"] and "secret" not in data["raw"]
+# RED probe only: no behavior
