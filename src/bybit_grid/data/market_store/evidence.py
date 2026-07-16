@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import binascii
+import ctypes
+import errno
 import hashlib
 import os
 import re
@@ -46,6 +48,8 @@ _LEGACY_EMPTY_MANIFEST_BYTES = b'{"members":{}}\n'
 _LOCAL_HEADER = struct.Struct("<4s5H3L2H")
 _CENTRAL_HEADER = struct.Struct("<4s6H3L5H2L")
 _END_RECORD = struct.Struct("<4s4H2LH")
+_RENAME_NOREPLACE = 1
+_SEED_INSTALL_TEMP_PREFIX = ".bybit-grid-seed-install-"
 
 
 def _absolute_lexical_path(value, error_code):
@@ -120,10 +124,7 @@ def _open_regular_no_follow(path: Path, error_code: str):
         flags |= getattr(os, "O_NONBLOCK", 0)
         fd = os.open(path, flags)
         opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or (
-            opened.st_dev,
-            opened.st_ino,
-        ) != (before.st_dev, before.st_ino):
+        if not stat.S_ISREG(opened.st_mode) or _stat_identity(opened) != _stat_identity(before):
             raise MarketStoreError(error_code)
         stream = os.fdopen(fd, "rb", closefd=True)
         fd = None
@@ -152,7 +153,7 @@ def _open_regular_no_follow(path: Path, error_code: str):
         if (
             _stat_identity(after) != _stat_identity(opened)
             or not stat.S_ISREG(rebound.st_mode)
-            or (rebound.st_dev, rebound.st_ino) != (opened.st_dev, opened.st_ino)
+            or _stat_identity(rebound) != _stat_identity(opened)
         ):
             raise MarketStoreError(error_code)
     finally:
@@ -333,6 +334,327 @@ def _requested_path(value, error_code):
         return Path(os.fspath(value))
     except (OSError, TypeError, ValueError) as exc:
         raise MarketStoreError(error_code) from exc
+
+
+def _strict_fspath_text(value, error_code):
+    try:
+        text = os.fspath(value)
+    except (OSError, TypeError, ValueError) as exc:
+        raise MarketStoreError(error_code) from exc
+    if type(text) is not str:
+        raise MarketStoreError(error_code)
+    return text
+
+
+def _same_directory_identity(left, right):
+    return (
+        stat.S_ISDIR(left.st_mode)
+        and stat.S_ISDIR(right.st_mode)
+        and (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+    )
+
+
+@contextmanager
+def _open_seed_install_parent(path: Path):
+    fd = None
+    try:
+        before = path.lstat()
+        if not stat.S_ISDIR(before.st_mode):
+            raise MarketStoreError("unsafe_seed_install_destination")
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        opened = os.fstat(fd)
+        path_real = _resolved_path(path, "unsafe_seed_install_destination")
+        descriptor_real = _resolved_path(
+            Path(f"/proc/self/fd/{fd}"),
+            "unsafe_seed_install_destination",
+        )
+        if (
+            not _same_directory_identity(before, opened)
+            or before.st_mode != opened.st_mode
+            or path_real != descriptor_real
+        ):
+            raise MarketStoreError("unsafe_seed_install_destination")
+    except MarketStoreError:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise MarketStoreError("unsafe_seed_install_destination") from exc
+
+    try:
+        yield fd, (opened, descriptor_real)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _require_seed_install_parent_bound(path: Path, parent_fd: int, identity):
+    opened, opened_real = identity
+    try:
+        current_path = path.stat(follow_symlinks=False)
+        current_fd = os.fstat(parent_fd)
+        current_path_real = _resolved_path(path, "unsafe_seed_install_destination")
+        current_descriptor_real = _resolved_path(
+            Path(f"/proc/self/fd/{parent_fd}"),
+            "unsafe_seed_install_destination",
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise MarketStoreError("unsafe_seed_install_destination") from exc
+    if (
+        not _same_directory_identity(current_path, opened)
+        or not _same_directory_identity(current_fd, opened)
+        or current_path.st_mode != opened.st_mode
+        or current_fd.st_mode != opened.st_mode
+        or current_path_real != opened_real
+        or current_descriptor_real != opened_real
+    ):
+        raise MarketStoreError("unsafe_seed_install_destination")
+
+
+def _require_seed_install_destination_absent(parent_fd: int, name: str):
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except (OSError, TypeError, ValueError) as exc:
+        raise MarketStoreError("unsafe_seed_install_destination") from exc
+    raise MarketStoreError("seed_install_destination_exists")
+
+
+def _directory_entry_matches_descriptor(parent_fd: int, name: str, descriptor_fd: int) -> bool:
+    try:
+        entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        opened = os.fstat(descriptor_fd)
+    except (OSError, TypeError, ValueError):
+        return False
+    return _same_directory_identity(entry, opened)
+
+
+def _remove_created_seed_install_directory(parent_fd: int, created):
+    try:
+        if created is None or not stat.S_ISDIR(created.st_mode):
+            raise MarketStoreError("seed_install_cleanup_invalid")
+        with os.scandir(parent_fd) as iterator:
+            parent_names = sorted(entry.name for entry in iterator)
+        matching_names = []
+        for candidate in parent_names:
+            try:
+                entry = os.stat(candidate, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if _same_directory_identity(entry, created):
+                matching_names.append(candidate)
+        if len(matching_names) != 1:
+            raise MarketStoreError("seed_install_cleanup_invalid")
+        os.rmdir(matching_names[0], dir_fd=parent_fd)
+    except MarketStoreError:
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        raise MarketStoreError("seed_install_cleanup_invalid") from exc
+
+
+def _create_seed_install_temp(parent_fd: int, reserved_name: str):
+    for _attempt in range(32):
+        name = f"{_SEED_INSTALL_TEMP_PREFIX}{secrets.token_hex(16)}.tmp"
+        if name == reserved_name:
+            continue
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        except (OSError, TypeError, ValueError) as exc:
+            raise MarketStoreError("seed_install_temp_unsafe") from exc
+
+        descriptor_fd = None
+        created = None
+        try:
+            created = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            os.chmod(
+                name,
+                0o700,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            normalized = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if not _same_directory_identity(created, normalized):
+                raise MarketStoreError("seed_install_temp_unsafe")
+            flags = os.O_RDONLY
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_DIRECTORY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor_fd = os.open(name, flags, dir_fd=parent_fd)
+            opened = os.fstat(descriptor_fd)
+            if not _same_directory_identity(created, opened):
+                raise MarketStoreError("seed_install_temp_unsafe")
+            return name, descriptor_fd
+        except (MarketStoreError, OSError, TypeError, ValueError) as exc:
+            if descriptor_fd is not None:
+                try:
+                    os.close(descriptor_fd)
+                except OSError:
+                    pass
+            primary_error = (
+                exc
+                if isinstance(exc, MarketStoreError)
+                else MarketStoreError("seed_install_temp_unsafe")
+            )
+            try:
+                _remove_created_seed_install_directory(parent_fd, created)
+            except MarketStoreError as cleanup_error:
+                raise cleanup_error from primary_error
+            if isinstance(exc, MarketStoreError):
+                raise
+            raise primary_error from exc
+    raise MarketStoreError("seed_install_temp_unsafe")
+
+
+def _normalize_seed_install_tree(directory_fd: int):
+    try:
+        with os.scandir(directory_fd) as iterator:
+            names = sorted(entry.name for entry in iterator)
+        for name in names:
+            entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISDIR(entry.st_mode):
+                flags = os.O_RDONLY
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_DIRECTORY", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                child_fd = os.open(name, flags, dir_fd=directory_fd)
+                try:
+                    if not _same_directory_identity(entry, os.fstat(child_fd)):
+                        raise MarketStoreError("seed_install_temp_unsafe")
+                    _normalize_seed_install_tree(child_fd)
+                finally:
+                    os.close(child_fd)
+            elif stat.S_ISREG(entry.st_mode):
+                flags = os.O_RDONLY
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                flags |= getattr(os, "O_NONBLOCK", 0)
+                file_fd = os.open(name, flags, dir_fd=directory_fd)
+                try:
+                    opened = os.fstat(file_fd)
+                    if not stat.S_ISREG(opened.st_mode) or (
+                        opened.st_dev,
+                        opened.st_ino,
+                    ) != (entry.st_dev, entry.st_ino):
+                        raise MarketStoreError("seed_install_temp_unsafe")
+                    os.fchmod(file_fd, 0o600)
+                finally:
+                    os.close(file_fd)
+            else:
+                raise MarketStoreError("seed_install_temp_unsafe")
+        os.fchmod(directory_fd, 0o700)
+    except MarketStoreError:
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        raise MarketStoreError("seed_install_temp_unsafe") from exc
+
+
+def _clear_seed_install_directory(directory_fd: int):
+    try:
+        with os.scandir(directory_fd) as iterator:
+            names = sorted((entry.name for entry in iterator), reverse=True)
+        for name in names:
+            entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISDIR(entry.st_mode):
+                flags = os.O_RDONLY
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_DIRECTORY", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                child_fd = os.open(name, flags, dir_fd=directory_fd)
+                try:
+                    if not _same_directory_identity(entry, os.fstat(child_fd)):
+                        raise MarketStoreError("seed_install_cleanup_invalid")
+                    _clear_seed_install_directory(child_fd)
+                finally:
+                    os.close(child_fd)
+                os.rmdir(name, dir_fd=directory_fd)
+            else:
+                os.unlink(name, dir_fd=directory_fd)
+    except MarketStoreError:
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        raise MarketStoreError("seed_install_cleanup_invalid") from exc
+
+
+def _cleanup_seed_install_temp(parent_fd: int, name: str, temp_fd: int):
+    try:
+        _clear_seed_install_directory(temp_fd)
+        opened = os.fstat(temp_fd)
+        with os.scandir(parent_fd) as iterator:
+            parent_names = sorted(entry.name for entry in iterator)
+        matching_names = []
+        for candidate in parent_names:
+            try:
+                entry = os.stat(candidate, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if _same_directory_identity(entry, opened):
+                matching_names.append(candidate)
+        if len(matching_names) != 1:
+            raise MarketStoreError("seed_install_cleanup_invalid")
+        owned_name = matching_names[0]
+        if owned_name == name and not _directory_entry_matches_descriptor(
+            parent_fd,
+            name,
+            temp_fd,
+        ):
+            raise MarketStoreError("seed_install_cleanup_invalid")
+        os.rmdir(owned_name, dir_fd=parent_fd)
+    except MarketStoreError:
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        raise MarketStoreError("seed_install_cleanup_invalid") from exc
+
+
+def _rename_seed_install_noreplace(parent_fd, source_name, destination_name):
+    try:
+        library = ctypes.CDLL(None, use_errno=True)
+        renameat2 = library.renameat2
+        renameat2.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        renameat2.restype = ctypes.c_int
+        source_bytes = os.fsencode(source_name)
+        destination_bytes = os.fsencode(destination_name)
+        ctypes.set_errno(0)
+        result = renameat2(
+            parent_fd,
+            source_bytes,
+            parent_fd,
+            destination_bytes,
+            _RENAME_NOREPLACE,
+        )
+        if result == 0:
+            return
+        error_number = ctypes.get_errno()
+        if error_number in (errno.EEXIST, errno.ENOTEMPTY):
+            raise MarketStoreError("seed_install_destination_exists")
+        raise MarketStoreError("seed_install_publish_invalid")
+    except MarketStoreError:
+        raise
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise MarketStoreError("seed_install_publish_invalid") from exc
 
 
 @contextmanager
@@ -1035,6 +1357,103 @@ def _write_extracted_member(root, name, archive, info, expected_hash):
         raise MarketStoreError("zip_member_hash_mismatch")
 
 
+def _write_seed_install_member(root_fd, name, archive, info, expected_hash):
+    parts = name.split("/")
+    digest = hashlib.sha256()
+    directory_fd = None
+    file_fd = None
+    opened_file = None
+    try:
+        directory_fd = os.dup(root_fd)
+        directory_flags = os.O_RDONLY
+        directory_flags |= getattr(os, "O_CLOEXEC", 0)
+        directory_flags |= getattr(os, "O_DIRECTORY", 0)
+        directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+        for part in parts[:-1]:
+            created = False
+            try:
+                os.mkdir(part, 0o700, dir_fd=directory_fd)
+                created = True
+            except FileExistsError:
+                pass
+            entry = os.stat(part, dir_fd=directory_fd, follow_symlinks=False)
+            if created:
+                os.chmod(
+                    part,
+                    0o700,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                normalized = os.stat(
+                    part,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                if not _same_directory_identity(entry, normalized):
+                    raise MarketStoreError("seed_extract_invalid")
+                entry = normalized
+            child_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            try:
+                if not _same_directory_identity(entry, os.fstat(child_fd)):
+                    raise MarketStoreError("seed_extract_invalid")
+            except (MarketStoreError, OSError, TypeError, ValueError):
+                try:
+                    os.close(child_fd)
+                except OSError:
+                    pass
+                raise
+            previous_fd = directory_fd
+            directory_fd = child_fd
+            os.close(previous_fd)
+
+        file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        file_flags |= getattr(os, "O_CLOEXEC", 0)
+        file_flags |= getattr(os, "O_NOFOLLOW", 0)
+        file_flags |= getattr(os, "O_NONBLOCK", 0)
+        file_fd = os.open(parts[-1], file_flags, 0o600, dir_fd=directory_fd)
+        opened_file = os.fstat(file_fd)
+        if not stat.S_ISREG(opened_file.st_mode):
+            raise MarketStoreError("seed_extract_invalid")
+        os.fchmod(file_fd, 0o600)
+        opened_file = os.fstat(file_fd)
+        if not stat.S_ISREG(opened_file.st_mode) or stat.S_IMODE(opened_file.st_mode) != 0o600:
+            raise MarketStoreError("seed_extract_invalid")
+        with os.fdopen(file_fd, "wb", closefd=True) as output:
+            file_fd = None
+            with archive.open(info, "r") as source:
+                while True:
+                    block = source.read(_READ_SIZE)
+                    if not block:
+                        break
+                    digest.update(block)
+                    output.write(block)
+        final_entry = os.stat(parts[-1], dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(final_entry.st_mode) or (
+            final_entry.st_dev,
+            final_entry.st_ino,
+        ) != (opened_file.st_dev, opened_file.st_ino):
+            raise MarketStoreError("seed_extract_invalid")
+    except MarketStoreError:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError, zipfile.BadZipFile) as exc:
+        raise MarketStoreError("seed_extract_invalid") from exc
+    finally:
+        if file_fd is not None:
+            try:
+                os.close(file_fd)
+            except OSError:
+                pass
+        if directory_fd is not None:
+            primary_error = sys.exc_info()[1]
+            try:
+                os.close(directory_fd)
+            except OSError as exc:
+                if primary_error is None:
+                    raise MarketStoreError("seed_extract_invalid") from exc
+    if digest.hexdigest() != expected_hash:
+        raise MarketStoreError("zip_member_hash_mismatch")
+
+
 def _read_archive_member(archive, info, expected_hash):
     digest = hashlib.sha256()
     out = bytearray()
@@ -1073,7 +1492,14 @@ def _validate_extracted_store(root, audit_bytes, manifest):
     return receipt
 
 
-def _check_seed_review_pack_stream(source_pack):
+def _extract_validate_seed_review_pack_stream(
+    source_pack,
+    root=None,
+    *,
+    root_fd=None,
+    prepare_root=None,
+    prepare_root_before_payload=False,
+):
     try:
         archive_size = _archive_size(source_pack)
         archive_digest = _hash_open_archive(source_pack, archive_size)
@@ -1084,30 +1510,39 @@ def _check_seed_review_pack_stream(source_pack):
             infos = _validated_zip_infos(source_pack, archive, archive_size)
             if _MANIFEST_NAME not in infos:
                 raise MarketStoreError("seed_manifest_missing")
+            if prepare_root is not None and prepare_root_before_payload:
+                root, root_fd = prepare_root()
             with archive.open(infos[_MANIFEST_NAME], "r") as source:
                 manifest_bytes = source.read(_MAX_CONTROL_MEMBER_BYTES + 1)
             if len(manifest_bytes) > _MAX_CONTROL_MEMBER_BYTES:
                 raise MarketStoreError("seed_zip_limits_invalid")
             manifest = _validated_manifest(manifest_bytes, infos)
-            with tempfile.TemporaryDirectory(prefix="bybit-grid-seed-") as directory:
-                root = Path(directory) / "store"
-                root.mkdir()
-                audit_bytes = None
-                for name in sorted(manifest["members"]):
-                    expected_hash = manifest["members"][name]
-                    if name == _AUDIT_NAME:
-                        audit_bytes = _read_archive_member(archive, infos[name], expected_hash)
-                    else:
-                        _write_extracted_member(
-                            root,
-                            name,
-                            archive,
-                            infos[name],
-                            expected_hash,
-                        )
-                if audit_bytes is None:
-                    raise MarketStoreError("seed_manifest_member_set_invalid")
-                receipt = _validate_extracted_store(root, audit_bytes, manifest)
+            if prepare_root is not None and not prepare_root_before_payload:
+                root, root_fd = prepare_root()
+            audit_bytes = None
+            for name in sorted(manifest["members"]):
+                expected_hash = manifest["members"][name]
+                if name == _AUDIT_NAME:
+                    audit_bytes = _read_archive_member(archive, infos[name], expected_hash)
+                elif root_fd is None:
+                    _write_extracted_member(
+                        root,
+                        name,
+                        archive,
+                        infos[name],
+                        expected_hash,
+                    )
+                else:
+                    _write_seed_install_member(
+                        root_fd,
+                        name,
+                        archive,
+                        infos[name],
+                        expected_hash,
+                    )
+            if audit_bytes is None:
+                raise MarketStoreError("seed_manifest_member_set_invalid")
+            receipt = _validate_extracted_store(root, audit_bytes, manifest)
         if _hash_open_archive(source_pack, archive_size) != archive_digest:
             raise MarketStoreError("unsafe_seed_pack_path")
     except MarketStoreError:
@@ -1115,6 +1550,10 @@ def _check_seed_review_pack_stream(source_pack):
     except (OSError, RuntimeError, TypeError, ValueError, zipfile.BadZipFile) as exc:
         raise MarketStoreError("seed_zip_invalid") from exc
 
+    return receipt, manifest, audit_bytes
+
+
+def _seed_review_pack_result(receipt, manifest):
     return {
         "ok": True,
         "run_id": receipt.run_id,
@@ -1122,6 +1561,149 @@ def _check_seed_review_pack_stream(source_pack):
         "storage_schema_version": receipt.storage_schema_version,
         "member_count": len(manifest["members"]),
     }
+
+
+def _check_seed_review_pack_stream(source_pack):
+    temporary = None
+
+    def prepare_check_root():
+        nonlocal temporary
+        temporary = tempfile.TemporaryDirectory(prefix="bybit-grid-seed-")
+        root = Path(temporary.name) / "store"
+        root.mkdir()
+        return root, None
+
+    try:
+        try:
+            receipt, manifest, _audit_bytes = _extract_validate_seed_review_pack_stream(
+                source_pack,
+                prepare_root=prepare_check_root,
+            )
+        finally:
+            if temporary is not None:
+                temporary.cleanup()
+    except MarketStoreError:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError, zipfile.BadZipFile) as exc:
+        raise MarketStoreError("seed_zip_invalid") from exc
+    return _seed_review_pack_result(receipt, manifest)
+
+
+def _require_seed_install_stage_audit(root, audit_bytes):
+    audit = audit_market_store(root)
+    if not audit.ok:
+        raise MarketStoreError("seed_store_audit_failed")
+    if canonical_json_bytes(audit) != audit_bytes:
+        raise MarketStoreError("seed_store_audit_mismatch")
+
+
+def install_seed_review_pack(path, destination_store_root):
+    try:
+        entry_directory = Path.cwd()
+    except (OSError, ValueError) as exc:
+        raise MarketStoreError("unsafe_seed_install_destination") from exc
+    destination_text = _strict_fspath_text(
+        destination_store_root,
+        "unsafe_seed_install_destination",
+    )
+    if not destination_text or destination_text.rsplit(os.sep, 1)[-1] in {"", ".", ".."}:
+        raise MarketStoreError("unsafe_seed_install_destination")
+    requested_destination = Path(destination_text)
+    anchored_destination = (
+        requested_destination
+        if requested_destination.is_absolute()
+        else entry_directory / requested_destination
+    )
+    destination_path = _absolute_lexical_path(
+        anchored_destination,
+        "unsafe_seed_install_destination",
+    )
+    destination_name = destination_path.name
+    if destination_name in {"", ".", ".."} or destination_path == Path(destination_path.anchor):
+        raise MarketStoreError("unsafe_seed_install_destination")
+    pack_text = _strict_fspath_text(path, "unsafe_seed_pack_path")
+    requested_pack = Path(pack_text)
+    anchored_pack = (
+        requested_pack if requested_pack.is_absolute() else entry_directory / requested_pack
+    )
+    pack_path = _absolute_lexical_path(anchored_pack, "unsafe_seed_pack_path")
+    _require_regular_outer_pack(pack_path)
+
+    with _open_seed_install_parent(destination_path.parent) as (
+        parent_fd,
+        parent_identity,
+    ):
+        _require_seed_install_parent_bound(
+            destination_path.parent,
+            parent_fd,
+            parent_identity,
+        )
+        _require_seed_install_destination_absent(parent_fd, destination_name)
+        temp_name = None
+        temp_fd = None
+        published = False
+        root = None
+
+        def prepare_install_root():
+            nonlocal temp_name, temp_fd, root
+            temp_name, temp_fd = _create_seed_install_temp(parent_fd, destination_name)
+            root = Path(f"/proc/self/fd/{parent_fd}/{temp_name}")
+            return root, temp_fd
+
+        try:
+            with _open_regular_no_follow(
+                pack_path,
+                "unsafe_seed_pack_path",
+            ) as source_pack:
+                receipt, _manifest, audit_bytes = _extract_validate_seed_review_pack_stream(
+                    source_pack,
+                    prepare_root=prepare_install_root,
+                    prepare_root_before_payload=True,
+                )
+
+            if not _directory_entry_matches_descriptor(parent_fd, temp_name, temp_fd):
+                raise MarketStoreError("seed_install_temp_unsafe")
+            _normalize_seed_install_tree(temp_fd)
+            if not _directory_entry_matches_descriptor(parent_fd, temp_name, temp_fd):
+                raise MarketStoreError("seed_install_temp_unsafe")
+            _require_seed_install_stage_audit(root, audit_bytes)
+            if not _directory_entry_matches_descriptor(parent_fd, temp_name, temp_fd):
+                raise MarketStoreError("seed_install_temp_unsafe")
+            _require_seed_install_parent_bound(
+                destination_path.parent,
+                parent_fd,
+                parent_identity,
+            )
+            _require_seed_install_destination_absent(parent_fd, destination_name)
+            try:
+                _rename_seed_install_noreplace(
+                    parent_fd,
+                    temp_name,
+                    destination_name,
+                )
+            except MarketStoreError:
+                raise
+            except (OSError, TypeError, ValueError) as exc:
+                raise MarketStoreError("seed_install_publish_invalid") from exc
+            published = True
+        finally:
+            primary_error = sys.exc_info()[1]
+            cleanup_error = None
+            if not published and temp_fd is not None and temp_name is not None:
+                try:
+                    _cleanup_seed_install_temp(parent_fd, temp_name, temp_fd)
+                except MarketStoreError as exc:
+                    cleanup_error = exc
+            if temp_fd is not None:
+                try:
+                    os.close(temp_fd)
+                except OSError:
+                    pass
+            if cleanup_error is not None:
+                if primary_error is not None:
+                    raise cleanup_error from primary_error
+                raise cleanup_error
+        return receipt
 
 
 def check_seed_review_pack(path):
