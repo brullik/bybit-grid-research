@@ -1993,9 +1993,14 @@ def test_prepared_capability_repr_never_exposes_snapshot_credentials():
     assert client.validate_grid_bot(_payload())["retCode"] == 0
     assert len(prepared_values) == 2
     for prepared in prepared_values:
-        prepared_fields = {field.name: field for field in fields(prepared)}
-        assert prepared_fields["api_key"].repr is False
-        assert prepared_fields["api_secret"].repr is False
+        credential_fields = {
+            getattr(prepared, field.name): field
+            for field in fields(prepared)
+            if getattr(prepared, field.name) in {secret_key, secret_value}
+        }
+        assert set(credential_fields) == {secret_key, secret_value}
+        assert credential_fields[secret_key].repr is False
+        assert credential_fields[secret_value].repr is False
         prepared_repr = repr(prepared)
         assert secret_key not in prepared_repr
         assert secret_value not in prepared_repr
@@ -2057,12 +2062,15 @@ def test_universe_purge_runs_only_after_settings_policy_preflight(monkeypatch):
         events.append("purge")
 
     settings_for_purge = settings
+    policy_bindings = [
+        name
+        for name, value in vars(universe_api).items()
+        if value is api.enforce_validate_only_settings
+    ]
+    assert policy_bindings
     monkeypatch.setattr(universe_api, "load_settings", load_settings_for_purge)
-    monkeypatch.setattr(
-        universe_api,
-        "_enforce_validate_only_settings",
-        policy_preflight_for_purge,
-    )
+    for binding in policy_bindings:
+        monkeypatch.setattr(universe_api, binding, policy_preflight_for_purge)
     monkeypatch.setattr(universe_api, "purge_skipped_constraints", purge_after_preflight)
     monkeypatch.setattr(
         sys,
@@ -2181,13 +2189,28 @@ def test_retry_rejects_prepared_object_mutation_against_external_fingerprint(mon
 
     def get_with_prepared_mutation(prepared):
         captured_get.append(prepared)
+        initial_query = "category=linear&symbol=BTCUSDT"
+        initial_target = f"/v5/account/fee-rate?{initial_query}"
+        query_fields = [
+            field.name
+            for field in fields(prepared)
+            if getattr(prepared, field.name) == initial_query
+        ]
+        target_fields = [
+            field.name
+            for field in fields(prepared)
+            if getattr(prepared, field.name) == initial_target
+        ]
+        assert len(query_fields) == 1
+        assert len(target_fields) == 1
 
         def mutate_get_prepared():
-            object.__setattr__(prepared, "query_string", "category=linear&symbol=ETHUSDT")
+            changed_query = "category=linear&symbol=ETHUSDT"
+            object.__setattr__(prepared, query_fields[0], changed_query)
             object.__setattr__(
                 prepared,
-                "request_target",
-                "/v5/account/fee-rate?category=linear&symbol=ETHUSDT",
+                target_fields[0],
+                f"/v5/account/fee-rate?{changed_query}",
             )
 
         get_http.on_first = mutate_get_prepared
@@ -2224,12 +2247,19 @@ def test_retry_rejects_prepared_object_mutation_against_external_fingerprint(mon
 
     def post_with_prepared_mutation(prepared):
         captured_post.append(prepared)
+        initial_body = json.dumps(_payload(), separators=(",", ":"), ensure_ascii=False)
+        body_fields = [
+            field.name
+            for field in fields(prepared)
+            if getattr(prepared, field.name) == initial_body
+        ]
+        assert len(body_fields) == 1
 
         def mutate_post_prepared():
             changed_payload = {**_payload(), "symbol": "ETHUSDT"}
             object.__setattr__(
                 prepared,
-                "json_body",
+                body_fields[0],
                 json.dumps(changed_payload, separators=(",", ":"), ensure_ascii=False),
             )
 
