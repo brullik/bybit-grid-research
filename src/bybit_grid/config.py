@@ -37,3 +37,4 @@ class Settings(BaseSettings):
 
 def load_settings() -> Settings:
     return Settings()
+# RED probe only: no behavior
