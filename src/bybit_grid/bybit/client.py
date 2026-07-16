@@ -216,3 +216,4 @@ class BybitClient:
     def close_grid_bot(self, *a, **k):
         self.settings.assert_live_trading_allowed(k.get("runtime_live", False))
         raise NotImplementedError("Live grid bot close is forbidden in Sprint 01.5")
+# RED probe only: no behavior
