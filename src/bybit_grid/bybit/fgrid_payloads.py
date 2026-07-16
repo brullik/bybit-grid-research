@@ -70,3 +70,4 @@ def build_fgrid_validate_payload(
         "init_margin": _format_decimal(_decimal(init_margin)),
         "stop_loss_price": _format_decimal(stop_loss_price),
     }
+# RED probe only: no behavior
