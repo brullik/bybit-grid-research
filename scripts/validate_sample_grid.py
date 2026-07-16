@@ -7,8 +7,13 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bybit_grid.bybit.client import BybitClient
-from bybit_grid.bybit.models import BybitAPIError
 from bybit_grid.bybit.fgrid_payloads import build_fgrid_validate_payload
+from bybit_grid.bybit.models import BybitAPIError
+from bybit_grid.bybit.validate_only import (
+    CANONICAL_FGRID_VALIDATE_ENDPOINT,
+    ValidateOnlyBoundaryError,
+    enforce_validate_only_settings,
+)
 from bybit_grid.config import load_settings
 from bybit_grid.logging import redacted_json_dump
 from bybit_grid.reporting import utc_now_iso, write_sprint_report
@@ -73,6 +78,7 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = load_settings()
+    enforce_validate_only_settings(settings=settings)
     started_at = utc_now_iso()
     payload_path = settings.data_dir / "metadata" / "grid_validate_payload_redacted.json"
     response_path = settings.data_dir / "metadata" / "grid_validate_response_redacted.json"
@@ -113,8 +119,10 @@ def main() -> int:
                 error_summary = reason
             else:
                 with BybitClient(settings) as client:
-                    response = client.private_post(settings.bybit_fgrid_validate_path, payload)
+                    response = client.validate_grid_bot(payload)
         _write_json(response_path, response)
+    except ValidateOnlyBoundaryError:
+        raise
     except Exception as exc:
         status = "error"
         error_summary = str(exc)
@@ -135,7 +143,7 @@ def main() -> int:
             "status": status,
             "symbol": args.symbol,
             "payload_mode": payload_mode,
-            "validate_endpoint": settings.bybit_fgrid_validate_path,
+            "validate_endpoint": CANONICAL_FGRID_VALIDATE_ENDPOINT,
             "retCode": response.get("retCode"),
             "retMsg": response.get("retMsg"),
             "check_code": response.get("result", {}).get("checkCode") if isinstance(response.get("result"), dict) else None,
