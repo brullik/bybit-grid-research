@@ -36,6 +36,7 @@ _INACTIVE_TASK_ID = "NO_ACTIVE_IMPLEMENTATION"
 _TASK_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _MODE_LABELS = frozenset({"pm-task-definition", "pm-control-plane", "pm-frozen-erratum"})
 _ERRATUM_SCHEMA = "pm_frozen_erratum_v1"
+_ERRATUM_V2_SCHEMA = "pm_frozen_erratum_v2"
 _ERRATUM_PREFIX = "pm_acceptance/errata/"
 _ERRATUM_KEYS = frozenset({
     "base_sha256",
@@ -49,6 +50,11 @@ _ERRATUM_KEYS = frozenset({
     "schema",
     "task_id",
     "test_path",
+})
+_ERRATUM_V2_KEYS = frozenset({
+    *_ERRATUM_KEYS,
+    "predecessor_commit_sha",
+    "predecessor_manifest_sha256",
 })
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -132,6 +138,23 @@ class FrozenErratumManifest:
     head_sha256: str
     head_active_task_sha256: str
     historical_active_task_commit_sha: str
+    reason_code: str
+    expected_red_failed_node_ids: tuple[str, ...]
+    expected_red_passed_node_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FrozenErratumV2Manifest:
+    schema: str
+    task_id: str
+    issue_number: int
+    test_path: str
+    base_sha256: str
+    head_sha256: str
+    head_active_task_sha256: str
+    historical_active_task_commit_sha: str
+    predecessor_commit_sha: str
+    predecessor_manifest_sha256: str
     reason_code: str
     expected_red_failed_node_ids: tuple[str, ...]
     expected_red_passed_node_ids: tuple[str, ...]
@@ -325,6 +348,95 @@ def parse_frozen_erratum_manifest_bytes(data: bytes) -> FrozenErratumManifest:
         head_sha256=obj["head_sha256"],
         head_active_task_sha256=obj["head_active_task_sha256"],
         historical_active_task_commit_sha=historical_active_task_commit_sha,
+        reason_code=reason_code,
+        expected_red_failed_node_ids=failed,
+        expected_red_passed_node_ids=passed,
+    )
+
+
+def parse_frozen_erratum_v2_manifest_bytes(data: bytes) -> FrozenErratumV2Manifest:
+    """Parse the single, audit-chained second erratum manifest."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("utf8_bom")
+    text = data.decode("utf-8", "strict")
+    obj = json.loads(
+        text,
+        object_pairs_hook=_pairs_hook,
+        parse_float=_reject_float,
+        parse_constant=_reject_constant,
+    )
+    if not isinstance(obj, dict):
+        raise ValueError("erratum_v2_not_object")
+    if set(obj) != _ERRATUM_V2_KEYS:
+        unknown = sorted(set(obj) - _ERRATUM_V2_KEYS)
+        missing = sorted(_ERRATUM_V2_KEYS - set(obj))
+        raise ValueError(
+            f"invalid_erratum_v2_keys:missing={','.join(missing)}:unknown={','.join(unknown)}"
+        )
+    if not isinstance(obj["schema"], str) or obj["schema"] != _ERRATUM_V2_SCHEMA:
+        raise ValueError("invalid_erratum_v2_schema")
+    task_id = obj["task_id"]
+    if (
+        not isinstance(task_id, str)
+        or task_id == _INACTIVE_TASK_ID
+        or not _TASK_ID_RE.fullmatch(task_id)
+    ):
+        raise ValueError("invalid_erratum_v2_task_id")
+    issue_number = obj["issue_number"]
+    if type(issue_number) is not int or issue_number <= 0:
+        raise ValueError("invalid_erratum_v2_issue_number")
+    test_path = obj["test_path"]
+    if (
+        not isinstance(test_path, str)
+        or _path_error(test_path) is not None
+        or not _erratum_test_path(task_id, test_path)
+    ):
+        raise ValueError("invalid_erratum_v2_test_path")
+    for key in (
+        "base_sha256",
+        "head_sha256",
+        "head_active_task_sha256",
+        "predecessor_manifest_sha256",
+    ):
+        if not isinstance(obj[key], str) or not _SHA256_RE.fullmatch(obj[key]):
+            raise ValueError(f"invalid_erratum_v2_{key}")
+    if obj["base_sha256"] == obj["head_sha256"]:
+        raise ValueError("unchanged_erratum_v2_test_sha256")
+    for key in ("historical_active_task_commit_sha", "predecessor_commit_sha"):
+        if not isinstance(obj[key], str) or not _COMMIT_SHA_RE.fullmatch(obj[key]):
+            raise ValueError(f"invalid_erratum_v2_{key}")
+    reason_code = obj["reason_code"]
+    if not isinstance(reason_code, str) or not _REASON_CODE_RE.fullmatch(reason_code):
+        raise ValueError("invalid_erratum_v2_reason_code")
+    failed = _erratum_node_ids(
+        "expected_red_failed_node_ids",
+        obj["expected_red_failed_node_ids"],
+        test_path,
+    )
+    passed = _erratum_node_ids(
+        "expected_red_passed_node_ids",
+        obj["expected_red_passed_node_ids"],
+        test_path,
+    )
+    if not failed:
+        raise ValueError("expected_red_failed_node_ids_empty")
+    overlap = sorted(set(failed) & set(passed))
+    if overlap:
+        raise ValueError(f"red_node_id_outcome_overlap:{overlap[0]}")
+    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if data != canonical:
+        raise ValueError("noncanonical_erratum_v2_bytes")
+    return FrozenErratumV2Manifest(
+        schema=obj["schema"],
+        task_id=task_id,
+        issue_number=issue_number,
+        test_path=test_path,
+        base_sha256=obj["base_sha256"],
+        head_sha256=obj["head_sha256"],
+        head_active_task_sha256=obj["head_active_task_sha256"],
+        historical_active_task_commit_sha=obj["historical_active_task_commit_sha"],
+        predecessor_commit_sha=obj["predecessor_commit_sha"],
+        predecessor_manifest_sha256=obj["predecessor_manifest_sha256"],
         reason_code=reason_code,
         expected_red_failed_node_ids=failed,
         expected_red_passed_node_ids=passed,
@@ -624,6 +736,10 @@ def _erratum_manifest_path(task_id: str) -> str:
     return f"{_ERRATUM_PREFIX}{task_id}.json"
 
 
+def _erratum_v2_manifest_path(task_id: str) -> str:
+    return f"{_ERRATUM_PREFIX}{task_id}.v2.json"
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -846,6 +962,190 @@ def frozen_erratum_transition_errors(
     return tuple(sorted(errors))
 
 
+def frozen_erratum_v2_transition_errors(
+    base_sha: str,
+    head_sha: str,
+    base_task: ActiveTask,
+    head_task: ActiveTask,
+    changed_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Validate the one-and-only second repair, chained to the immutable v1 repair."""
+    errors = _changed_path_errors(changed_paths)
+    valid = [p for p in changed_paths if isinstance(p, str) and _path_error(p) is None]
+    if base_task.task_id != _INACTIVE_TASK_ID:
+        errors.append(f"erratum_v2_base_task_not_inactive:{base_task.task_id}")
+    errors.extend(_active_erratum_task_errors(head_task))
+    if head_task.task_id == _INACTIVE_TASK_ID or not _TASK_ID_RE.fullmatch(head_task.task_id):
+        return tuple(sorted(errors))
+
+    predecessor_path = _erratum_manifest_path(head_task.task_id)
+    manifest_path = _erratum_v2_manifest_path(head_task.task_id)
+    expected_fixed_paths = {_TASK_FILE, manifest_path}
+    if len(valid) != 3:
+        errors.append(f"frozen_erratum_v2_changed_path_count:{len(valid)}")
+    if _TASK_FILE not in valid:
+        errors.append("active_task_file_not_changed")
+    if manifest_path not in valid:
+        errors.append(f"erratum_v2_manifest_path_missing:{manifest_path}")
+    for path in valid:
+        task_test = _erratum_test_path(head_task.task_id, path)
+        if path not in expected_fixed_paths and not task_test:
+            errors.append(f"pm_frozen_erratum_v2_out_of_scope:{path}")
+
+    task_root = f"pm_acceptance/tasks/{head_task.task_id}"
+    if not git_object_exists(base_sha, task_root):
+        errors.append(f"erratum_v2_base_task_missing:{head_task.task_id}")
+    if not git_object_exists(base_sha, _task_contract_path(head_task.task_id)):
+        errors.append(f"erratum_v2_base_contract_missing:{head_task.task_id}")
+    if not git_object_exists(base_sha, predecessor_path):
+        errors.append(f"erratum_v2_predecessor_manifest_missing:{predecessor_path}")
+        return tuple(sorted(errors))
+    if git_object_exists(base_sha, manifest_path):
+        errors.append(f"erratum_v2_manifest_already_exists:{manifest_path}")
+    if not git_object_exists(head_sha, manifest_path):
+        errors.append(f"head_erratum_v2_manifest_missing:{manifest_path}")
+        return tuple(sorted(errors))
+
+    try:
+        predecessor_bytes = git_blob_from_ref(base_sha, predecessor_path)
+        predecessor = parse_frozen_erratum_manifest_bytes(predecessor_bytes)
+    except (RuntimeError, UnicodeDecodeError, ValueError) as exc:
+        errors.append(f"erratum_v2_predecessor_manifest_unreadable:{type(exc).__name__}")
+        return tuple(sorted(errors))
+    try:
+        manifest_bytes = git_blob_from_ref(head_sha, manifest_path)
+        manifest = parse_frozen_erratum_v2_manifest_bytes(manifest_bytes)
+    except (RuntimeError, UnicodeDecodeError, ValueError) as exc:
+        errors.append(str(exc))
+        return tuple(sorted(errors))
+
+    if manifest.task_id != head_task.task_id:
+        errors.append(f"erratum_v2_task_id_mismatch:{manifest.task_id}")
+    if predecessor.task_id != head_task.task_id:
+        errors.append(f"erratum_v2_predecessor_task_id_mismatch:{predecessor.task_id}")
+    if predecessor.test_path != manifest.test_path:
+        errors.append("erratum_v2_predecessor_test_path_mismatch")
+    if predecessor.issue_number != manifest.issue_number:
+        errors.append("erratum_v2_predecessor_issue_number_mismatch")
+    if manifest.predecessor_manifest_sha256 != _sha256(predecessor_bytes):
+        errors.append("erratum_v2_predecessor_manifest_sha256_mismatch")
+    if predecessor.head_sha256 != manifest.base_sha256:
+        errors.append("erratum_v2_predecessor_test_sha256_mismatch")
+    if predecessor.head_active_task_sha256 != manifest.head_active_task_sha256:
+        errors.append("erratum_v2_predecessor_active_task_sha256_mismatch")
+    if (
+        predecessor.historical_active_task_commit_sha
+        != manifest.historical_active_task_commit_sha
+    ):
+        errors.append("erratum_v2_historical_active_task_commit_mismatch")
+    if manifest.head_active_task_sha256 != _sha256(_task_bytes_for_hash(head_task)):
+        errors.append("head_active_task_sha256_mismatch")
+
+    try:
+        predecessor_is_ancestor = git_is_ancestor(manifest.predecessor_commit_sha, base_sha)
+    except (RuntimeError, ValueError) as exc:
+        errors.append(str(exc))
+        predecessor_is_ancestor = False
+    if not predecessor_is_ancestor:
+        errors.append("erratum_v2_predecessor_commit_not_ancestor")
+    else:
+        try:
+            commit_manifest_bytes = git_blob_from_ref(
+                manifest.predecessor_commit_sha,
+                predecessor_path,
+            )
+            commit_test_bytes = git_blob_from_ref(
+                manifest.predecessor_commit_sha,
+                manifest.test_path,
+            )
+            commit_task_bytes = git_blob_from_ref(
+                manifest.predecessor_commit_sha,
+                _TASK_FILE,
+            )
+            parse_active_task_bytes(commit_task_bytes)
+        except (RuntimeError, UnicodeDecodeError, ValueError) as exc:
+            errors.append(f"erratum_v2_predecessor_commit_unreadable:{type(exc).__name__}")
+        else:
+            if commit_manifest_bytes != predecessor_bytes:
+                errors.append("erratum_v2_predecessor_manifest_bytes_mismatch")
+            if _sha256(commit_test_bytes) != manifest.base_sha256:
+                errors.append("erratum_v2_predecessor_commit_test_sha256_mismatch")
+            try:
+                head_task_bytes = git_blob_from_ref(head_sha, _TASK_FILE)
+            except RuntimeError:
+                errors.append("head_active_task_unreadable")
+            else:
+                if commit_task_bytes != head_task_bytes:
+                    errors.append("erratum_v2_predecessor_active_task_bytes_mismatch")
+
+    try:
+        historical_is_ancestor = git_is_ancestor(
+            manifest.historical_active_task_commit_sha,
+            manifest.predecessor_commit_sha,
+        )
+    except (RuntimeError, ValueError) as exc:
+        errors.append(str(exc))
+        historical_is_ancestor = False
+    if not historical_is_ancestor:
+        errors.append("historical_active_task_commit_not_predecessor_ancestor")
+    else:
+        try:
+            historical_task_bytes = git_blob_from_ref(
+                manifest.historical_active_task_commit_sha,
+                _TASK_FILE,
+            )
+            head_task_bytes = git_blob_from_ref(head_sha, _TASK_FILE)
+            parse_active_task_bytes(historical_task_bytes)
+        except (RuntimeError, UnicodeDecodeError, ValueError) as exc:
+            errors.append(f"historical_active_task_unreadable:{type(exc).__name__}")
+        else:
+            if historical_task_bytes != head_task_bytes:
+                errors.append("historical_active_task_bytes_mismatch")
+
+    test_paths = [path for path in valid if _erratum_test_path(head_task.task_id, path)]
+    if test_paths != [manifest.test_path]:
+        errors.append("erratum_v2_test_path_scope_mismatch")
+    if not git_object_exists(base_sha, manifest.test_path):
+        errors.append(f"base_erratum_v2_test_missing:{manifest.test_path}")
+        return tuple(sorted(errors))
+    if not git_object_exists(head_sha, manifest.test_path):
+        errors.append(f"head_erratum_v2_test_missing:{manifest.test_path}")
+        return tuple(sorted(errors))
+
+    try:
+        base_test = git_blob_from_ref(base_sha, manifest.test_path)
+        head_test = git_blob_from_ref(head_sha, manifest.test_path)
+        base_functions, _ = _inspect_frozen_test(base_test)
+        head_functions, unsafe = _inspect_frozen_test(head_test)
+    except (RuntimeError, SyntaxError, UnicodeDecodeError) as exc:
+        errors.append(f"erratum_v2_test_unreadable:{type(exc).__name__}")
+        return tuple(sorted(errors))
+    if _sha256(base_test) != manifest.base_sha256:
+        errors.append("base_erratum_v2_test_sha256_mismatch")
+    if _sha256(head_test) != manifest.head_sha256:
+        errors.append("head_erratum_v2_test_sha256_mismatch")
+    if base_functions != head_functions:
+        errors.append("frozen_test_function_ast_changed")
+    if not head_functions:
+        errors.append("frozen_test_functions_missing")
+    errors.extend(f"unsafe_frozen_test_pattern:{kind}" for kind in unsafe)
+
+    expected_node_ids = (
+        *manifest.expected_red_failed_node_ids,
+        *manifest.expected_red_passed_node_ids,
+    )
+    declared_test_names = {
+        node_id.rsplit("::", 1)[-1].split("[", 1)[0]
+        for node_id in expected_node_ids
+    }
+    actual_test_names = {qualified.rsplit(".", 1)[-1] for qualified, _dump in head_functions}
+    unknown_names = sorted(declared_test_names - actual_test_names)
+    missing_names = sorted(actual_test_names - declared_test_names)
+    errors.extend(f"unknown_erratum_red_test:{name}" for name in unknown_names)
+    errors.extend(f"missing_erratum_red_test:{name}" for name in missing_names)
+    return tuple(sorted(errors))
+
+
 def _task_bytes_for_hash(task: ActiveTask) -> bytes:
     obj = {
         "allowed_paths": list(task.allowed_paths),
@@ -951,13 +1251,23 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(len(changed), transition_errors, mode, head_task.task_id)
         if mode == "pm-frozen-erratum":
             head_task = parse_active_task_bytes(git_blob_from_ref(args.head_sha, _TASK_FILE))
-            erratum_errors = frozen_erratum_transition_errors(
-                args.base_sha,
-                args.head_sha,
-                task,
-                head_task,
-                changed,
-            )
+            v2_manifest_path = _erratum_v2_manifest_path(head_task.task_id)
+            if v2_manifest_path in changed:
+                erratum_errors = frozen_erratum_v2_transition_errors(
+                    args.base_sha,
+                    args.head_sha,
+                    task,
+                    head_task,
+                    changed,
+                )
+            else:
+                erratum_errors = frozen_erratum_transition_errors(
+                    args.base_sha,
+                    args.head_sha,
+                    task,
+                    head_task,
+                    changed,
+                )
             return _emit(len(changed), erratum_errors, mode, head_task.task_id)
         return _emit(len(changed), (), mode, task.task_id)
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as exc:
