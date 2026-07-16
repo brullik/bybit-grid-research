@@ -4,6 +4,7 @@ import ast
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from decimal import Decimal
 import importlib
+import importlib.util
 import inspect
 import json
 from pathlib import Path
@@ -86,6 +87,17 @@ def _audit_api():
 
 def _config_api():
     return importlib.import_module("bybit_grid.config")
+
+
+def _repo_script_api(module_name: str, relative_path: str):
+    path = (Path.cwd() / relative_path).resolve(strict=True)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could_not_load_repo_script:{relative_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _payload() -> dict[str, object]:
@@ -2046,7 +2058,10 @@ def test_source_audit_rejects_unreachable_sample_and_universe_policy_preflights(
 
 def test_universe_purge_runs_only_after_settings_policy_preflight(monkeypatch):
     api = _api()
-    universe_api = importlib.import_module("scripts.validate_universe_fgrid_constraints")
+    universe_api = _repo_script_api(
+        "_pm_validate_universe_fgrid_constraints",
+        "scripts/validate_universe_fgrid_constraints.py",
+    )
     settings = _settings()
     events: list[str] = []
 
