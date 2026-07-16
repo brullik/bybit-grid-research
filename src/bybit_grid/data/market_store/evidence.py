@@ -1129,3 +1129,4 @@ def check_seed_review_pack(path):
     _require_regular_outer_pack(pack_path)
     with _open_regular_no_follow(pack_path, "unsafe_seed_pack_path") as source_pack:
         return _check_seed_review_pack_stream(source_pack)
+# Mandatory post-erratum RED probe: production behavior intentionally unchanged.
