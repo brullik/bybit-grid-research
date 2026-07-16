@@ -276,6 +276,10 @@ but both dataclass fields have `repr=False`; neither credential value may appear
 prepared GET or validate object. The capability is not retained beyond its one public call by an
 issuance registry.
 
+Internal prepared-field names and issuance-record names are not prescribed. The requirements are
+defined by the issued values, exact external snapshot comparison, credential-safe representation,
+client binding, retry lifetime, and cleanup behavior rather than any private identifier spelling.
+
 Validate issuance likewise retains and checks an external exact reference snapshot on every
 attempt. Mutating the frozen object's JSON body to a different but otherwise valid payload between
 retry attempts is `validate_prepared_request_invalid` before signing, rate limiting, or HTTP. The
@@ -302,6 +306,9 @@ construction, `BybitClient`, or dynamic public requests, `main` calls the captur
 guard. Its first handler for a `try` containing `validate_grid_bot` is an explicit
 `except ValidateOnlyBoundaryError: raise`; a broad handler may report other failures but must not
 convert or swallow a boundary refusal.
+
+The module-local name used to capture the original policy guard is not prescribed; whichever
+binding is used must still reference the original exact guard object and obey the ordering above.
 
 For non-dry-run operation, `validate_universe_fgrid_constraints.py` loads one authority settings
 object and executes the captured exact settings/origin-value policy preflight before its explicit
