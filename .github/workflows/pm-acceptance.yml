@@ -96,7 +96,7 @@ jobs:
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
-          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane"}, mode; print(mode)')
+          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum"}, mode; print(mode)')
           task_id=$(JSON_PAYLOAD="$json" python -c 'import json, os; task_id=json.loads(os.environ["JSON_PAYLOAD"]).get("task_id"); assert isinstance(task_id, str) and task_id; print(task_id)')
           printf 'pr_mode=%s\n' "$pr_mode" >> "$GITHUB_OUTPUT"
           printf 'task_id=%s\n' "$task_id" >> "$GITHUB_OUTPUT"
@@ -151,21 +151,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .[dev]
       - name: Run base isolated acceptance harness
-        if: needs.protected-paths.outputs.pr-mode != 'pm-task-definition'
+        if: needs.protected-paths.outputs.pr-mode != 'pm-task-definition' && needs.protected-paths.outputs.pr-mode != 'pm-frozen-erratum'
         working-directory: ${{ runner.temp }}
         env:
-          PYTHONPATH: ${{ runner.temp }}
+          PYTHONPATH: ${{ runner.temp }}:${{ github.workspace }}/base
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
           python -m pytest pm_acceptance -q \
             -c "$RUNNER_TEMP/pytest.ini" \
             --confcutdir="$RUNNER_TEMP/pm_acceptance"
-      - name: Run base control-plane self-tests for task-definition PRs
-        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition'
+      - name: Run base control-plane self-tests for task-definition and frozen-erratum PRs
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition' || needs.protected-paths.outputs.pr-mode == 'pm-frozen-erratum'
         working-directory: ${{ runner.temp }}
         env:
-          PYTHONPATH: ${{ runner.temp }}
+          PYTHONPATH: ${{ runner.temp }}:${{ github.workspace }}/base
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
@@ -219,6 +219,332 @@ jobs:
           python -m pytest "$task_path" --collect-only -q \
             -c "$HEAD_ACCEPTANCE_TEMP/pytest.ini" \
             --confcutdir="$task_path"
+      - name: Stage SHA-pinned head frozen erratum
+        id: erratum-stage
+        if: needs.protected-paths.outputs.pr-mode == 'pm-frozen-erratum'
+        env:
+          ERRATUM_TEMP: ${{ runner.temp }}/head_frozen_erratum
+          TASK_ID: ${{ needs.protected-paths.outputs.task-id }}
+        run: |
+          rm -rf "$ERRATUM_TEMP"
+          ERRATUM_TEMP="$ERRATUM_TEMP" TASK_ID="$TASK_ID" python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import shutil
+
+          def reject_constant(value: str) -> None:
+              raise ValueError(f"invalid_json_constant:{value}")
+
+          def reject_float(value: str) -> None:
+              raise ValueError(f"float_token:{value}")
+
+          def pairs_hook(pairs: list[tuple[str, object]]) -> dict[str, object]:
+              result: dict[str, object] = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(f"duplicate_json_key:{key}")
+                  result[key] = value
+              return result
+
+          task_id = os.environ["TASK_ID"]
+          if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?", task_id) is None:
+              raise SystemExit("invalid_erratum_task_id")
+          manifest_path = Path("head/pm_acceptance/errata") / f"{task_id}.json"
+          raw = manifest_path.read_bytes()
+          if raw.startswith(b"\xef\xbb\xbf"):
+              raise SystemExit("erratum_manifest_utf8_bom")
+          try:
+              manifest = json.loads(
+                  raw.decode("utf-8", "strict"),
+                  object_pairs_hook=pairs_hook,
+                  parse_float=reject_float,
+                  parse_constant=reject_constant,
+              )
+          except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+              raise SystemExit(f"invalid_erratum_manifest:{exc}") from exc
+          if not isinstance(manifest, dict):
+              raise SystemExit("erratum_manifest_not_object")
+          expected_keys = {
+              "base_sha256",
+              "expected_red_failed_node_ids",
+              "expected_red_passed_node_ids",
+              "head_active_task_sha256",
+              "head_sha256",
+              "historical_active_task_commit_sha",
+              "issue_number",
+              "reason_code",
+              "schema",
+              "task_id",
+              "test_path",
+          }
+          if set(manifest) != expected_keys:
+              raise SystemExit("invalid_erratum_manifest_keys")
+          canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+          if raw != canonical:
+              raise SystemExit("noncanonical_erratum_manifest_bytes")
+          if manifest["schema"] != "pm_frozen_erratum_v1" or manifest["task_id"] != task_id:
+              raise SystemExit("erratum_manifest_identity_mismatch")
+          historical_commit = manifest["historical_active_task_commit_sha"]
+          if not isinstance(historical_commit, str) or re.fullmatch(r"[0-9a-f]{40}", historical_commit) is None:
+              raise SystemExit("invalid_erratum_historical_active_task_commit_sha")
+          test_path_text = manifest["test_path"]
+          if not isinstance(test_path_text, str):
+              raise SystemExit("invalid_erratum_test_path")
+          test_path = PurePosixPath(test_path_text)
+          expected_parent = PurePosixPath("pm_acceptance/tasks") / task_id
+          if (
+              test_path.parent != expected_parent
+              or not test_path.name.startswith("test_")
+              or test_path.suffix != ".py"
+              or test_path.is_absolute()
+              or ".." in test_path.parts
+              or test_path.as_posix() != test_path_text
+              or "\\" in test_path_text
+              or any(ord(character) < 32 or ord(character) == 127 for character in test_path_text)
+          ):
+              raise SystemExit("invalid_erratum_test_path")
+          base_source = Path("base") / Path(*test_path.parts)
+          head_source = Path("head") / Path(*test_path.parts)
+          base_digest = hashlib.sha256(base_source.read_bytes()).hexdigest()
+          head_digest = hashlib.sha256(head_source.read_bytes()).hexdigest()
+          if base_digest != manifest["base_sha256"]:
+              raise SystemExit("erratum_base_sha256_mismatch")
+          if head_digest != manifest["head_sha256"]:
+              raise SystemExit("erratum_head_sha256_mismatch")
+          active_task_digest = hashlib.sha256(
+              Path("head/pm_acceptance/active_task.json").read_bytes()
+          ).hexdigest()
+          if active_task_digest != manifest["head_active_task_sha256"]:
+              raise SystemExit("erratum_head_active_task_sha256_mismatch")
+          destination_root = Path(os.environ["ERRATUM_TEMP"])
+          destination_base_test = destination_root / "base_suite" / Path(*test_path.parts)
+          destination_head_test = destination_root / "head_suite" / Path(*test_path.parts)
+          destination_manifest = destination_root / "pm_acceptance/errata" / f"{task_id}.json"
+          destination_base_test.parent.mkdir(parents=True)
+          destination_head_test.parent.mkdir(parents=True)
+          destination_manifest.parent.mkdir(parents=True)
+          shutil.copyfile(base_source, destination_base_test)
+          shutil.copyfile(head_source, destination_head_test)
+          shutil.copyfile(manifest_path, destination_manifest)
+          (destination_root / "base_suite/pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+          (destination_root / "head_suite/pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as stream:
+              stream.write(f"test_path={test_path.as_posix()}\n")
+          PY
+      - name: Run corrected head erratum and verify exact RED manifest
+        if: needs.protected-paths.outputs.pr-mode == 'pm-frozen-erratum'
+        working-directory: ${{ runner.temp }}/head_frozen_erratum
+        env:
+          ERRATUM_MANIFEST: pm_acceptance/errata/${{ needs.protected-paths.outputs.task-id }}.json
+          ERRATUM_TEST_PATH: ${{ steps.erratum-stage.outputs.test_path }}
+          TRUSTED_BASE: ${{ github.workspace }}/base
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+
+          CHILD = r'''
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          import pytest
+
+
+          class ExactOutcomes:
+              def __init__(self) -> None:
+                  self.collected: list[str] = []
+                  self.passed: list[str] = []
+                  self.failed: list[str] = []
+                  self.forbidden: list[str] = []
+                  self.call_node_ids: set[str] = set()
+
+              def pytest_collection_finish(self, session: pytest.Session) -> None:
+                  self.collected = [item.nodeid for item in session.items]
+                  if len(set(self.collected)) != len(self.collected):
+                      self.forbidden.append("duplicate-collected-node-id")
+
+              def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+                  if report.failed or report.skipped:
+                      self.forbidden.append(f"collect-{report.outcome}:{report.nodeid}")
+
+              def pytest_deselected(self, items: list[pytest.Item]) -> None:
+                  self.forbidden.extend(f"deselected:{item.nodeid}" for item in items)
+
+              def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+                  if getattr(report, "wasxfail", None) is not None:
+                      self.forbidden.append(f"xfail-or-xpass:{report.nodeid}:{report.when}")
+                  if report.when != "call":
+                      if report.failed or report.skipped:
+                          self.forbidden.append(f"{report.when}-{report.outcome}:{report.nodeid}")
+                      return
+                  if report.nodeid in self.call_node_ids:
+                      self.forbidden.append(f"duplicate-call:{report.nodeid}")
+                      return
+                  self.call_node_ids.add(report.nodeid)
+                  if report.passed:
+                      self.passed.append(report.nodeid)
+                  elif report.failed:
+                      self.failed.append(report.nodeid)
+                  else:
+                      self.forbidden.append(f"call-{report.outcome}:{report.nodeid}")
+
+
+          mode = os.environ["EXACT_MODE"]
+          test_path = os.environ["EXACT_TEST_PATH"]
+          arguments = [
+              test_path,
+              "-q",
+              "-c",
+              str(Path.cwd() / "pytest.ini"),
+              f"--confcutdir={Path.cwd() / 'pm_acceptance'}",
+          ]
+          if mode == "collect":
+              arguments.append("--collect-only")
+          elif mode != "execute":
+              raise SystemExit("invalid_exact_mode")
+          outcomes = ExactOutcomes()
+          exit_code = pytest.main(arguments, plugins=[outcomes])
+          payload = {
+              "collected": outcomes.collected,
+              "exit_code": int(exit_code),
+              "failed": outcomes.failed,
+              "forbidden": outcomes.forbidden,
+              "passed": outcomes.passed,
+          }
+          Path(os.environ["EXACT_RESULT_PATH"]).write_text(
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          '''
+
+
+          def run_isolated(mode: str, suite_root: Path, test_path: str) -> dict[str, object]:
+              result_path = Path.cwd() / f".{mode}-outcomes.json"
+              result_path.unlink(missing_ok=True)
+              environment = dict(os.environ)
+              environment.update({
+                  "EXACT_MODE": mode,
+                  "EXACT_RESULT_PATH": str(result_path),
+                  "EXACT_TEST_PATH": test_path,
+                  "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                  "PYTHONPATH": os.pathsep.join((str(suite_root), os.environ["TRUSTED_BASE"])),
+              })
+              result = subprocess.run(
+                  [sys.executable, "-c", CHILD],
+                  cwd=suite_root,
+                  env=environment,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  check=False,
+              )
+              if result.returncode != 0 or not result_path.is_file():
+                  raise SystemExit(f"isolated_{mode}_runner_failed:{result.returncode}")
+              payload = json.loads(result_path.read_text(encoding="utf-8"))
+              expected_keys = {"collected", "exit_code", "failed", "forbidden", "passed"}
+              if not isinstance(payload, dict) or set(payload) != expected_keys:
+                  raise SystemExit(f"invalid_{mode}_runner_payload")
+              return payload
+
+
+          def checked_node_ids(payload: dict[str, object], key: str, mode: str) -> list[str]:
+              value = payload[key]
+              if (
+                  not isinstance(value, list)
+                  or any(not isinstance(item, str) or not item for item in value)
+                  or len(set(value)) != len(value)
+              ):
+                  raise SystemExit(f"invalid_{mode}_{key}")
+              return value
+
+
+          manifest = json.loads(Path(os.environ["ERRATUM_MANIFEST"]).read_text(encoding="utf-8"))
+          expected_failed = manifest["expected_red_failed_node_ids"]
+          expected_passed = manifest["expected_red_passed_node_ids"]
+          expected_prefix = f"{os.environ['ERRATUM_TEST_PATH']}::"
+          if (
+              not isinstance(expected_failed, list)
+              or not expected_failed
+              or not isinstance(expected_passed, list)
+              or any(not isinstance(item, str) or not item for item in expected_failed + expected_passed)
+              or any(
+                  not item.startswith(expected_prefix)
+                  or any(ord(character) < 32 or ord(character) == 127 for character in item)
+                  for item in expected_failed + expected_passed
+              )
+              or len(set(expected_failed + expected_passed)) != len(expected_failed + expected_passed)
+          ):
+              raise SystemExit("invalid_erratum_expected_outcomes")
+          base_result = run_isolated(
+              "collect",
+              Path.cwd() / "base_suite",
+              os.environ["ERRATUM_TEST_PATH"],
+          )
+          errors: list[str] = []
+          base_collected = checked_node_ids(base_result, "collected", "base")
+          base_forbidden = checked_node_ids(base_result, "forbidden", "base")
+          if type(base_result["exit_code"]) is not int or base_result["exit_code"] != 0:
+              errors.append(f"unexpected_base_collect_exit:{base_result['exit_code']}")
+          if not base_collected:
+              errors.append("base_collection_empty")
+          if base_forbidden:
+              errors.append("base_forbidden_outcomes=" + ",".join(sorted(base_forbidden)))
+          expected_union = expected_failed + expected_passed
+          if sorted(expected_union) != sorted(base_collected):
+              errors.append("expected_node_ids_vs_base_collection_mismatch")
+
+          head_result = run_isolated(
+              "execute",
+              Path.cwd() / "head_suite",
+              os.environ["ERRATUM_TEST_PATH"],
+          )
+          head_collected = checked_node_ids(head_result, "collected", "head")
+          head_failed = checked_node_ids(head_result, "failed", "head")
+          head_forbidden = checked_node_ids(head_result, "forbidden", "head")
+          head_passed = checked_node_ids(head_result, "passed", "head")
+          if type(head_result["exit_code"]) is not int or head_result["exit_code"] != 1:
+              errors.append(f"unexpected_head_pytest_exit:{head_result['exit_code']}")
+          if head_forbidden:
+              errors.append("forbidden_outcomes=" + ",".join(sorted(head_forbidden)))
+          if sorted(head_collected) != sorted(base_collected):
+              errors.append("head_vs_base_collection_mismatch")
+          if sorted(head_failed + head_passed) != sorted(base_collected):
+              errors.append("head_outcome_union_vs_base_collection_mismatch")
+          if sorted(head_failed) != sorted(expected_failed):
+              errors.append("failed_node_ids_mismatch")
+          if sorted(head_passed) != sorted(expected_passed):
+              errors.append("passed_node_ids_mismatch")
+          if errors:
+              raise SystemExit(";".join(errors))
+          print(
+              json.dumps(
+                  {
+                      "baseline_collected_count": len(base_collected),
+                      "failed_node_ids": sorted(head_failed),
+                      "passed_node_ids": sorted(head_passed),
+                      "status": "exact-red-manifest-matched",
+                  },
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+          )
+          PY
       - name: Run supplemental PR checks
         working-directory: head
         env:
@@ -230,7 +556,7 @@ jobs:
           python -m pip check
           python scripts/check_no_live_execution.py
           python -m compileall -q src tests scripts
-          if [ "$PR_MODE" = "pm-task-definition" ]; then
+          if [ "$PR_MODE" = "pm-task-definition" ] || [ "$PR_MODE" = "pm-frozen-erratum" ]; then
             python -m pytest tests -q
           else
             python -m pytest -q
