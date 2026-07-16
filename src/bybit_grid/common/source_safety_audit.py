@@ -96,3 +96,4 @@ def audit_source_tree(repo_root: Path | str = ".") -> SafetyAuditResult:
     except Exception as exc:  # pragma: no cover
         violations.append(f"could not inspect Settings defaults: {exc}")
     return SafetyAuditResult(ok=not violations, scanned_files=len(files), violations=violations)
+# RED probe only: no behavior
