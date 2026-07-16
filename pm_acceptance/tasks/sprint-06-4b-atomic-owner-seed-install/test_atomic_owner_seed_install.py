@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from decimal import Decimal
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -9,6 +10,8 @@ from pathlib import Path
 import signal
 import stat
 import struct
+import tempfile
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -28,12 +31,72 @@ from bybit_grid.data.market_store.models import (
 from bybit_grid.data.market_store.parsing import parse_import_receipt_bytes
 from bybit_grid.data.market_store.paths import evidence_rel, receipt_rel
 from bybit_grid.data.market_store.writer import write_chunk_atomic
+from bybit_grid.data.public_batch import evidence as public_evidence
 from bybit_grid.data.public_batch.models import PublicBatchError
+from scripts import make_bybit_public_batch_review_pack as public_pack_builder
+from scripts import run_bybit_public_batch_evidence as public_pack_runner
+from tests.helpers.synthetic_market_store_fixture import (
+    KLINE_ROW_COUNT,
+    SYMBOL,
+    synthetic_client,
+)
 
 
 RUN_ID = "bybit_public_batch_063b_btcusdt_v1"
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 _INSTALL_TEMP_GLOB = ".bybit-grid-seed-install-*.tmp"
+
+
+class _NestedValidationZipFile(zipfile.ZipFile):
+    open = zipfile.ZipFile.open
+    read = zipfile.ZipFile.read
+
+
+_NESTED_VALIDATION_ZIPFILE_MODULE = SimpleNamespace(ZipFile=_NestedValidationZipFile)
+
+
+@contextmanager
+def _isolated_nested_validation_zipfile():
+    original = public_evidence.zipfile
+    public_evidence.zipfile = _NESTED_VALIDATION_ZIPFILE_MODULE
+    try:
+        yield
+    finally:
+        public_evidence.zipfile = original
+
+
+@lru_cache(maxsize=1)
+def _valid_public_review_pack_bytes():
+    base_url = "https://api.bybit.com"
+    with tempfile.TemporaryDirectory(prefix="bybit-grid-public-fixture-") as directory:
+        root = Path(directory) / "public-runs"
+        output = Path(directory) / "review-pack.zip"
+        arguments = SimpleNamespace(
+            run_id=RUN_ID,
+            symbol=SYMBOL,
+            kline_row_count=KLINE_ROW_COUNT,
+            funding_lookback_days=100,
+            output_root=str(root),
+            base_url=base_url,
+            timeout_seconds=30,
+        )
+        result = public_pack_runner._run(arguments, client=synthetic_client(base_url))
+        assert result == {"ok": True, "status": "complete", "run_id": RUN_ID}
+        assert (
+            public_pack_builder.main(
+                ["--run-id", RUN_ID, "--input-root", str(root), "--output", str(output)]
+            )
+            == 0
+        )
+        with zipfile.ZipFile(output) as archive:
+            payloads = {info.filename: archive.read(info) for info in archive.infolist()}
+        normalized = Path(directory) / "deterministic-review-pack.zip"
+        _write_pack(normalized, payloads)
+        validation = public_evidence.validate_review_pack(normalized, RUN_ID)
+        assert validation["ok"] is True
+        manifest = json.loads(payloads["review_pack_manifest.json"])
+        assert manifest["run_id"] == RUN_ID
+        return normalized.read_bytes()
 
 
 def _row(source_sha: str):
@@ -87,7 +150,7 @@ def _build_store(root: Path, source_bytes: bytes):
 
 
 def _build_seed(tmp_path: Path):
-    source_bytes = b"synthetic-public-review-pack-for-owner-install"
+    source_bytes = _valid_public_review_pack_bytes()
     source_root = tmp_path / "source-store"
     source_sha = _build_store(source_root, source_bytes)
     pack = make_seed_review_pack(source_root, tmp_path / "owner-seed.zip")
@@ -103,7 +166,8 @@ def _install(pack, destination):
     installer = getattr(seed_evidence, "install_seed_review_pack", None)
     if installer is None:
         raise MarketStoreError("seed_install_unavailable")
-    return installer(pack, destination)
+    with _isolated_nested_validation_zipfile():
+        return installer(pack, destination)
 
 
 def _assert_error(code, callable_):
