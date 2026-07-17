@@ -86,3 +86,4 @@ def write_summary(root: Path) -> dict:
     quality.write_parquet(out / "outcome_quality_summary.parquet")
     (out / "outcome_perf.json").write_text(json.dumps(perf, indent=2, ensure_ascii=False, default=str) + "\n")
     return perf
+# mandatory-red-probe: p0-outcome-window-completeness-provenance; intentionally inert
