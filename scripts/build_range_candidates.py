@@ -245,3 +245,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+# mandatory-red-probe: p0-range-reference-fast-config-parity; intentionally inert
