@@ -1,11 +1,11 @@
 # Frozen task contract: P0 strict API response envelopes
 
-Task ID: `p0-strict-api-response-envelopes`  
-Issue: `#149`  
-Contract version: `strict-envelope-v1`  
+Task ID: `p0-strict-api-response-envelopes`
+Issue: `#149`
+Contract version: `strict-envelope-v1`
 RED sentinel: `strict_api_response_envelope_unavailable`
 
-Design audit ref: `7c9fd8547ddd6df93221d9cf5196dcd32e7d8672`  
+Design audit ref: `7c9fd8547ddd6df93221d9cf5196dcd32e7d8672`
 Fresh activation baseline: `bf472eb34782a0b6097a71f56ec19ee9a1b6643f`
 
 Issue `#148` and its PM close are the only intervening changes. The six implementation paths are
