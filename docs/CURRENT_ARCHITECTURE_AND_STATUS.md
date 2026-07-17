@@ -37,7 +37,7 @@ Strict public-batch/historical and canonical-store paths retain provenance and c
 
 ## Missing E2E links
 
-1. No finished network downloader → verified archive → canonical store projection.
+1. Есть bounded fixed public-batch capture → review pack → canonical import, но нет broad historical downloader и wiring цепочки 06.4C–06.4F → verified archive → canonical store projection.
 2. No canonical-store reader wired to range/outcome scripts.
 3. No real candidate → semantic replay adapter through NeutralGridReferenceEngine/OHLC replay.
 4. Native quantity/levels and termination mapping are unproven.
