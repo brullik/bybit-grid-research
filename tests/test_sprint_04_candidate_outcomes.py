@@ -9,17 +9,19 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from bybit_grid.research.outcome_core import outcome_fast, outcome_numpy
 from bybit_grid.research.outcome_core.funding_join import aggregate_funding
 from bybit_grid.research.outcome_core.grid_crossings import count_level_crossings, geometric_grid_levels
 from bybit_grid.research.outcome_core.outcome_numpy import compute_event_outcomes, deterministic_outcome_id, outcome_match_key
 from bybit_grid.research.outcome_core.sl_proxy import compute_sl_proxy
 from bybit_grid.research.outcome_store import write_partitioned_outcomes
 from bybit_grid.research.outcome_summary import build_summaries
+from bybit_grid.research.outcome_semantics import validate_outcome_window_semantics
 from bybit_grid.research.range_core.adapter import numpy_is_project_shadow
 
 
 def event():
-    return {"range_action_event_id":"a1","range_regime_id":"r1","symbol":"BTCUSDT","signal_time_ms":0,"range_low":100.0,"range_high":110.0,"range_mid":105.0,"range_height_atr_14":1.0}
+    return {"range_action_event_id":"a1","range_regime_id":"r1","symbol":"BTCUSDT","profile_name":"range-actionable-v1","actionable_event_semantics_version":"range-actionable-prefix-invariance-v1","decision_time_ms":0,"signal_time_ms":0,"range_low":100.0,"range_high":110.0,"range_mid":105.0,"range_height_atr_14":1.0}
 
 def klines(vals):
     return pl.DataFrame({"open_time_ms":[60_000*(i+1) for i in range(len(vals))],"open":[v[0] for v in vals],"high":[v[1] for v in vals],"low":[v[2] for v in vals],"close":[v[3] for v in vals],"volume":[1.0]*len(vals)})
@@ -119,7 +121,7 @@ def _write_minimal_review_pack(path: Path, perf: dict) -> None:
         z.writestr("outcome_quality_summary.parquet", b"placeholder")
         z.writestr("outcome_perf.json", json.dumps(perf))
         z.writestr("outcome_semantic_audit.md", "# audit\n")
-        z.writestr("outcome_semantic_audit.json", json.dumps({"semantic_audit_ok": True, "outcome_semantics_version": "v4_native_grid_geometry", "checks": {"grid_count_rows_failed": 0}}))
+        z.writestr("outcome_semantic_audit.json", json.dumps({"semantic_audit_ok": True, "outcome_semantics_version": "v5_exact_outcome_window_provenance", "checks": {"grid_count_rows_failed": 0}}))
         z.writestr("outcome_input_hygiene.json", json.dumps({"input_hygiene_ok": True}))
         z.writestr("outcome_input_hygiene_by_symbol.parquet", b"placeholder")
         z.writestr("outcome_core_equivalence_report.json", json.dumps({"equivalence_ok": True}))
@@ -238,7 +240,7 @@ def test_v3_summary_grains_not_multiplied(tmp_path: Path):
     rows = []
     for grid in [5, 10, 20]:
         for sl in [0.0, 0.5, 1.0]:
-            r = compute_event_outcomes(event(), klines([(105, 106, 104, 105)]), pl.DataFrame(), pl.DataFrame({"funding_time_ms": [1], "funding_rate": [0.1]}), [1], [grid], [sl])[0]
+            r = compute_event_outcomes(event(), klines([(105, 106, 104, 105)]), pl.DataFrame(), pl.DataFrame({"funding_time_ms": [1], "funding_rate": [0.1]}), [1], [grid], [sl], range_run_id="range-test", outcome_run_id="outcome-test")[0]
             r["funding_rows_in_horizon"] = 1
             r["funding_source_status"] = "ok"
             rows.append(r)
@@ -272,10 +274,10 @@ def test_native_geometric_grid_invalid_bounds_raise():
             geometric_grid_levels(*args)
 
 
-def test_v4_grid_semantic_fields_and_activity_use_n_plus_1_levels():
+def test_v5_grid_semantic_fields_and_activity_use_n_plus_1_levels():
     row = compute_event_outcomes(event(), klines([(100, 110, 100, 110)]), pl.DataFrame(), pl.DataFrame(), [1], [5], [0.0])[0]
     levels = json.loads(row["geometric_grid_levels_json"])
-    assert row["outcome_semantics_version"] == "v4_native_grid_geometry"
+    assert row["outcome_semantics_version"] == "v5_exact_outcome_window_provenance"
     assert row["grid_cell_number"] == 5
     assert row["grid_price_level_count"] == 6
     assert row["grid_interval_count"] == 5
@@ -285,8 +287,168 @@ def test_v4_grid_semantic_fields_and_activity_use_n_plus_1_levels():
     assert row["future_internal_level_intrabar_touch_count"] == 4
 
 
-def test_v4_ids_versioned_and_match_key_stable():
+def test_v5_ids_versioned_and_match_key_stable():
     v3 = deterministic_outcome_id("a", 60, 10, 0.5, "v3_atr_correct")
     v4 = deterministic_outcome_id("a", 60, 10, 0.5, "v4_native_grid_geometry")
-    assert v3 != v4
+    v5 = deterministic_outcome_id("a", 60, 10, 0.5, "v5_exact_outcome_window_provenance")
+    assert len({v3, v4, v5}) == 3
     assert outcome_match_key("a", 60, 10, 0.5) == outcome_match_key("a", 60, 10, 0.5)
+
+
+def test_v5_empty_schemaful_windows_are_explicit_missing_in_both_cores():
+    frames = (
+        pl.DataFrame(
+            schema={
+                "start_time_ms": pl.Int64,
+                "open": pl.Float64,
+                "high": pl.Float64,
+                "low": pl.Float64,
+                "close": pl.Float64,
+                "volume": pl.Float64,
+            }
+        ),
+        pl.DataFrame(schema={"open_time_ms": pl.Int64}),
+    )
+    for frame in frames:
+        rows = [
+            core.compute_event_outcomes(
+                event(),
+                frame,
+                pl.DataFrame(),
+                pl.DataFrame(),
+                [3],
+                [5],
+                [0.5],
+            )[0]
+            for core in (outcome_numpy, outcome_fast)
+        ]
+        for row in rows:
+            assert row["future_rows_available"] == 0
+            assert row["future_missing_minutes_count"] == 3
+            assert row["future_outcome_ineligible_reason"] == "missing_minutes"
+        assert rows[0]["future_expected_minutes_count"] == rows[1][
+            "future_expected_minutes_count"
+        ]
+
+
+def test_v5_mark_context_resolves_its_own_timestamp_column_in_both_cores():
+    for trade_time_col, mark_time_col in (
+        ("start_time_ms", "open_time_ms"),
+        ("open_time_ms", "start_time_ms"),
+    ):
+        trade = pl.DataFrame(
+            {
+                trade_time_col: [60_000],
+                "open": [105.0],
+                "high": [106.0],
+                "low": [104.0],
+                "close": [105.0],
+                "volume": [1.0],
+            }
+        )
+        mark = pl.DataFrame({mark_time_col: [60_000], "close": [108.5]})
+        rows = [
+            core.compute_event_outcomes(
+                event(), trade, mark, pl.DataFrame(), [1], [5], [0.5]
+            )[0]
+            for core in (outcome_numpy, outcome_fast)
+        ]
+        for field in (
+            "mark_price_future_rows_available",
+            "mark_price_max_deviation_from_last_pct",
+        ):
+            assert rows[0][field] == rows[1][field]
+        assert rows[0]["mark_price_future_rows_available"] == 1
+        assert rows[0]["mark_price_max_deviation_from_last_pct"] > 0.0
+
+
+def _authoritative_v5_row() -> dict:
+    return compute_event_outcomes(
+        event(),
+        klines([(105, 106, 104, 105)]),
+        pl.DataFrame(),
+        pl.DataFrame(),
+        [1],
+        [5],
+        [0.5],
+        range_run_id="range-test",
+        outcome_run_id="outcome-test",
+    )[0]
+
+
+def test_v5_validator_rejects_grid_cell_number_below_two():
+    row = _authoritative_v5_row()
+    row.update(
+        {
+            "grid_count": 1,
+            "grid_cell_number": 1,
+            "grid_price_level_count": 2,
+            "grid_interval_count": 1,
+            "outcome_id": deterministic_outcome_id("a1", 1, 1, 0.5),
+            "outcome_match_key": outcome_match_key("a1", 1, 1, 0.5),
+        }
+    )
+    result = validate_outcome_window_semantics(pl.DataFrame([row]))
+    assert result["outcome_window_semantic_audit_ok"] is False
+    assert "grid cell number id material invalid" in result["failures"]
+
+
+def test_v5_validator_returns_failure_for_malformed_auxiliary_count():
+    row = _authoritative_v5_row()
+    row["future_zero_volume_count"] = "invalid"
+    result = validate_outcome_window_semantics(pl.DataFrame([row]))
+    assert result["outcome_window_semantic_audit_ok"] is False
+    assert "outcome auxiliary diagnostics must be nonnegative integers" in result[
+        "failures"
+    ]
+
+
+def test_v5_validator_requires_exact_stable_match_key():
+    row = _authoritative_v5_row()
+    row["outcome_match_key"] = "forged"
+    result = validate_outcome_window_semantics(pl.DataFrame([row]))
+    assert result["outcome_window_semantic_audit_ok"] is False
+    assert "outcome_match_key does not match stable semantic material" in result[
+        "failures"
+    ]
+
+    missing = validate_outcome_window_semantics(
+        pl.DataFrame([_authoritative_v5_row()]).drop("outcome_match_key")
+    )
+    assert missing["outcome_window_semantic_audit_ok"] is False
+    assert any("outcome_match_key" in failure for failure in missing["failures"])
+
+
+def test_v5_sl_buffer_identity_tokens_are_canonical_and_collision_free():
+    for buffers in (
+        [0.1234561, 0.1234562],
+        [1_000_000.0, 1_000_001.0],
+    ):
+        assert len(
+            {deterministic_outcome_id("a1", 1, 5, value) for value in buffers}
+        ) == 2
+        assert len({outcome_match_key("a1", 1, 5, value) for value in buffers}) == 2
+    assert deterministic_outcome_id("a1", 1, 5, 0.0) == deterministic_outcome_id(
+        "a1", 1, 5, -0.0
+    )
+    assert outcome_match_key("a1", 1, 5, 0.0) == outcome_match_key(
+        "a1", 1, 5, -0.0
+    )
+
+    buffers = [0.1234561, 0.1234562]
+    rows = compute_event_outcomes(
+        event(),
+        klines([(105, 106, 104, 105)]),
+        pl.DataFrame(),
+        pl.DataFrame(),
+        [1],
+        [5],
+        buffers,
+        range_run_id="range-test",
+        outcome_run_id="outcome-test",
+    )
+    assert len({row["outcome_id"] for row in rows}) == 2
+    assert len({row["outcome_match_key"] for row in rows}) == 2
+    assert validate_outcome_window_semantics(pl.DataFrame(rows))[
+        "outcome_window_semantic_audit_ok"
+    ] is True
