@@ -1029,6 +1029,7 @@ def _git(repo: Path, *args: str) -> str:
 def _build_frozen_erratum_repo(
     tmp_path: Path,
     *,
+    base_test: bytes | None = None,
     head_test: bytes | None = None,
     manifest_transform=None,
 ) -> tuple[Path, str, str, ActiveTask, bytes, bytes]:
@@ -1038,12 +1039,13 @@ def _build_frozen_erratum_repo(
     active_path = repo / "pm_acceptance/active_task.json"
     test_path.parent.mkdir(parents=True)
     contract_path.parent.mkdir(parents=True)
-    base_test = (
-        b'FIXTURE = b"invalid"\n\n'
-        b"def helper():\n    return FIXTURE\n\n"
-        b"def test_contract():\n    assert helper()\n\n"
-        b"def test_compatibility():\n    assert True\n"
-    )
+    if base_test is None:
+        base_test = (
+            b'FIXTURE = b"invalid"\n\n'
+            b"def helper():\n    return FIXTURE\n\n"
+            b"def test_contract():\n    assert helper()\n\n"
+            b"def test_compatibility():\n    assert True\n"
+        )
     if head_test is None:
         head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid-zip"')
     test_path.write_bytes(base_test)
@@ -1261,6 +1263,57 @@ def test_frozen_erratum_rejects_changed_test_function_ast(tmp_path: Path):
         head_test=head_test,
     )
     assert "frozen_test_function_ast_changed" in _erratum_errors(repo, base, head, task)
+
+
+def test_frozen_erratum_allows_legacy_broad_raise_in_immutable_test_ast(
+    tmp_path: Path,
+):
+    base_test = (
+        b"import pytest\n\n"
+        b'FIXTURE = b"invalid"\n\n'
+        b"def helper():\n    return FIXTURE\n\n"
+        b"def test_contract():\n"
+        b"    with pytest.raises(Exception):\n"
+        b"        raise ValueError\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"')
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        base_test=base_test,
+        head_test=head_test,
+    )
+    assert _erratum_errors(repo, base, head, task) == ()
+
+
+def test_frozen_erratum_still_rejects_new_broad_raise_in_mutable_helper(
+    tmp_path: Path,
+):
+    base_test = (
+        b"import pytest\n\n"
+        b'FIXTURE = b"invalid"\n\n'
+        b"def helper():\n    return FIXTURE\n\n"
+        b"def test_contract():\n"
+        b"    with pytest.raises(Exception):\n"
+        b"        raise ValueError\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"') + (
+        b"\ndef helper_unsafe():\n"
+        b"    with pytest.raises(Exception):\n"
+        b"        pass\n"
+    )
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        base_test=base_test,
+        head_test=head_test,
+    )
+    assert "unsafe_frozen_test_pattern:broad_pytest_raises" in _erratum_errors(
+        repo,
+        base,
+        head,
+        task,
+    )
 
 
 @pytest.mark.parametrize(
