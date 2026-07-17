@@ -52,3 +52,4 @@ def write_sprint_report(data_dir: Path, sections: dict[str, object]) -> Path:
     report_path = reports_dir / "sprint_01_api_report.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
+# RED PROBE: inert sink-safe reporting availability check.\n
