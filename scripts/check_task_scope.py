@@ -767,14 +767,19 @@ class _FrozenTestInspector(ast.NodeVisitor):
         self.scope: list[str] = []
         self.test_functions: list[tuple[str, str]] = []
         self.unsafe: list[str] = []
+        self.immutable_test_depth = 0
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         qualified = ".".join((*self.scope, node.name))
-        if node.name.startswith("test_"):
+        immutable_test = node.name.startswith("test_")
+        if immutable_test:
             self.test_functions.append((qualified, ast.dump(node, include_attributes=False)))
+            self.immutable_test_depth += 1
         self.scope.append(node.name)
         self.generic_visit(node)
         self.scope.pop()
+        if immutable_test:
+            self.immutable_test_depth -= 1
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
         self._visit_function(node)
@@ -789,9 +794,17 @@ class _FrozenTestInspector(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         called = _qualified_name(node.func)
-        if called in {"pytest.skip", "pytest.xfail", "pytest.importorskip", "skip", "xfail", "importorskip"}:
+        mutable_harness = self.immutable_test_depth == 0
+        if mutable_harness and called in {
+            "pytest.skip",
+            "pytest.xfail",
+            "pytest.importorskip",
+            "skip",
+            "xfail",
+            "importorskip",
+        }:
             self.unsafe.append("skip_or_xfail")
-        if called in {"pytest.raises", "raises"}:
+        if mutable_harness and called in {"pytest.raises", "raises"}:
             expected = node.args[0] if node.args else next(
                 (keyword.value for keyword in node.keywords if keyword.arg == "expected_exception"),
                 None,
@@ -801,12 +814,17 @@ class _FrozenTestInspector(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:  # noqa: N802
-        if _contains_unsafe_exception(node.type):
+        if self.immutable_test_depth == 0 and _contains_unsafe_exception(node.type):
             self.unsafe.append("broad_exception_handler")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
-        if node.attr.lower() in {"skip", "skipif", "skipunless", "xfail"}:
+        if self.immutable_test_depth == 0 and node.attr.lower() in {
+            "skip",
+            "skipif",
+            "skipunless",
+            "xfail",
+        }:
             name = _qualified_name(node)
             if name and (name.startswith("pytest.mark.") or name.startswith("unittest.")):
                 self.unsafe.append("skip_or_xfail")
