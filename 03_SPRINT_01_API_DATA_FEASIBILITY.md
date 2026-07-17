@@ -175,3 +175,4 @@ Sprint 01 считается завершенным только если:
 - `pytest` зеленый.
 
 Если validate не работает на demo/testnet, это не блокер. Если validate не работает на mainnet с нужными permission/account mode, это блокер до решения.
+<!-- RED probe only: no documentation behavior -->
