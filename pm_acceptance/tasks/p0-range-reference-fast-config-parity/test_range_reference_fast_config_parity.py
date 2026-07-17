@@ -4,23 +4,8 @@ import ast
 import hashlib
 import importlib
 import importlib.util
-import math
-import random
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
-
-import polars as pl
-import pytest
-
-import bybit_grid.research.range_detector as range_detector
-from bybit_grid.research.range_core import numpy_fast, python_reference
-from bybit_grid.research.range_core.adapter import (
-    arrays_from_frame,
-    detect_ranges_core_with_funnel,
-)
-from bybit_grid.research.range_detector import DetectionConfig, detect_range_candidates
-from bybit_grid.research.range_profiles import RANGE_PROFILES, RangeProfile
 
 
 TASK_ID = "p0-range-reference-fast-config-parity"
@@ -30,7 +15,7 @@ MODULE_CONTRACT_NAME = "RANGE_REFERENCE_FAST_CONFIG_PARITY_CONTRACT"
 TEST_CONTRACT_NAME = "RANGE_REFERENCE_FAST_CONFIG_PARITY_TEST_CONTRACT"
 ORDINARY_TEST_PATH = "tests/test_range_reference_fast_config_parity.py"
 ORDINARY_TEST_SHA256 = (
-    "46d5c2b47048145345eaa92d2159752281a1229e3e5323e36d0853b3ef538f7d"
+    "45f5aa70757804a779f9bef1da7ca0f8d6eea96706109b135d364d61b1f2c8b6"
 )
 MODULE_PATHS = (
     "scripts/build_range_candidates.py",
@@ -55,12 +40,23 @@ def _modules() -> dict[str, Any]:
         "python_reference": "bybit_grid.research.range_core.python_reference",
     }
     try:
+        imported = {
+            key: importlib.import_module(name)
+            for key, name in names.items()
+        }
+        root = Path(imported["range_detector"].__file__).resolve().parents[3]
+        builder_path = root / "scripts" / "build_range_candidates.py"
+        spec = importlib.util.spec_from_file_location(
+            "pm_acceptance_build_range_candidates",
+            builder_path,
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(SENTINEL)
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
         _modules_cache = {
-            "build_range_candidates": build_range_candidates,
-            **{
-                key: importlib.import_module(name)
-                for key, name in names.items()
-            },
+            "build_range_candidates": builder,
+            **imported,
         }
     except Exception:
         raise RuntimeError(SENTINEL) from None
@@ -109,12 +105,10 @@ def _available() -> None:
         module = modules[key]
         if getattr(module, MODULE_CONTRACT_NAME, None) != CONTRACT_VERSION:
             raise RuntimeError(SENTINEL)
-        if (
-            _exact_assignment(Path(module.__file__).resolve(), MODULE_CONTRACT_NAME)
-            != CONTRACT_VERSION
-        ):
+        module_path = Path(module.__file__).resolve()
+        if _exact_assignment(module_path, MODULE_CONTRACT_NAME) != CONTRACT_VERSION:
             raise RuntimeError(SENTINEL)
-        if Path(module.__file__).resolve() != (_root() / path).resolve():
+        if module_path != (_root() / path).resolve():
             raise RuntimeError(SENTINEL)
     if _ordinary_contract() != (CONTRACT_VERSION, ORDINARY_TEST_SHA256):
         raise RuntimeError(SENTINEL)
@@ -125,6 +119,47 @@ def test_contract_markers_and_exact_implementation_scope() -> None:
     assert RED_REQUIRED_PATHS == REQUIRED_IMPLEMENTATION_PATHS
     assert all((_root() / path).is_file() for path in REQUIRED_IMPLEMENTATION_PATHS)
     assert _ordinary_contract() == (CONTRACT_VERSION, ORDINARY_TEST_SHA256)
+    assert (
+        hashlib.sha256(ORDINARY_TEST_SOURCE.encode("utf-8")).hexdigest()
+        == ORDINARY_TEST_SHA256
+    )
+
+
+ORDINARY_TEST_SOURCE = r'''from __future__ import annotations
+
+import ast
+import importlib.util
+import inspect
+import math
+import random
+import types
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import polars as pl
+import pytest
+
+import bybit_grid.research.range_core.adapter as range_adapter
+import bybit_grid.research.range_detector as range_detector
+from bybit_grid.research.range_core import FUNNEL_KEYS, numpy_fast, python_reference
+from bybit_grid.research.range_core.adapter import (
+    arrays_from_frame,
+    detect_ranges_core_with_funnel,
+)
+from bybit_grid.research.range_detector import DetectionConfig, detect_range_candidates
+from bybit_grid.research.range_profiles import RANGE_PROFILES, RangeProfile
+
+
+SENTINEL = "range_reference_fast_config_parity_contract_unavailable"
+CONTRACT_VERSION = "range-reference-fast-config-parity-v1"
+MODULE_CONTRACT_NAME = "RANGE_REFERENCE_FAST_CONFIG_PARITY_CONTRACT"
+RANGE_REFERENCE_FAST_CONFIG_PARITY_TEST_CONTRACT = (
+    "range-reference-fast-config-parity-v1"
+)
+BASE_MS = 1_800_000_000_000
+MINUTE_MS = 60_000
+
 
 def _load_build_range_candidates() -> Any:
     path = (
@@ -133,7 +168,7 @@ def _load_build_range_candidates() -> Any:
         / "build_range_candidates.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "pm_acceptance_build_range_candidates",
+        "ordinary_test_build_range_candidates",
         path,
     )
     if spec is None or spec.loader is None:
@@ -144,13 +179,21 @@ def _load_build_range_candidates() -> Any:
 
 
 build_range_candidates = _load_build_range_candidates()
-
-
-RANGE_REFERENCE_FAST_CONFIG_PARITY_TEST_CONTRACT = (
-    "range-reference-fast-config-parity-v1"
+PRODUCTION_MODULES = (
+    build_range_candidates,
+    range_detector,
+    range_adapter,
+    numpy_fast,
+    python_reference,
 )
-BASE_MS = 1_800_000_000_000
-MINUTE_MS = 60_000
+
+
+def _available() -> None:
+    if any(
+        getattr(module, MODULE_CONTRACT_NAME, None) != CONTRACT_VERSION
+        for module in PRODUCTION_MODULES
+    ):
+        raise RuntimeError(SENTINEL)
 
 
 def _profile(**changes: object) -> RangeProfile:
@@ -196,8 +239,9 @@ def _wave_frame(
 
 
 def _assert_value_equal(left: object, right: object) -> None:
-    if isinstance(left, float) or isinstance(right, float):
-        assert left is not None and right is not None
+    if type(left) is float or type(right) is float:
+        assert type(left) is float
+        assert type(right) is float
         left_float = float(left)
         right_float = float(right)
         if math.isnan(left_float) or math.isnan(right_float):
@@ -210,16 +254,184 @@ def _assert_value_equal(left: object, right: object) -> None:
                 abs_tol=1e-12,
             )
     else:
+        assert type(left) is type(right)
         assert left == right
 
 
 def _assert_frames_equal(left: pl.DataFrame, right: pl.DataFrame) -> None:
     assert left.columns == right.columns
+    assert left.schema == right.schema
     assert left.height == right.height
     for left_row, right_row in zip(left.to_dicts(), right.to_dicts(), strict=True):
         assert left_row.keys() == right_row.keys()
         for key in left_row:
             _assert_value_equal(left_row[key], right_row[key])
+
+
+def _assert_funnel(funnel: dict[str, int], output_height: int) -> None:
+    assert type(funnel) is dict
+    assert tuple(funnel) == FUNNEL_KEYS
+    assert all(type(value) is int and value >= 0 for value in funnel.values())
+    accounted = sum(
+        funnel[key]
+        for key in FUNNEL_KEYS
+        if key not in {"total_window_positions", "insufficient_history_rejection_count"}
+    )
+    assert accounted == funnel["total_window_positions"]
+    assert funnel["raw_candidate_pass_count"] == output_height
+
+
+def _module_tree(module: object) -> ast.Module:
+    path = Path(getattr(module, "__file__", ""))
+    assert path.is_file()
+    return ast.parse(path.read_text(encoding="utf-8", errors="strict"))
+
+
+def _assert_no_cross_core_reference(
+    module: object,
+    *,
+    forbidden_modules: tuple[str, ...],
+    forbidden_callables: tuple[str, ...],
+    forbidden_routes: tuple[object, ...],
+) -> None:
+    tree = _module_tree(module)
+    imported_callable_aliases: set[str] = set()
+
+    def module_matches(candidate: str) -> bool:
+        normalized = candidate.lstrip(".")
+        return any(
+            normalized == forbidden
+            or normalized.startswith(f"{forbidden}.")
+            or forbidden.endswith(f".{normalized}")
+            for forbidden in forbidden_modules
+            if normalized
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(not module_matches(alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported = ".".join(
+                    part for part in (node.module or "", alias.name) if part
+                )
+                assert not module_matches(imported)
+                if alias.name in forbidden_callables:
+                    imported_callable_aliases.add(alias.asname or alias.name)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                assert node.func.id not in {
+                    *forbidden_callables,
+                    *imported_callable_aliases,
+                }
+            elif isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in forbidden_callables
+        elif isinstance(node, ast.Constant) and type(node.value) is str:
+            assert not module_matches(node.value)
+            assert node.value not in forbidden_callables
+
+    def code_names(code: types.CodeType) -> set[str]:
+        names = set(code.co_names)
+        for constant in code.co_consts:
+            if isinstance(constant, types.CodeType):
+                names.update(code_names(constant))
+        return names
+
+    def is_forbidden_route(value: object) -> bool:
+        return any(value is route for route in forbidden_routes)
+
+    for value in vars(module).values():
+        assert not is_forbidden_route(value)
+        if not inspect.isfunction(value) or value.__module__ != module.__name__:
+            continue
+        assert all(
+            not is_forbidden_route(value.__globals__.get(name))
+            for name in code_names(value.__code__)
+        )
+        assert all(not is_forbidden_route(item) for item in (value.__defaults__ or ()))
+        assert all(
+            not is_forbidden_route(item)
+            for item in (value.__kwdefaults__ or {}).values()
+        )
+        for cell in value.__closure__ or ():
+            try:
+                captured = cell.cell_contents
+            except ValueError:
+                continue
+            assert not is_forbidden_route(captured)
+
+
+def _assert_no_multiplied_sign_test(module: object) -> None:
+    tree = _module_tree(module)
+
+    for scope in (
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ):
+        assignments: dict[str, ast.expr] = {}
+        for node in ast.walk(scope):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                assignments[node.targets[0].id] = node.value
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.value is not None:
+                    assignments[node.target.id] = node.value
+
+        def resolve(node: ast.expr, seen: frozenset[str] = frozenset()) -> ast.expr:
+            if (
+                isinstance(node, ast.Name)
+                and node.id in assignments
+                and node.id not in seen
+            ):
+                return resolve(assignments[node.id], seen | {node.id})
+            return node
+
+        def call_name(node: ast.Call) -> str:
+            if isinstance(node.func, ast.Name):
+                return node.func.id
+            if isinstance(node.func, ast.Attribute):
+                return node.func.attr
+            return ""
+
+        def is_side_expression(node: ast.expr) -> bool:
+            node = resolve(node)
+            if isinstance(node, (ast.Compare, ast.BinOp)):
+                return isinstance(node, ast.Compare) or isinstance(node.op, ast.Sub)
+            if not isinstance(node, ast.Call):
+                return False
+            if call_name(node) == "subtract" and len(node.args) >= 2:
+                return True
+            return (
+                call_name(node) == "sign"
+                and bool(node.args)
+                and is_side_expression(node.args[0])
+            )
+
+        def is_multiplied_sides(node: ast.expr) -> bool:
+            node = resolve(node)
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+                operands = (node.left, node.right)
+            elif (
+                isinstance(node, ast.Call)
+                and call_name(node) == "multiply"
+                and len(node.args) >= 2
+            ):
+                operands = (node.args[0], node.args[1])
+            else:
+                return False
+            return all(is_side_expression(operand) for operand in operands)
+
+        multiplied_sides = [
+            node
+            for node in ast.walk(scope)
+            if isinstance(node, (ast.BinOp, ast.Call))
+            and is_multiplied_sides(node)
+        ]
+        assert multiplied_sides == []
 
 
 def _run(
@@ -249,6 +461,8 @@ def _run(
     )
     _assert_frames_equal(reference, reference_again)
     _assert_frames_equal(reference, fast)
+    _assert_funnel(reference_funnel, reference.height)
+    _assert_funnel(fast_funnel, fast.height)
     assert reference_funnel == fast_funnel
     return reference, reference_funnel
 
@@ -272,6 +486,147 @@ def test_direct_reference_fast_all_fields_and_funnel_match() -> None:
         "turnover_sum_window",
         "volume_sum_window",
     }
+
+
+def test_core_sources_are_distinct_and_do_not_delegate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _available()
+    assert python_reference.detect_from_frame is not numpy_fast.detect_ranges
+    assert (
+        python_reference.detect_from_frame_with_funnel
+        is not numpy_fast.detect_ranges
+    )
+    assert Path(python_reference.__file__).resolve().name == "python_reference.py"
+    assert Path(numpy_fast.__file__).resolve().name == "numpy_fast.py"
+    assert (
+        Path(python_reference.detect_from_frame.__code__.co_filename).resolve()
+        == Path(python_reference.__file__).resolve()
+    )
+    assert (
+        Path(
+            python_reference.detect_from_frame_with_funnel.__code__.co_filename
+        ).resolve()
+        == Path(python_reference.__file__).resolve()
+    )
+    assert (
+        Path(numpy_fast.detect_ranges.__code__.co_filename).resolve()
+        == Path(numpy_fast.__file__).resolve()
+    )
+    shared_routes = (
+        range_adapter.detect_ranges_core,
+        range_adapter.detect_ranges_core_with_funnel,
+        range_detector.detect_range_candidates,
+    )
+    reference_forbidden_routes = (numpy_fast.detect_ranges, *shared_routes)
+    fast_forbidden_routes = (
+        python_reference.detect_from_frame,
+        python_reference.detect_from_frame_with_funnel,
+        *shared_routes,
+    )
+    _assert_no_cross_core_reference(
+        python_reference,
+        forbidden_modules=("bybit_grid.research.range_core.numpy_fast",),
+        forbidden_callables=(
+            "detect_ranges",
+            "detect_ranges_core",
+            "detect_ranges_core_with_funnel",
+            "detect_range_candidates",
+        ),
+        forbidden_routes=reference_forbidden_routes,
+    )
+    _assert_no_cross_core_reference(
+        numpy_fast,
+        forbidden_modules=("bybit_grid.research.range_core.python_reference",),
+        forbidden_callables=(
+            "detect_from_frame",
+            "detect_from_frame_with_funnel",
+            "detect_ranges_core",
+            "detect_ranges_core_with_funnel",
+            "detect_range_candidates",
+        ),
+        forbidden_routes=fast_forbidden_routes,
+    )
+    _assert_no_multiplied_sign_test(python_reference)
+    _assert_no_multiplied_sign_test(numpy_fast)
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("cross_core_delegation")
+
+    frame = _wave_frame(10)
+    config = DetectionConfig(lookbacks=(10,))
+    profile = _profile()
+    with monkeypatch.context() as isolated:
+        isolated.setattr(numpy_fast, "detect_ranges", forbidden)
+        isolated.setattr(range_adapter, "detect_ranges_core", forbidden)
+        isolated.setattr(range_adapter, "detect_ranges_core_with_funnel", forbidden)
+        isolated.setattr(range_detector, "detect_range_candidates", forbidden)
+        assert python_reference.detect_from_frame(
+            frame,
+            "XUSDT",
+            config,
+            profile,
+        ).height == 1
+        instrumented, instrumented_funnel = (
+            python_reference.detect_from_frame_with_funnel(
+                frame,
+                "XUSDT",
+                config,
+                profile,
+            )
+        )
+        assert instrumented.height == 1
+        _assert_funnel(instrumented_funnel, 1)
+    with monkeypatch.context() as isolated:
+        isolated.setattr(python_reference, "detect_from_frame", forbidden)
+        isolated.setattr(
+            python_reference,
+            "detect_from_frame_with_funnel",
+            forbidden,
+        )
+        isolated.setattr(range_adapter, "detect_ranges_core", forbidden)
+        isolated.setattr(range_adapter, "detect_ranges_core_with_funnel", forbidden)
+        isolated.setattr(range_detector, "detect_range_candidates", forbidden)
+        fast, _ = numpy_fast.detect_ranges(
+            arrays_from_frame(frame),
+            "XUSDT",
+            profile,
+            config.lookbacks,
+            config=config,
+        )
+        assert fast.height == 1
+
+
+def test_frame_comparator_rejects_schema_and_python_type_drift() -> None:
+    _available()
+    with pytest.raises(AssertionError):
+        _assert_frames_equal(
+            pl.DataFrame({"value": [1]}, schema={"value": pl.Int64}),
+            pl.DataFrame({"value": [1.0]}, schema={"value": pl.Float64}),
+        )
+    with pytest.raises(AssertionError):
+        _assert_value_equal(True, 1)
+    with pytest.raises(AssertionError):
+        _assert_value_equal(1, 1.0)
+
+
+def test_funnel_contract_rejects_missing_typed_and_unconserved_counts() -> None:
+    _available()
+    valid = {key: 0 for key in FUNNEL_KEYS}
+    _assert_funnel(valid, 0)
+    missing = valid.copy()
+    missing.pop("slope_rejection_count")
+    with pytest.raises(AssertionError):
+        _assert_funnel(missing, 0)
+    wrong_type = valid.copy()
+    wrong_type["total_window_positions"] = True
+    with pytest.raises(AssertionError):
+        _assert_funnel(wrong_type, 0)
+    unconserved = valid.copy()
+    unconserved["total_window_positions"] = 1
+    with pytest.raises(AssertionError):
+        _assert_funnel(unconserved, 0)
 
 
 def test_mid_zone_width_controls_both_cores() -> None:
@@ -332,6 +687,21 @@ def test_lower_and_upper_zone_widths_control_touch_boundary() -> None:
     assert loose.height == 1
     assert tight.is_empty()
     assert funnel["touch_count_rejection_count"] == 1
+    for lower_boundary, upper_boundary in ((0.0, 1.0), (1.0, 0.0)):
+        boundary_output, _ = _run(
+            _wave_frame(5, final_close=100.0),
+            DetectionConfig(
+                lookbacks=(5,),
+                lower_zone_pct=lower_boundary,
+                mid_zone_pct=0.0,
+                upper_zone_pct=upper_boundary,
+                max_zero_volume_window_pct=1.0,
+                min_range_height_pct=0.0,
+                min_valid_candle_pct=1.0,
+            ),
+            _profile(),
+        )
+        assert boundary_output.height == 1
 
 
 def test_minimum_height_and_zero_volume_config_control_both_cores() -> None:
@@ -365,11 +735,29 @@ def test_minimum_height_and_zero_volume_config_control_both_cores() -> None:
         DetectionConfig(lookbacks=(20,), min_range_height_pct=0.03),
         _profile(),
     )
+    profile_zero_rejected, profile_zero_funnel = _run(
+        frame,
+        DetectionConfig(
+            lookbacks=(20,),
+            min_range_height_pct=0.001,
+            max_zero_volume_window_pct=0.05,
+        ),
+        _profile(max_zero_volume_window_pct=0.0),
+    )
+    profile_height_rejected, profile_height_funnel = _run(
+        _wave_frame(20),
+        DetectionConfig(lookbacks=(20,), min_range_height_pct=0.001),
+        _profile(range_height_pct_min=0.03),
+    )
     assert accepted.height == 1
     assert zero_rejected.is_empty()
     assert zero_funnel["zero_volume_window_rejection_count"] == 1
     assert height_rejected.is_empty()
     assert height_funnel["range_height_rejection_count"] == 1
+    assert profile_zero_rejected.is_empty()
+    assert profile_zero_funnel["zero_volume_window_rejection_count"] == 1
+    assert profile_height_rejected.is_empty()
+    assert profile_height_funnel["range_height_rejection_count"] == 1
 
 
 def test_profile_name_and_lookbacks_are_effective() -> None:
@@ -436,6 +824,27 @@ def test_duplicate_before_window_is_not_counted_inside_window() -> None:
     assert funnel["duplicate_timestamp_rejection_count"] == 0
     assert funnel["raw_candidate_pass_count"] == 3
 
+    internal_duplicate = _wave_frame(5).with_columns(
+        pl.Series(
+            "open_time_ms",
+            [
+                BASE_MS,
+                BASE_MS + MINUTE_MS,
+                BASE_MS + MINUTE_MS,
+                BASE_MS + 3 * MINUTE_MS,
+                BASE_MS + 4 * MINUTE_MS,
+            ],
+        )
+    )
+    duplicate_output, duplicate_funnel = _run(
+        internal_duplicate,
+        DetectionConfig(lookbacks=(5,)),
+        _profile(),
+    )
+    assert duplicate_output.is_empty()
+    assert duplicate_funnel["missing_window_rejection_count"] == 0
+    assert duplicate_funnel["duplicate_timestamp_rejection_count"] == 1
+
 
 def test_irregular_internal_minute_steps_are_missing() -> None:
     _available()
@@ -459,6 +868,17 @@ def test_irregular_internal_minute_steps_are_missing() -> None:
     assert output.is_empty()
     assert funnel["missing_window_rejection_count"] == 1
     assert funnel["duplicate_timestamp_rejection_count"] == 0
+
+    off_epoch = _wave_frame(5).with_columns(
+        (pl.col("open_time_ms") + 12_345).alias("open_time_ms")
+    )
+    off_epoch_output, off_epoch_funnel = _run(
+        off_epoch,
+        DetectionConfig(lookbacks=(5,)),
+        _profile(),
+    )
+    assert off_epoch_output.height == 1
+    assert off_epoch_funnel["missing_window_rejection_count"] == 0
 
 
 def test_bad_ohlc_slope_and_quality_have_exact_funnel_ownership() -> None:
@@ -497,13 +917,25 @@ def test_bad_ohlc_slope_and_quality_have_exact_funnel_ownership() -> None:
         DetectionConfig(lookbacks=(5,)),
         _profile(min_range_quality_score=1_000_000.0),
     )
+    no_cross_output, no_cross_funnel = _run(
+        _wave_frame(5).with_columns(
+            pl.lit(100.0).alias("open"),
+            pl.lit(100.0).alias("close"),
+        ),
+        DetectionConfig(lookbacks=(5,)),
+        _profile(min_midline_cross_count=1),
+    )
     assert bad_funnel["bad_ohlc_window_rejection_count"] == 1
     assert slope_funnel["slope_rejection_count"] == 1
     assert quality_output.is_empty()
     assert quality_funnel["quality_score_rejection_count"] == 1
+    assert no_cross_output.is_empty()
+    assert no_cross_funnel["midline_cross_rejection_count"] == 1
 
 
-def test_adapter_propagates_exact_config_and_rejects_mismatch() -> None:
+def test_adapter_propagates_exact_config_and_rejects_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _available()
     frame = _wave_frame(10, final_close=100.2)
     cfg = DetectionConfig(lookbacks=(10,), mid_zone_pct=0.10)
@@ -517,6 +949,7 @@ def test_adapter_propagates_exact_config_and_rejects_mismatch() -> None:
         config=cfg,
     )
     _assert_frames_equal(direct, adapted)
+    _assert_funnel(adapted_funnel, adapted.height)
     assert direct_funnel == adapted_funnel
     reference_adapted, reference_adapted_funnel = detect_ranges_core_with_funnel(
         arrays_from_frame(frame),
@@ -527,6 +960,7 @@ def test_adapter_propagates_exact_config_and_rejects_mismatch() -> None:
         config=cfg,
     )
     _assert_frames_equal(direct, reference_adapted)
+    _assert_funnel(reference_adapted_funnel, reference_adapted.height)
     assert direct_funnel == reference_adapted_funnel
     with pytest.raises(ValueError, match="config.lookbacks must exactly match"):
         detect_ranges_core_with_funnel(
@@ -537,6 +971,75 @@ def test_adapter_propagates_exact_config_and_rejects_mismatch() -> None:
             core="numpy_fast",
             config=cfg,
         )
+
+    full_config = DetectionConfig(
+        lookbacks=(5,),
+        lower_zone_pct=0.11,
+        mid_zone_pct=0.22,
+        upper_zone_pct=0.33,
+        max_zero_volume_window_pct=0.44,
+        min_range_height_pct=0.005,
+        min_valid_candle_pct=1.0,
+        profile_name="explicit_custom",
+    )
+    full_profile = _profile(name="explicit_custom")
+    captured: list[str] = []
+
+    def fast_spy(
+        arrays,
+        symbol,
+        profile,
+        lookbacks,
+        *,
+        config,
+    ):
+        del arrays, symbol
+        assert profile is full_profile
+        assert lookbacks == full_config.lookbacks
+        assert config is full_config
+        captured.append("numpy_fast")
+        return pl.DataFrame(), {key: 0 for key in FUNNEL_KEYS}
+
+    def reference_spy(frame, symbol, config, profile):
+        del frame, symbol
+        assert profile is full_profile
+        assert config is full_config
+        captured.append("python_reference")
+        return pl.DataFrame(), {key: 0 for key in FUNNEL_KEYS}
+
+    original_fast = numpy_fast.detect_ranges
+    with monkeypatch.context() as isolated:
+        isolated.setattr(numpy_fast, "detect_ranges", fast_spy)
+        for name, value in vars(range_adapter).items():
+            if value is original_fast:
+                isolated.setattr(range_adapter, name, fast_spy)
+        detect_ranges_core_with_funnel(
+            arrays_from_frame(_wave_frame(5)),
+            "XUSDT",
+            full_profile,
+            full_config.lookbacks,
+            core="numpy_fast",
+            config=full_config,
+        )
+    original_reference = python_reference.detect_from_frame_with_funnel
+    with monkeypatch.context() as isolated:
+        isolated.setattr(
+            python_reference,
+            "detect_from_frame_with_funnel",
+            reference_spy,
+        )
+        for name, value in vars(range_adapter).items():
+            if value is original_reference:
+                isolated.setattr(range_adapter, name, reference_spy)
+        detect_ranges_core_with_funnel(
+            arrays_from_frame(_wave_frame(5)),
+            "XUSDT",
+            full_profile,
+            full_config.lookbacks,
+            core="python_reference",
+            config=full_config,
+        )
+    assert captured == ["numpy_fast", "python_reference"]
 
 
 def test_legacy_direct_fast_tuple_uses_default_config() -> None:
@@ -553,10 +1056,30 @@ def test_legacy_direct_fast_tuple_uses_default_config() -> None:
         arrays_from_frame(frame),
         "XUSDT",
         _profile(),
+        lookbacks=(10,),
+    )
+    adapted, adapted_funnel = detect_ranges_core_with_funnel(
+        arrays_from_frame(frame),
+        "XUSDT",
+        _profile(),
         (10,),
+        core="numpy_fast",
     )
     _assert_frames_equal(modern, legacy)
+    _assert_frames_equal(legacy, adapted)
+    _assert_funnel(modern_funnel, modern.height)
+    _assert_funnel(legacy_funnel, legacy.height)
+    _assert_funnel(adapted_funnel, adapted.height)
     assert modern_funnel == legacy_funnel
+    assert legacy_funnel == adapted_funnel
+    with pytest.raises(ValueError, match="config.lookbacks must exactly match"):
+        numpy_fast.detect_ranges(
+            arrays_from_frame(frame),
+            "XUSDT",
+            _profile(),
+            lookbacks=(10,),
+            config=DetectionConfig(lookbacks=(5,)),
+        )
 
 
 def test_empty_short_alias_and_permutation_inputs_remain_equivalent() -> None:
@@ -622,22 +1145,52 @@ def test_nullable_nonfinite_values_recover_and_sums_are_stable() -> None:
     assert nullable_output["volume_sum_window"][0] == 29.0
     assert nullable_output["turnover_sum_window"][0] == 29.0
 
-    recovering = _wave_frame(80).with_columns(
-        pl.when(pl.int_range(pl.len()) == 0)
-        .then(float("nan"))
-        .otherwise(pl.col("high"))
-        .alias("high")
+    missing_columns = _wave_frame(5).select(
+        ["open_time_ms", "open", "high", "low", "close"]
     )
-    recovered, _ = _run(
-        recovering,
-        DetectionConfig(lookbacks=(30,)),
+    missing_output, _ = _run(
+        missing_columns,
+        DetectionConfig(lookbacks=(5,)),
         _profile(),
     )
-    recovered_row = recovered.filter(
-        pl.col("signal_time_ms") == BASE_MS + 60 * MINUTE_MS
-    )
-    assert recovered_row.height == 1
-    assert recovered_row["atr_60"][0] is not None
+    assert missing_output.height == 1
+    assert missing_output["zero_volume_candles_in_window"][0] == 0
+    assert missing_output["volume_sum_window"][0] == 5.0
+    assert missing_output["turnover_sum_window"][0] == 0.0
+
+    for invalid in (None, float("nan"), float("inf"), float("-inf"), -1.0):
+        normalized = _wave_frame(5).with_columns(
+            pl.Series("volume", [invalid, 1.0, 1.0, 1.0, 1.0], dtype=pl.Float64),
+            pl.Series("turnover", [invalid, 1.0, 1.0, 1.0, 1.0], dtype=pl.Float64),
+        )
+        normalized_output, _ = _run(
+            normalized,
+            DetectionConfig(lookbacks=(5,), max_zero_volume_window_pct=1.0),
+            _profile(max_zero_volume_window_pct=1.0),
+        )
+        assert normalized_output.height == 1
+        assert normalized_output["zero_volume_candles_in_window"][0] == 1
+        assert normalized_output["volume_sum_window"][0] == 4.0
+        assert normalized_output["turnover_sum_window"][0] == 4.0
+
+    for invalid_column in ("close", "high"):
+        recovering = _wave_frame(80).with_columns(
+            pl.when(pl.int_range(pl.len()) == 0)
+            .then(float("nan"))
+            .otherwise(pl.col(invalid_column))
+            .alias(invalid_column)
+        )
+        recovered, _ = _run(
+            recovering,
+            DetectionConfig(lookbacks=(30,)),
+            _profile(),
+        )
+        recovered_row = recovered.filter(
+            pl.col("signal_time_ms") == BASE_MS + 60 * MINUTE_MS
+        )
+        assert recovered_row.height == 1
+        assert type(recovered_row["atr_60"][0]) is float
+        assert math.isfinite(recovered_row["atr_60"][0])
 
     dynamic = _wave_frame(80).with_columns(
         pl.Series("volume", [1e20] + [1.0] * 79, dtype=pl.Float64),
@@ -690,9 +1243,10 @@ def test_nullable_nonfinite_values_recover_and_sums_are_stable() -> None:
     extreme_output, _ = _run(
         extreme_returns,
         DetectionConfig(lookbacks=(3,)),
-        _profile(require_current_middle_zone=False),
+        _profile(require_current_middle_zone=False, min_midline_cross_count=2),
     )
     assert extreme_output.height == 1
+    assert extreme_output["midline_crosses"][0] == 2
     assert extreme_output["mean_abs_return_inside_range"][0] > 1_000.0
     assert extreme_output["realized_volatility"][0] > 1_000.0
 
@@ -700,6 +1254,7 @@ def test_nullable_nonfinite_values_recover_and_sums_are_stable() -> None:
 def test_worker_propagates_advertised_zero_volume_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _available()
     captured: list[DetectionConfig] = []
@@ -745,6 +1300,27 @@ def test_worker_propagates_advertised_zero_volume_config(
     assert len(captured) == 1
     assert captured[0].lookbacks == (5,)
     assert captured[0].max_zero_volume_window_pct == 0.0
+    assert result["max_zero_volume_window_pct"] == 0.0
+
+    monkeypatch.setattr(
+        build_range_candidates,
+        "load_manifest",
+        lambda _path: pl.DataFrame(
+            {"symbol": ["XUSDT"], "estimated_kline_rows": [5]}
+        ),
+    )
+    monkeypatch.setattr(
+        build_range_candidates.sys,
+        "argv",
+        [
+            "build_range_candidates.py",
+            "--dry-run-plan",
+            "--max-zero-volume-window-pct",
+            "0.0",
+        ],
+    )
+    build_range_candidates.main()
+    assert "max_zero_volume_window_pct=0.0" in capsys.readouterr().out
 
 
 def test_seeded_randomized_direct_parity() -> None:
@@ -794,27 +1370,82 @@ def test_seeded_randomized_direct_parity() -> None:
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "message"),
+    ("field", "invalid_values"),
     [
-        ({"lookbacks": ()}, "lookbacks"),
-        ({"lookbacks": (5, 5)}, "lookbacks"),
-        ({"lookbacks": (0,)}, "lookbacks"),
-        ({"lower_zone_pct": 1.1}, "lower_zone_pct"),
-        ({"mid_zone_pct": -0.1}, "mid_zone_pct"),
-        ({"upper_zone_pct": -0.1}, "upper_zone_pct"),
-        ({"max_zero_volume_window_pct": 1.1}, "max_zero_volume_window_pct"),
-        ({"min_range_height_pct": -0.1}, "min_range_height_pct"),
-        ({"max_zero_volume_window_pct": "0.1"}, "max_zero_volume_window_pct"),
-        ({"min_range_height_pct": None}, "min_range_height_pct"),
-        ({"mid_zone_pct": float("nan")}, "mid_zone_pct"),
-        ({"lower_zone_pct": True}, "lower_zone_pct"),
-        ({"profile_name": ""}, "profile_name"),
+        (
+            "lookbacks",
+            [[], (), [5], "5", None],
+        ),
+        (
+            "lookbacks",
+            [
+                (5, 5),
+                (0,),
+                (-1,),
+                (True,),
+                (1.0,),
+                ("5",),
+                (None,),
+                (float("nan"),),
+                (float("inf"),),
+                (float("-inf"),),
+            ],
+        ),
+        (
+            "lower_zone_pct",
+            [True, "0.1", None, float("nan"), float("inf"), float("-inf"), -0.1, 1.1],
+        ),
+        (
+            "mid_zone_pct",
+            [True, "0.1", None, float("nan"), float("inf"), float("-inf"), -0.1, 1.1],
+        ),
+        (
+            "upper_zone_pct",
+            [True, "0.1", None, float("nan"), float("inf"), float("-inf"), -0.1, 1.1],
+        ),
+        (
+            "max_zero_volume_window_pct",
+            [True, "0.1", None, float("nan"), float("inf"), float("-inf"), -0.1, 1.1],
+        ),
+        (
+            "min_range_height_pct",
+            [True, "0.1", None, float("nan"), float("inf"), float("-inf"), -0.1],
+        ),
+        (
+            "min_valid_candle_pct",
+            [
+                True,
+                "1.0",
+                None,
+                float("nan"),
+                float("inf"),
+                float("-inf"),
+                0.0,
+                0.99,
+                1.01,
+            ],
+        ),
+        ("profile_name", ["", " "]),
+        ("profile_name", [None, 1, True]),
     ],
 )
 def test_invalid_advertised_config_fails_closed(
-    kwargs: dict[str, object],
-    message: str,
+    field: str,
+    invalid_values: list[object],
 ) -> None:
     _available()
-    with pytest.raises(ValueError, match=message):
-        DetectionConfig(**kwargs)
+    for value in invalid_values:
+        with pytest.raises(ValueError, match=field):
+            DetectionConfig(**{field: value})
+'''
+
+if (
+    hashlib.sha256(ORDINARY_TEST_SOURCE.encode("utf-8")).hexdigest()
+    != ORDINARY_TEST_SHA256
+):
+    raise RuntimeError(SENTINEL)
+
+_FROZEN_AVAILABLE = _available
+exec(compile(ORDINARY_TEST_SOURCE, ORDINARY_TEST_PATH, "exec"), globals())
+_available = _FROZEN_AVAILABLE
+
