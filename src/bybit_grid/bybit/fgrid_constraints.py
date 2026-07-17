@@ -266,3 +266,5 @@ def append_constraints(path: Path, rows: list[dict[str, Any]]) -> pl.DataFrame:
 def write_redacted_response(path: Path, response: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(redact(response), indent=2, sort_keys=True), encoding="utf-8")
+
+# RED probe after frozen erratum: strict API response envelope implementation intentionally unavailable.
