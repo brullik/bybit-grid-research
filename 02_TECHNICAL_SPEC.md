@@ -209,3 +209,4 @@ Sprint 01 requires tests for:
 - Parquet path builder;
 - gap detection on synthetic candles;
 - pagination handling with mocked responses.
+<!-- RED probe only: no documentation behavior -->
