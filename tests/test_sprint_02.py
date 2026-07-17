@@ -67,3 +67,5 @@ def test_no_private_output_contains_secrets_or_balances(tmp_path):
     write_redacted_response(p, {'apiKey':'k','secret':'s','signature':'sig','result': {'symbol':'BTCUSDT'}})
     txt=p.read_text().lower()
     assert '"k"' not in txt and '"s"' not in txt and '"sig"' not in txt
+
+# RED probe after frozen erratum: strict API response envelope implementation intentionally unavailable.
