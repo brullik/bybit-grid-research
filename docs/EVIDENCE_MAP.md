@@ -45,6 +45,12 @@ The earlier atomic-install chain #95–#103 contained invalid or cancelled evide
 - Task-close #143 merged after Ready run 29553808388 and canonical NO_ACTIVE_IMPLEMENTATION.
 - Issue #130 closed completed.
 
+## Current documentation lifecycle
+
+- Task definition #144 merged and froze the exact 13-path, 24-test contract.
+- Mandatory RED #145 produced the exact task-scoped sentinel failures on Python 3.12/3.14 and was closed Draft and unmerged.
+- Implementation #146 is this document set; its governed merge record is the publication evidence for issue #132.
+
 ## Assurance caveat
 
 PR #1–66 predate the immutable control plane. Sampled #1, #2, #20, #40, #59 and #66 lack retained status/review evidence. Current green tests are not retroactive proof. Issue #134 must classify and revalidate current-main behavior without executing historical branch code.
