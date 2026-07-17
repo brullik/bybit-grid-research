@@ -14,7 +14,6 @@ import pytest
 import bybit_grid.bybit.client as client_mod
 import bybit_grid.bybit.fgrid_constraints as fgrid_mod
 import bybit_grid.bybit.models as models_mod
-import scripts.smoke_private_account as account_smoke
 
 
 TASK_ID = "p0-strict-api-response-envelopes"
@@ -35,6 +34,7 @@ REQUIRED_IMPLEMENTATION_PATHS = (
     "tests/test_sprint_02.py",
 )
 RED_REQUIRED_PATHS = REQUIRED_IMPLEMENTATION_PATHS
+account_smoke: Any | None = None
 
 
 def _ordinary_contract(path: str) -> tuple[str, str] | None:
@@ -64,11 +64,24 @@ def _ordinary_contract(path: str) -> tuple[str, str] | None:
 
 
 def _available() -> None:
-    modules = (client_mod, fgrid_mod, models_mod, account_smoke)
+    global account_smoke
+    modules = (client_mod, fgrid_mod, models_mod)
     if any(
         getattr(module, "STRICT_API_RESPONSE_ENVELOPE_CONTRACT", None)
         != CONTRACT_VERSION
         for module in modules
+    ):
+        raise RuntimeError(SENTINEL)
+    if account_smoke is None:
+        try:
+            import importlib
+
+            account_smoke = importlib.import_module("scripts.smoke_private_account")
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(SENTINEL) from exc
+    if (
+        getattr(account_smoke, "STRICT_API_RESPONSE_ENVELOPE_CONTRACT", None)
+        != CONTRACT_VERSION
     ):
         raise RuntimeError(SENTINEL)
     for path, expected_sha in ORDINARY_TEST_SHA256.items():
