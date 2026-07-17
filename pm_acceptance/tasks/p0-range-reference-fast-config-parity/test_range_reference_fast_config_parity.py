@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 import hashlib
 import importlib
 import importlib.util
+import math
 from pathlib import Path
+import random
 from typing import Any
+
+import polars as pl
+import pytest
+
+import bybit_grid.research.range_detector as range_detector
+from bybit_grid.research.range_core import numpy_fast, python_reference
+from bybit_grid.research.range_core.adapter import (
+    arrays_from_frame,
+    detect_ranges_core_with_funnel,
+)
+from bybit_grid.research.range_detector import DetectionConfig, detect_range_candidates
+from bybit_grid.research.range_profiles import RANGE_PROFILES, RangeProfile
 
 
 TASK_ID = "p0-range-reference-fast-config-parity"
@@ -34,7 +49,6 @@ def _modules() -> dict[str, Any]:
     if _modules_cache is not None:
         return _modules_cache
     names = {
-        "build_range_candidates": "scripts.build_range_candidates",
         "range_detector": "bybit_grid.research.range_detector",
         "adapter": "bybit_grid.research.range_core.adapter",
         "numpy_fast": "bybit_grid.research.range_core.numpy_fast",
@@ -42,7 +56,11 @@ def _modules() -> dict[str, Any]:
     }
     try:
         _modules_cache = {
-            key: importlib.import_module(name) for key, name in names.items()
+            "build_range_candidates": build_range_candidates,
+            **{
+                key: importlib.import_module(name)
+                for key, name in names.items()
+            },
         }
     except Exception:
         raise RuntimeError(SENTINEL) from None
@@ -107,22 +125,6 @@ def test_contract_markers_and_exact_implementation_scope() -> None:
     assert RED_REQUIRED_PATHS == REQUIRED_IMPLEMENTATION_PATHS
     assert all((_root() / path).is_file() for path in REQUIRED_IMPLEMENTATION_PATHS)
     assert _ordinary_contract() == (CONTRACT_VERSION, ORDINARY_TEST_SHA256)
-
-import math
-import random
-from dataclasses import replace
-
-import polars as pl
-import pytest
-
-import bybit_grid.research.range_detector as range_detector
-from bybit_grid.research.range_core import numpy_fast, python_reference
-from bybit_grid.research.range_core.adapter import (
-    arrays_from_frame,
-    detect_ranges_core_with_funnel,
-)
-from bybit_grid.research.range_detector import DetectionConfig, detect_range_candidates
-from bybit_grid.research.range_profiles import RANGE_PROFILES, RangeProfile
 
 def _load_build_range_candidates() -> Any:
     path = (
