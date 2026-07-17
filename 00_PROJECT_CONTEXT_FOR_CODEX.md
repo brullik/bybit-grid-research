@@ -82,3 +82,4 @@
 - Для klines учитывать, что limit максимум 1000 свечей за запрос.
 - Для funding history учитывать limit 200.
 - Данные хранить partitioned Parquet.
+<!-- RED probe only: no documentation behavior -->
