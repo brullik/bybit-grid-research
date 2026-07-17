@@ -1,211 +1,49 @@
-# Technical Specification
+# Technical Specification — Current Architecture
 
-## 1. Architecture V1
+## Runtime and storage
 
-Проект делится на модули:
+Python >=3.12. Canonical research storage: Parquet; DuckDB создаёт read-only in-memory views. Future live state target: SQLite. PostgreSQL и Docker не требуются до отдельного deployment task.
 
-```text
-bybit-grid-research/
-  README.md
-  pyproject.toml
-  .env.example
-  .gitignore
-  config/
-    research.yaml
-    risk.yaml
-    bybit.yaml
-  src/
-    bybit_grid/
-      __init__.py
-      config.py
-      logging.py
-      bybit/
-        __init__.py
-        client.py
-        signing.py
-        models.py
-        rate_limit.py
-      data/
-        __init__.py
-        instruments.py
-        tickers.py
-        klines.py
-        mark_klines.py
-        funding.py
-        quality.py
-        storage.py
-      research/
-        __init__.py
-        range_candidates.py
-        features.py
-      backtest/
-        __init__.py
-        grid_simulator.py
-      live/
-        __init__.py
-        signal_engine.py
-        execution_engine.py
-        risk_manager.py
-        telegram_bot.py
-        state_store.py
-  scripts/
-    smoke_public_api.py
-    smoke_private_account.py
-    download_sample_data.py
-    validate_sample_grid.py
-  tests/
-    test_signing.py
-    test_storage_paths.py
-    test_gap_detection.py
-  data/
-    raw/
-    processed/
-    metadata/
-  reports/
-```
+## Implemented components
 
-В Sprint 01 реализуются только:
+| Boundary | Main paths | Status |
+|---|---|---|
+| Bybit public/private client | src/bybit_grid/bybit | public + exact validate-only boundary |
+| Strict historical evidence | src/bybit_grid/data/public_batch/historical_*.py | offline/in-memory through 06.4F |
+| Canonical market store | src/bybit_grid/data/market_store | schemas, reader/writer, atomicity, audit, coverage/resume, DuckDB views |
+| Range research | src/bybit_grid/research/range_core and range_detector.py | reference/NumPy and event components |
+| Neutral grid semantics | src/bybit_grid/backtest/neutral_grid | Decimal state machine and accounting |
+| OHLC replay | src/bybit_grid/backtest/ohlc_replay | minimal-path replay and provenance |
+| Outcome/scoring | src/bybit_grid/research/outcome_core and src/bybit_grid/research/scoring | proxy-only |
+| Walk-forward | src/bybit_grid/research/walk_forward | split mechanics; selection insufficient |
 
-- `bybit/client.py`
-- `bybit/signing.py`
-- `bybit/rate_limit.py`
-- `data/instruments.py`
-- `data/tickers.py`
-- `data/klines.py`
-- `data/mark_klines.py`
-- `data/funding.py`
-- `data/quality.py`
-- `data/storage.py`
-- smoke scripts
-- tests
+Подробная матрица: [CURRENT_ARCHITECTURE_AND_STATUS](docs/CURRENT_ARCHITECTURE_AND_STATUS.md).
 
-Research/backtest/live модули создаются как пустые package files или placeholders, но не реализуются.
+## Missing vertical path
 
-## 2. Dependencies
+Единый production-like offline поток отсутствует:
 
-```toml
-python = ">=3.12"
-httpx = "*"
-pydantic = "*"
-pydantic-settings = "*"
-python-dotenv = "*"
-tenacity = "*"
-polars = "*"
-pyarrow = "*"
-duckdb = "*"
-pytest = "*"
-ruff = "*"
-```
+historical evidence → canonical store → range candidates → semantic replay → complete costs and forced SL → walk-forward/OOS → bounded decision.
 
-## 3. Environment variables
+Текущие scripts/build_range_candidates.py и scripts/build_candidate_outcomes.py читают legacy data/raw. Current outcome/scoring не запускает NeutralGridReferenceEngine над реальными candidates. Native quantity/termination mapping, liquidation, full risk budget, parameter sufficiency и profitability не доказаны.
 
-```text
-BYBIT_ENV=mainnet
-BYBIT_API_BASE_URL=https://api.bybit.com
-BYBIT_API_KEY=
-BYBIT_API_SECRET=
-BYBIT_RECV_WINDOW=5000
-LIVE_TRADING_ENABLED=false
-ALLOW_LIVE_TRADING=NO
-DATA_DIR=./data
-LOG_LEVEL=INFO
-```
+## Historical chain 06.4C–06.4F
 
-## 4. Bybit endpoints needed in Sprint 01
+- historical_plan.py: bounded request plan;
+- historical_response.py: admission of supplied response bytes;
+- historical_transcript.py: transcript reconciliation;
+- historical_evidence.py: deterministic in-memory layout.
 
-Public:
+Network downloader, archive, untrusted re-admission, filesystem publication и store projection отсутствуют. WIP 06.4G не публикуется до исправления frozen contract.
 
-- `GET /v5/market/instruments-info?category=linear`
-- `GET /v5/market/tickers?category=linear`
-- `GET /v5/market/kline?category=linear&symbol=...&interval=1&start=...&end=...&limit=1000`
-- `GET /v5/market/mark-price-kline?category=linear&symbol=...&interval=1&start=...&end=...&limit=1000`
-- `GET /v5/market/funding/history?category=linear&symbol=...&startTime=...&endTime=...&limit=200`
+## Private boundary
 
-Private:
+validate_only.py фиксирует mainnet origin https://api.bybit.com, три read-only GET, единственный POST /v5/fgridbot/validate и neutral/geometric payload. client.py использует private transport с trust_env=false и follow_redirects=false; generic private_post, create_grid_bot и close_grid_bot fail closed.
 
-- `GET /v5/account/info`
-- `GET /v5/account/wallet-balance`
-- Futures Grid Bot validate endpoint, if accessible on account. Validate only. No create.
+## CI
 
-## 5. Storage layout
+PM Acceptance — base-controlled pull_request_target, scope classifier, frozen tests, Python 3.12/3.14, numeric/no-live/compile/pytest/Ruff gates. Workflow доказывает PR head, но не создаёт отдельного push-status для squash merge SHA.
 
-```text
-data/
-  metadata/
-    instruments_linear.parquet
-    tickers_linear_snapshot_YYYYMMDD_HHMMSS.parquet
-    account_info_redacted.json
-  raw/
-    klines/
-      symbol=BTCUSDT/year=2026/month=07/part.parquet
-    mark_klines/
-      symbol=BTCUSDT/year=2026/month=07/part.parquet
-    funding/
-      symbol=BTCUSDT/year=2026/part.parquet
-  quality/
-    gap_report_YYYYMMDD_HHMMSS.parquet
-  reports/
-    sprint_01_api_report.md
-```
+## Non-capabilities
 
-## 6. Kline schema
-
-```text
-symbol: str
-category: str
-open_time_ms: int64
-open_time_utc: datetime[ms]
-open: float64
-high: float64
-low: float64
-close: float64
-volume: float64
-turnover: float64
-source: str
-fetched_at_ms: int64
-```
-
-## 7. Funding schema
-
-```text
-symbol: str
-category: str
-funding_rate_timestamp_ms: int64
-funding_rate: float64
-source: str
-fetched_at_ms: int64
-```
-
-## 8. Data quality checks
-
-Minimum checks:
-
-- no duplicate `(symbol, open_time_ms)`;
-- candles sorted ascending after normalization;
-- expected 1m interval exactly 60_000 ms;
-- missing intervals reported;
-- overlapping downloaded windows de-duplicated;
-- raw API rows are normalized consistently;
-- start/end boundaries included in report;
-- retry failed chunks.
-
-## 9. CLI scripts expected
-
-```bash
-python scripts/smoke_public_api.py
-python scripts/smoke_private_account.py
-python scripts/download_sample_data.py --symbols BTCUSDT ETHUSDT --days 7
-python scripts/validate_sample_grid.py --symbol BTCUSDT --dry-run
-```
-
-All scripts must run safely without live trading.
-
-## 10. Testing
-
-Sprint 01 requires tests for:
-
-- HMAC signing string construction;
-- redaction of secrets in logs;
-- Parquet path builder;
-- gap detection on synthetic candles;
-- pagination handling with mocked responses.
+src/bybit_grid/backtest/grid_simulator.py, research/features.py, research/range_candidates.py и большая часть live package остаются placeholders. Нет готового downloader-to-decision E2E, portfolio engine, Telegram runtime, VPS deployment или live trading.
