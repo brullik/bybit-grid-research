@@ -889,7 +889,13 @@ class BybitClient:
     ) -> dict[str, Any]:
         if native_validate and endpoint != CANONICAL_FGRID_VALIDATE_ENDPOINT:
             raise ValidateOnlyBoundaryError("validate_response_endpoint_forbidden")
-        data = self._decode_response_envelope(endpoint, response)
+        try:
+            data = self._decode_response_envelope(endpoint, response)
+        except BybitResponseEnvelopeError:
+            self._capture_rate_limit_headers({}, response)
+            raise
+
+        self._capture_rate_limit_headers(data, response)
 
         has_ret_code = "retCode" in data
         has_status_code = "status_code" in data
@@ -952,7 +958,6 @@ class BybitClient:
                 "response_message_type_invalid",
             )
 
-        self._capture_rate_limit_headers(data, response)
         ret_msg = data.get("retMsg")
         debug_msg = data.get("debug_msg")
 
