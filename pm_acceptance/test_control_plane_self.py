@@ -727,12 +727,17 @@ def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
     assert "statuses: write" not in acceptance
 
 
-def _run_exact_control_plane_gate(tmp_path: Path, *, conftest: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run_exact_control_plane_gate(
+    tmp_path: Path,
+    *,
+    conftest: str | None = None,
+    test_source: str = "def test_plain_pass():\n    assert True\n",
+) -> subprocess.CompletedProcess[str]:
     root = tmp_path / "exact-control"
     acceptance = root / "pm_acceptance"
     acceptance.mkdir(parents=True)
     (acceptance / "test_control_plane_self.py").write_text(
-        "def test_plain_pass():\n    assert True\n",
+        test_source,
         encoding="utf-8",
     )
     if conftest is not None:
@@ -775,6 +780,19 @@ def test_exact_control_plane_gate_rejects_conftest_skip_padding(tmp_path: Path):
     assert result.returncode == 1
     assert "skipped:" in result.stdout
     assert "plain-pass-set-mismatch" in result.stdout
+
+
+def test_exact_control_plane_gate_rejects_early_success_process_exit(tmp_path: Path):
+    result = _run_exact_control_plane_gate(
+        tmp_path,
+        test_source=(
+            "import os\n\n"
+            "def test_plain_pass():\n"
+            "    os._exit(0)\n"
+        ),
+    )
+    assert result.returncode == 1
+    assert "control-plane-self-runner-failed:0" in result.stdout
 
 
 def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
