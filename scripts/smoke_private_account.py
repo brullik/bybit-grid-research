@@ -154,3 +154,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+# RED probe after frozen erratum: strict API response envelope implementation intentionally unavailable.
