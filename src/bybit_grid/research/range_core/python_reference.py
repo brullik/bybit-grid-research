@@ -134,12 +134,12 @@ def _detect_reference(
     ]
     zero_volume = [volume == 0.0 for volume in volumes]
     effective_zero_volume_pct = min(
-        cfg.max_zero_volume_window_pct,
-        selected_profile.max_zero_volume_window_pct,
+        float(cfg.max_zero_volume_window_pct),
+        float(selected_profile.max_zero_volume_window_pct),
     )
     effective_minimum_height_pct = max(
-        cfg.min_range_height_pct,
-        selected_profile.range_height_pct_min,
+        float(cfg.min_range_height_pct),
+        float(selected_profile.range_height_pct_min),
     )
     middle_low = 0.5 - cfg.mid_zone_pct / 2.0
     middle_high = 0.5 + cfg.mid_zone_pct / 2.0
