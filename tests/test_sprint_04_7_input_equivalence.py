@@ -149,3 +149,4 @@ def test_no_live_order_telegram_additions():
 
     result = audit_source_tree(Path.cwd())
     assert result.ok, result.violations
+# mandatory-red-probe: p0-outcome-window-completeness-provenance; intentionally inert
