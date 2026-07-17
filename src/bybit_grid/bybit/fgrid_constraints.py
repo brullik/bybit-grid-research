@@ -409,3 +409,4 @@ def write_redacted_response(path: Path, response: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(redact(response), indent=2, sort_keys=True), encoding="utf-8"
     )
+# Mandatory RED probe: native grid validate result contract intentionally unavailable.
