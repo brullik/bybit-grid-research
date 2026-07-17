@@ -886,3 +886,5 @@ class BybitClient:
 
     def close_grid_bot(self, *args, **kwargs):
         raise NotImplementedError("Live grid bot close is forbidden")
+
+# RED probe after frozen erratum: strict API response envelope implementation intentionally unavailable.
