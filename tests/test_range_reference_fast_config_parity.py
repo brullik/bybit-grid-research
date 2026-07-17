@@ -594,7 +594,107 @@ def test_minimum_height_and_zero_volume_config_control_both_cores() -> None:
         ),
         _profile(),
     )
-    zero_rejected, zero_funnel = _…843 tokens truncated…_rejection_count"] == 0
+    zero_rejected, zero_funnel = _run(
+        frame,
+        DetectionConfig(
+            lookbacks=(20,),
+            min_range_height_pct=0.001,
+            max_zero_volume_window_pct=0.0,
+        ),
+        _profile(),
+    )
+    height_rejected, height_funnel = _run(
+        _wave_frame(20),
+        DetectionConfig(lookbacks=(20,), min_range_height_pct=0.03),
+        _profile(),
+    )
+    profile_zero_rejected, profile_zero_funnel = _run(
+        frame,
+        DetectionConfig(
+            lookbacks=(20,),
+            min_range_height_pct=0.001,
+            max_zero_volume_window_pct=0.05,
+        ),
+        _profile(max_zero_volume_window_pct=0.0),
+    )
+    profile_height_rejected, profile_height_funnel = _run(
+        _wave_frame(20),
+        DetectionConfig(lookbacks=(20,), min_range_height_pct=0.001),
+        _profile(range_height_pct_min=0.03),
+    )
+    assert accepted.height == 1
+    assert zero_rejected.is_empty()
+    assert zero_funnel["zero_volume_window_rejection_count"] == 1
+    assert height_rejected.is_empty()
+    assert height_funnel["range_height_rejection_count"] == 1
+    assert profile_zero_rejected.is_empty()
+    assert profile_zero_funnel["zero_volume_window_rejection_count"] == 1
+    assert profile_height_rejected.is_empty()
+    assert profile_height_funnel["range_height_rejection_count"] == 1
+
+
+def test_profile_name_and_lookbacks_are_effective() -> None:
+    _available()
+    frame = _wave_frame(40)
+    broad = detect_range_candidates(
+        frame,
+        "XUSDT",
+        DetectionConfig(lookbacks=(10,), profile_name="broad_diagnostic"),
+    )
+    strict = detect_range_candidates(
+        frame,
+        "XUSDT",
+        DetectionConfig(lookbacks=(10,), profile_name="strict_research"),
+    )
+    output, funnel = _run(
+        frame,
+        DetectionConfig(lookbacks=(10, 20)),
+        _profile(),
+    )
+    assert broad.height > strict.height
+    assert set(output["lookback_minutes"].to_list()) == {10, 20}
+    assert funnel["total_window_positions"] == 52
+    custom = DetectionConfig(lookbacks=(10,), profile_name="explicit_custom")
+    explicit, _ = _run(frame, custom, _profile(name="explicit_custom"))
+    assert explicit.height > 0
+    with pytest.raises(ValueError, match="profile_name must name"):
+        detect_range_candidates(frame, "XUSDT", custom)
+
+
+def test_min_valid_candle_pct_is_explicitly_versioned_strict() -> None:
+    _available()
+    assert DetectionConfig(min_valid_candle_pct=1.0).min_valid_candle_pct == 1.0
+    with pytest.raises(
+        ValueError,
+        match="range-reference-fast-config-parity-v1 requires min_valid_candle_pct=1.0",
+    ):
+        DetectionConfig(min_valid_candle_pct=0.99)
+
+
+def test_duplicate_before_window_is_not_counted_inside_window() -> None:
+    _available()
+    frame = _wave_frame(6).with_columns(
+        pl.Series(
+            "open_time_ms",
+            [
+                BASE_MS,
+                BASE_MS,
+                BASE_MS + MINUTE_MS,
+                BASE_MS + 2 * MINUTE_MS,
+                BASE_MS + 3 * MINUTE_MS,
+                BASE_MS + 4 * MINUTE_MS,
+            ],
+        )
+    )
+    output, funnel = _run(
+        frame,
+        DetectionConfig(lookbacks=(3,)),
+        _profile(),
+    )
+    assert output.height == 3
+    assert funnel["total_window_positions"] == 4
+    assert funnel["missing_window_rejection_count"] == 1
+    assert funnel["duplicate_timestamp_rejection_count"] == 0
     assert funnel["raw_candidate_pass_count"] == 3
 
     internal_duplicate = _wave_frame(5).with_columns(
