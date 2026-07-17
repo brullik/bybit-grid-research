@@ -290,3 +290,4 @@ def test_v4_ids_versioned_and_match_key_stable():
     v4 = deterministic_outcome_id("a", 60, 10, 0.5, "v4_native_grid_geometry")
     assert v3 != v4
     assert outcome_match_key("a", 60, 10, 0.5) == outcome_match_key("a", 60, 10, 0.5)
+# mandatory-red-probe: p0-outcome-window-completeness-provenance; intentionally inert
