@@ -193,7 +193,7 @@ def _sorted_unique(df: pl.DataFrame, time_col: str) -> tuple[pl.DataFrame, dict[
 def build_outcome_symbol_arrays(
     klines: pl.DataFrame, mark_klines: pl.DataFrame, funding: pl.DataFrame
 ) -> OutcomeSymbolArrays:
-    tc = _time_col(klines) if not klines.is_empty() else "open_time_ms"
+    tc = _time_col(klines)
     validate_kline_schema(klines, tc)
     raw_kl = klines.sort(tc) if not klines.is_empty() and tc in klines.columns else klines
     raw_times = (
