@@ -17,3 +17,5 @@ class BybitAPIError(RuntimeError):
         self.ret_msg = ret_msg
         self.debug_msg = debug_msg
         self.response_data = response_data or {}
+
+# RED probe: strict API response envelope implementation intentionally unavailable.
