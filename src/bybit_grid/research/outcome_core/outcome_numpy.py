@@ -114,7 +114,11 @@ def _window_diagnostics(
 
 def _sl_buffer_id_token(sl_atr_buffer: float) -> str:
     value = float(sl_atr_buffer)
-    return f"{value:g}" if value.is_integer() else repr(value)
+    if value == 0.0:
+        return "0"
+    if math.isfinite(value) and value.is_integer():
+        return str(int(value))
+    return repr(value)
 
 
 def outcome_match_key(event_id: str, horizon: int, grid_cell_number: int, sl_atr_buffer: float) -> str:
