@@ -392,3 +392,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+# Mandatory RED probe: native grid validate result contract intentionally unavailable.
