@@ -56,7 +56,7 @@ OUTCOME_WINDOW_COMPLETENESS_PROVENANCE_TEST_CONTRACT = (
 Its complete UTF-8/LF raw bytes are embedded once as `ORDINARY_TEST_SOURCE` and pinned at SHA-256
 `fa24ab7fabe36199b7fd62224f1d321cb052b5036ea47f4a018301576933e29f`.
 The complete frozen-suite raw bytes are SHA-256
-`79bd489b9cc882fa0f3217c9c681f16db511bcd16a9b459ba74d59d5f947e7d0`.
+`fb99b9d744c1039c226aeb663ef38f2d8f312b5c432ac13fd5c01c9b65c056aa`.
 
 After task-definition merge, a mandatory fresh Draft `probe/` PR changes all eight required paths
 and no others. The four existing production paths receive inert comment-only edits; the new shared
