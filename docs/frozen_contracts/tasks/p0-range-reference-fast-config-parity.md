@@ -59,7 +59,7 @@ and pinned at SHA-256
 The harness verifies the embedded preimage at collection and requires the future ordinary file to
 match those exact bytes. A hash without its reproducible preimage does not satisfy this contract.
 The complete frozen-suite raw bytes are SHA-256
-`0f9affd62ef6e8d41f8c9c97de5a7daa580bf0483e5662efdb463469d74e6836`.
+`1c919186a5ac59fe6cab4215747abf9b1247dc41c584383d2f7682049a780519`.
 
 After task-definition merge, the mandatory fresh `probe/` PR changes every required path and no
 other path. The five existing production paths receive inert comment-only changes; the new
