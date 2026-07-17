@@ -4,7 +4,10 @@ import math
 
 import polars as pl
 
-from bybit_grid.research.outcome_core.outcome_numpy import deterministic_outcome_id
+from bybit_grid.research.outcome_core.outcome_numpy import (
+    deterministic_outcome_id,
+    outcome_match_key,
+)
 
 
 OUTCOME_SEMANTICS_VERSION = "v5_exact_outcome_window_provenance"
@@ -78,6 +81,7 @@ def validate_outcome_window_semantics(df: pl.DataFrame) -> dict[str, object]:
     failures: list[str] = []
     required = {
         "outcome_id",
+        "outcome_match_key",
         "outcome_semantics_version",
         "range_action_event_id",
         "symbol",
@@ -194,9 +198,12 @@ def validate_outcome_window_semantics(df: pl.DataFrame) -> dict[str, object]:
             row["funding_rows_in_horizon"],
             row["mark_price_future_rows_available"],
         )
-        if not all(type(value) is int and value >= 0 for value in auxiliary_counts):
+        auxiliary_counts_valid = all(
+            type(value) is int and value >= 0 for value in auxiliary_counts
+        )
+        if not auxiliary_counts_valid:
             fail(failures, "outcome auxiliary diagnostics must be nonnegative integers")
-        if row["future_zero_volume_count"] > rows_available:
+        elif row["future_zero_volume_count"] > rows_available:
             fail(failures, "zero-volume diagnostics exceed available rows")
         if (
             not isinstance(row["funding_source_status"], str)
@@ -439,11 +446,12 @@ def validate_outcome_window_semantics(df: pl.DataFrame) -> dict[str, object]:
         grid_count = row.get("grid_count")
         sl_atr_buffer = row.get("sl_atr_buffer")
         outcome_id = row.get("outcome_id")
+        match_key = row.get("outcome_match_key")
         if not isinstance(event_id, str) or not event_id.strip():
             fail(failures, "range action event id provenance invalid")
         if not isinstance(symbol, str) or not symbol.strip():
             fail(failures, "symbol provenance invalid")
-        if type(grid_cell_number) is not int or grid_cell_number <= 0:
+        if type(grid_cell_number) is not int or grid_cell_number < 2:
             fail(failures, "grid cell number id material invalid")
         if (
             type(grid_count) is not int
@@ -467,11 +475,19 @@ def validate_outcome_window_semantics(df: pl.DataFrame) -> dict[str, object]:
                 OUTCOME_SEMANTICS_VERSION,
                 OUTCOME_WINDOW_SEMANTICS_VERSION,
             )
+            expected_match_key = outcome_match_key(
+                str(event_id),
+                horizon,
+                int(grid_cell_number),
+                float(sl_atr_buffer),
+            )
         except (TypeError, ValueError):
             fail(failures, "outcome id material invalid")
         else:
             if outcome_id != expected_outcome_id:
                 fail(failures, "outcome_id does not match v5 semantic material")
+            if match_key != expected_match_key:
+                fail(failures, "outcome_match_key does not match stable semantic material")
 
         outcome_profile = row["outcome_profile_name"]
         range_profile = row["range_profile_name"]
@@ -514,6 +530,8 @@ def validate_outcome_window_semantics(df: pl.DataFrame) -> dict[str, object]:
         fail(failures, "duplicate outcome composite rows")
     if df["outcome_id"].n_unique() != df.height:
         fail(failures, "duplicate outcome ids")
+    if df["outcome_match_key"].n_unique() != df.height:
+        fail(failures, "duplicate outcome match keys")
 
     event_horizon_fields = (
         "symbol",
