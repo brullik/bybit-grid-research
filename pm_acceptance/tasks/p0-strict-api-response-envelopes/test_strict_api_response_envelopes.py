@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import logging
 import traceback
@@ -73,12 +74,19 @@ def _available() -> None:
     ):
         raise RuntimeError(SENTINEL)
     if account_smoke is None:
+        script_path = ROOT / REQUIRED_IMPLEMENTATION_PATHS[0]
+        spec = importlib.util.spec_from_file_location(
+            "_p0_strict_api_response_envelopes_account_smoke",
+            script_path,
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(SENTINEL)
+        module = importlib.util.module_from_spec(spec)
         try:
-            import importlib
-
-            account_smoke = importlib.import_module("scripts.smoke_private_account")
-        except ModuleNotFoundError as exc:
+            spec.loader.exec_module(module)
+        except (ImportError, OSError) as exc:
             raise RuntimeError(SENTINEL) from exc
+        account_smoke = module
     if (
         getattr(account_smoke, "STRICT_API_RESPONSE_ENVELOPE_CONTRACT", None)
         != CONTRACT_VERSION
