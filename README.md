@@ -1,40 +1,107 @@
-# Bybit Futures Grid Research Project
+<!-- documentation-contract: current-v1 -->
+# Bybit Grid Research
 
-Стартовый пакет проекта для разработки системы поиска проторговок и запуска нативного Bybit Futures Grid Bot в режиме `neutral + geometric`.
+Исследовательский Python-проект для Bybit USDT linear perpetual и нативного Futures Grid Bot в режиме neutral + geometric.
 
-## Статус проекта
+Audit baseline: 2026-07-17, production code after PR #143 at `35a3b9c05b1bf3d86756e449b2735bef0893bc45`. Later governance-only commits do not turn missing capabilities into implemented ones.
 
-Текущая стадия: **Sprint 01 — API & Data Feasibility**.
+## Текущий статус
 
-Главная цель первой стадии — не искать прибыльную стратегию, а доказать, что проект технически реализуем:
+Это библиотека проверенных offline-компонентов и fail-closed validate-only границы, а не готовый торговый бот. На текущем main:
 
-1. Получаем список всех Bybit linear USDT perpetual инструментов с пагинацией.
-2. Загружаем 1m OHLCV, mark price kline и funding history.
-3. Проверяем качество данных: дыры, дубликаты, порядок свечей.
-4. Проверяем тип аккаунта через API.
-5. Проверяем, можем ли вызвать Futures Grid Bot validate на mainnet без создания бота.
-6. Ничего не открываем в live без отдельного разрешения.
+- реализованы public-data модели, canonical Parquet store с read-only in-memory DuckDB views, range-компоненты, neutral-grid state machine и OHLC replay;
+- private transport разрешает только точные read-only GET и нативный POST /v5/fgridbot/validate;
+- generic private POST, create_grid_bot и close_grid_bot недоступны;
+- outcome/scoring остаётся proxy-only, parameter selection и risk budget не доказаны;
+- единого пути canonical store → range → semantic replay → OOS decision пока нет;
+- Telegram runtime, VPS deployment и live execution не реализованы.
 
-## Как использовать этот пакет
+Machine-readable capability status:
 
-1. Создай пустой GitHub-репозиторий, например `bybit-grid-research`.
-2. Скопируй туда эти файлы.
-3. Открой репозиторий в Codex.
-4. Начни с файла `04_CODEX_PROMPT_SPRINT_01.md`.
-5. Никогда не вставляй API secret в ChatGPT, Codex, GitHub issue или commit.
+~~~text
+`live_execution_implemented`: `false`
+`telegram_runtime_implemented`: `false`
+`vps_deployment_implemented`: `false`
+~~~
+
+Подробности: [архитектура и статус](docs/CURRENT_ARCHITECTURE_AND_STATUS.md).
+
+## Быстрый offline-старт
+
+Требуется Python 3.12 или новее.
+
+Windows PowerShell:
+
+~~~powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+~~~
+
+Linux/macOS:
+
+~~~bash
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+~~~
+
+Полная безопасная проверка:
+
+~~~bash
+python scripts/check_numeric_environment.py
+python scripts/check_no_live_execution.py
+python -m compileall -q src tests scripts
+python -m pytest tests -q
+python -m pytest -q
+ruff check .
+python -m pip check
+~~~
+
+Инструкции и диагностика: [SETUP_TEST_RUNBOOK](docs/SETUP_TEST_RUNBOOK.md).
+
+## Нормативная risk policy
+
+- капитал исследования: 500 USDT;
+- максимальный общий убыток одной сетки: 5 USDT, это не размер investment;
+- максимум одна сетка на инструмент; начальный global concurrency cap — 1;
+- только нативный Bybit USDT linear perpetual Futures Grid;
+- только neutral + geometric;
+- выход V1 только по SL; TP и trailing запрещены;
+- API key без withdrawal permission;
+- первые live-действия требуют ручного подтверждения в Telegram.
+
+Это обязательные будущие gates, а не доказательство готовой live-системы.
+
+~~~text
+`capital_usdt`: `500`
+`max_loss_per_grid_usdt`: `5`
+`max_grids_per_instrument`: `1`
+`initial_global_concurrency_cap`: `1`
+`grid_mode`: `neutral`
+`grid_type`: `geometric`
+`exit_policy`: `SL-only`
+`take_profit_enabled`: `false`
+`trailing_enabled`: `false`
+`withdrawals_authorized`: `false`
+`first_live_requires_manual_telegram_confirmation`: `true`
+~~~
 
 ## Документы
 
-- `00_PROJECT_CONTEXT_FOR_CODEX.md` — полный контекст для Codex.
-- `01_PROJECT_RULES.md` — зафиксированные правила проекта.
-- `02_TECHNICAL_SPEC.md` — техническая архитектура первой версии.
-- `03_SPRINT_01_API_DATA_FEASIBILITY.md` — задачи первого спринта.
-- `04_CODEX_PROMPT_SPRINT_01.md` — готовый prompt для Codex.
-- `05_RISK_AND_RESEARCH_POLICY.md` — правила риска, backtest и research gates.
-- `PROJECT_BOARD.md` — доска задач.
-- `.env.example` — пример переменных окружения без секретов.
-- `pyproject.toml` — стартовые зависимости и настройки проекта.
+- [Текущий контекст](00_PROJECT_CONTEXT_FOR_CODEX.md)
+- [Правила проекта](01_PROJECT_RULES.md)
+- [Техническая спецификация](02_TECHNICAL_SPEC.md)
+- [Исторический Sprint 01](03_SPRINT_01_API_DATA_FEASIBILITY.md)
+- [Исторический prompt Sprint 01](04_CODEX_PROMPT_SPRINT_01.md)
+- [Risk и research policy](05_RISK_AND_RESEARCH_POLICY.md)
+- [Project Board](PROJECT_BOARD.md)
+- [Архитектура и статус](docs/CURRENT_ARCHITECTURE_AND_STATUS.md)
+- [Setup/test runbook](docs/SETUP_TEST_RUNBOOK.md)
+- [Evidence map](docs/EVIDENCE_MAP.md)
+- [Minimal-live Definition of Done](docs/MINIMAL_LIVE_DEFINITION_OF_DONE.md)
+- [Безопасный шаблон окружения](.env.example)
 
-## Неприкосновенное правило
-
-До завершения Sprint 01 проект работает в режиме **data + validate only**. Создание и закрытие реального grid-бота — отдельный спринт после ручной проверки отчета.
+Перед любыми credentials необходимо закрыть repository-history gate #133 и соответствующий assurance #134. Секреты запрещено помещать в ChatGPT, GitHub, исходники, issues, PR, логи и fixtures.
