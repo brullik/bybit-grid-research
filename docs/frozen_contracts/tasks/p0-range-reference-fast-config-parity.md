@@ -39,6 +39,10 @@ The frozen suite contains exactly 29 collected nodes. Every complete `test_*` fu
 `_available()` as its first statement. Availability requires one exact top-level literal
 assignment in each of the five production paths:
 
+The frozen harness is required to catch broad `Exception` only around its production-module
+import and builder-load boundary, converting any such load failure to the exact RED sentinel.
+No other broad exception catch is authorized in the frozen harness or ordinary tests.
+
 ```python
 RANGE_REFERENCE_FAST_CONFIG_PARITY_CONTRACT = "range-reference-fast-config-parity-v1"
 ```
@@ -49,8 +53,13 @@ The ordinary test must contain exactly one top-level literal assignment:
 RANGE_REFERENCE_FAST_CONFIG_PARITY_TEST_CONTRACT = "range-reference-fast-config-parity-v1"
 ```
 
-Its complete raw bytes are pinned at SHA-256
-`46d5c2b47048145345eaa92d2159752281a1229e3e5323e36d0853b3ef538f7d`.
+Its complete UTF-8/LF raw bytes are embedded once as `ORDINARY_TEST_SOURCE` in the frozen suite
+and pinned at SHA-256
+`45f5aa70757804a779f9bef1da7ca0f8d6eea96706109b135d364d61b1f2c8b6`.
+The harness verifies the embedded preimage at collection and requires the future ordinary file to
+match those exact bytes. A hash without its reproducible preimage does not satisfy this contract.
+The complete frozen-suite raw bytes are SHA-256
+`0f9affd62ef6e8d41f8c9c97de5a7daa580bf0483e5662efdb463469d74e6836`.
 
 After task-definition merge, the mandatory fresh `probe/` PR changes every required path and no
 other path. The five existing production paths receive inert comment-only changes; the new
@@ -67,13 +76,18 @@ Acceptance imports and calls `python_reference.detect_from_frame()` directly and
 wrapper on both sides, aliasing one implementation to the other, or comparing only candidate IDs
 does not satisfy the contract.
 
+Acceptance also verifies source/callable ownership, forbids cross-core imports and entrypoint
+delegation, poisons the opposite public and router routes while executing each core, and rejects
+multiplied side-difference/sign expressions for midline classification.
+
 For every deterministic fixture:
 
 - emitted column order, row order, row count, nullable shape, strings, integers, booleans and
-  identifiers match exactly;
+  identifiers match exactly, including the complete Polars schema and exact Python value types;
 - every finite floating field matches with absolute and relative tolerance `1e-12`;
 - NaN is equal only to NaN and may not be introduced by accepted normalized volume/turnover data;
-- every key in `FUNNEL_KEYS` is an integer and the complete funnel dictionaries match exactly;
+- ordered keys equal `FUNNEL_KEYS`; every value is a nonnegative exact integer; rejection counts
+  conserve `total_window_positions`; and the complete funnel dictionaries match exactly;
 - the direct reference result equals its instrumented reference-with-funnel result.
 
 The frozen suite covers baseline, reversed input, aliases, missing turnover, empty/short input,
@@ -90,10 +104,10 @@ All numeric fields reject booleans, strings, nulls, NaN and infinities with stab
   The v1 detector does not silently reinterpret a row-count window as a partial time window.
 - `max_zero_volume_window_pct` is in `[0, 1]`; the effective threshold is the stricter of config
   and profile. The CLI builder constructs the full config, passes it through the adapter, and
-  records the effective requested value in dry-run/performance evidence.
+  records the requested value in both dry-run and per-symbol worker-result evidence.
 - `min_range_height_pct` is finite and nonnegative; the effective minimum is the stricter of
   config and profile.
-- `profile_name` is a nonempty string. With no explicit profile it must name an exact registered
+- `profile_name` is a nonblank string. With no explicit profile it must name an exact registered
   profile; there is no silent broad-profile fallback. An explicitly supplied `RangeProfile`
   remains authoritative, including a custom profile.
 
