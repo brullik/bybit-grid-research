@@ -102,3 +102,4 @@ python scripts/download_sample_data.py --symbols BTCUSDT ETHUSDT --days 7
 ```
 
 Do not ask to implement strategy yet. Finish Sprint 01 only.
+<!-- RED probe only: no documentation behavior -->
