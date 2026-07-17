@@ -105,3 +105,4 @@ def build_actionable_events(raw: pl.DataFrame, regime_cfg: RegimeCoalesceConfig 
                 "min_investment_feasible_at_5usdt": cand.get("min_investment_feasible_at_5usdt"),
             })
     return regimes, pl.DataFrame(rows).sort(["symbol", "profile_name", "signal_time_ms"]) if rows else pl.DataFrame()
+# Mandatory RED scope probe for p0-range-actionable-prefix-invariance; intentionally inert.
