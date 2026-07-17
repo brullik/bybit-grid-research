@@ -25,14 +25,21 @@ SENSITIVE_WALLET_AMOUNT_KEYS = {
     "free",
     "locked",
 }
+STRICT_API_RESPONSE_ENVELOPE_CONTRACT = "strict-envelope-v1"
 
 
-def _status(data: dict[str, Any] | None) -> str:
-    if not data:
+def _status(data: dict[str, Any] | None | object) -> str:
+    if data is None:
         return "not-run"
-    if data.get("error"):
+    if type(data) is not dict or "error" in data or "status_code" in data:
         return "error"
-    return "ok" if data.get("retCode") in (0, "0", None) else "error"
+    if ("retMsg" in data and type(data["retMsg"]) is not str) or (
+        "debug_msg" in data and type(data["debug_msg"]) is not str
+    ):
+        return "error"
+    return (
+        "ok" if type(data.get("retCode")) is int and data["retCode"] == 0 else "error"
+    )
 
 
 def _sanitize_account_info(info: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -59,7 +66,11 @@ def _sanitize_account_info(info: dict[str, Any] | None) -> dict[str, Any] | None
 def _extract_wallet_coins(wallet: dict[str, Any] | None) -> list[str]:
     if not isinstance(wallet, dict):
         return []
-    rows = wallet.get("result", {}).get("list", []) if isinstance(wallet.get("result"), dict) else []
+    rows = (
+        wallet.get("result", {}).get("list", [])
+        if isinstance(wallet.get("result"), dict)
+        else []
+    )
     coins: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
@@ -70,7 +81,9 @@ def _extract_wallet_coins(wallet: dict[str, Any] | None) -> list[str]:
     return sorted(coins)
 
 
-def _sanitize_wallet_balance(wallet: dict[str, Any] | None, account_type: str = "UNIFIED") -> dict[str, Any] | None:
+def _sanitize_wallet_balance(
+    wallet: dict[str, Any] | None, account_type: str = "UNIFIED"
+) -> dict[str, Any] | None:
     if not isinstance(wallet, dict):
         return wallet
     coins = _extract_wallet_coins(wallet)
@@ -112,7 +125,9 @@ def main() -> int:
         with BybitClient(settings) as c:
             info = c.private_get("/v5/account/info")
             try:
-                wallet = c.private_get("/v5/account/wallet-balance", {"accountType": "UNIFIED"})
+                wallet = c.private_get(
+                    "/v5/account/wallet-balance", {"accountType": "UNIFIED"}
+                )
             except Exception as exc:
                 wallet = {"error": str(exc), "accountType": "UNIFIED"}
                 error_summary = f"wallet UNIFIED read failed: {exc}"
@@ -121,7 +136,10 @@ def main() -> int:
         error_summary = str(exc)
         info = {"error": str(exc)}
 
-    out.write_text(redacted_json_dump(sanitize_private_account_snapshot(info, wallet)), encoding="utf-8")
+    out.write_text(
+        redacted_json_dump(sanitize_private_account_snapshot(info, wallet)),
+        encoding="utf-8",
+    )
     account_result = info.get("result", {}) if isinstance(info, dict) else {}
     write_sprint_report(
         settings.data_dir,
