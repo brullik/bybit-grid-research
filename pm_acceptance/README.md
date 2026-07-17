@@ -4,6 +4,8 @@ This directory contains frozen PM-owned acceptance tests and the active task sco
 
 Each task owns only `tasks/<task_id>/**/*.py`. A PM task-definition PR must use the same safe task ID in `active_task.json`, its task directory, and its optional frozen contract document. Task-local `conftest.py` files are forbidden.
 
+Implementation PRs run the complete base-owned frozen suite. PM-owned PRs run the base control-plane self-tests instead; a `pm-control-plane` PR also runs a minimal staged head harness through a base-owned exact-outcome gate that requires every collected node to pass plainly. Control-plane scope excludes the active task and acceptance `conftest.py`, and protected-path validation forbids production, ordinary-test, and dependency changes. This prevents a known-invalid frozen task from circularly blocking the governance repair that is required to correct it without allowing skip/xfail padding.
+
 ## One-time frozen-test errata
 
 A reported frozen-test defect must first be cancelled by closing the active task. After the generic erratum control plane is present on `main`, an explicitly owner-authorized `pm-frozen-erratum` PR may reactivate that same task and change exactly three paths: `active_task.json`, one existing `tasks/<task_id>/test_*.py`, and one new `errata/<task_id>.json`. The latter two files are the exact erratum payload; no contract or production file changes.
