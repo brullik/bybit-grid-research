@@ -673,7 +673,7 @@ def acceptance_plan_for_mode(mode: str) -> tuple[str, ...]:
     if mode == "implementation":
         return ("base-isolated-acceptance",)
     if mode == "pm-control-plane":
-        return ("base-isolated-acceptance", "head-control-plane-self-tests")
+        return ("base-control-plane-self-tests", "head-control-plane-self-tests")
     if mode == "pm-task-definition":
         return ("base-control-plane-self-tests", "head-task-definition-collect-only")
     if mode == "pm-frozen-erratum":
