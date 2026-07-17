@@ -169,17 +169,18 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
-          python -m pytest pm_acceptance/test_control_plane_self.py -q \
-            -c "$RUNNER_TEMP/pytest.ini" \
-            --confcutdir="$RUNNER_TEMP/pm_acceptance"
+          python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
+            --exact-control-plane-root "$RUNNER_TEMP"
       - name: Stage head control-plane self-tests
         if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
           rm -rf "$RUNNER_TEMP/head_control"
+          mkdir -p "$RUNNER_TEMP/head_control/pm_acceptance"
           mkdir -p "$RUNNER_TEMP/head_control/scripts" "$RUNNER_TEMP/head_control/.github/workflows"
-          cp -R head/pm_acceptance "$RUNNER_TEMP/head_control/pm_acceptance"
+          cp head/pm_acceptance/test_control_plane_self.py "$RUNNER_TEMP/head_control/pm_acceptance/test_control_plane_self.py"
+          cp head/pm_acceptance/active_task.json "$RUNNER_TEMP/head_control/pm_acceptance/active_task.json"
           printf '' > "$RUNNER_TEMP/head_control/scripts/__init__.py"
           cp head/scripts/check_protected_paths.py "$RUNNER_TEMP/head_control/scripts/check_protected_paths.py"
           cp head/scripts/check_task_scope.py "$RUNNER_TEMP/head_control/scripts/check_task_scope.py"
@@ -191,10 +192,13 @@ jobs:
         env:
           PYTHONPATH: ${{ runner.temp }}/head_control
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
         run: |
-          python -m pytest pm_acceptance/test_control_plane_self.py -q \
-            -c pytest.ini \
-            --confcutdir=pm_acceptance
+          python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
+            --exact-control-plane-root "${{ runner.temp }}/head_control"
+      - name: Validate PR head workflow YAML syntax
+        if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
+        run: ruby -e 'require "psych"; Psych.parse_file(ARGV.fetch(0))' head/.github/workflows/pm-acceptance.yml
       - name: Stage head task-definition acceptance tree
         if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition' && needs.protected-paths.outputs.task-id != 'NO_ACTIVE_IMPLEMENTATION'
         env:
@@ -918,6 +922,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_MODE: ${{ needs.protected-paths.outputs.pr-mode }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: |
           python scripts/check_numeric_environment.py
           python -m pip check
