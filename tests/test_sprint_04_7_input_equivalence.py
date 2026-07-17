@@ -12,6 +12,7 @@ from bybit_grid.research.outcome_core.input_loader import (
     discover_unique_parquet_files,
     load_canonical_symbol_frames,
 )
+from bybit_grid.research.outcome_core.outcome_numpy import compute_event_outcomes
 
 
 def _write_all_roots(
@@ -79,7 +80,7 @@ def test_contradictory_duplicate_timestamps_fail(tmp_path: Path):
         )
 
 
-def test_semantic_audit_rejects_future_rows_over_horizon(tmp_path: Path):
+def test_semantic_audit_rejects_impossible_exact_grid_diagnostics(tmp_path: Path):
     run_id = f"audit_bad_test_{tmp_path.name}"
     run_root = Path("data/processed/outcome_runs") / run_id
     import shutil
@@ -87,44 +88,37 @@ def test_semantic_audit_rejects_future_rows_over_horizon(tmp_path: Path):
     shutil.rmtree(run_root, ignore_errors=True)
     root = run_root / "outcomes/symbol=BTCUSDT"
     root.mkdir(parents=True, exist_ok=True)
-    row = {
-        "symbol": "BTCUSDT",
-        "outcome_id": "1",
-        "outcome_match_key": "1",
-        "outcome_semantics_version": "v4_native_grid_geometry",
-        "grid_geometry_semantics_version": "v1_n_cells_n_plus_1_levels",
-        "range_action_event_id": "e",
-        "future_horizon_minutes": 1,
-        "grid_count": 1,
-        "grid_cell_number": 1,
-        "grid_price_level_count": 2,
-        "grid_interval_count": 1,
-        "grid_interval_ratio": 2.0,
-        "grid_interval_pct": 100.0,
-        "grid_interval_bps": 10000.0,
-        "grid_count_semantics": "n_cells",
-        "sl_atr_buffer": 0.0,
-        "atr_14_abs_used": 1.0,
-        "sl_proxy_valid_bool": True,
-        "first_exit_side": "none",
-        "first_exit_ambiguous_bool": False,
-        "first_sl_side": "none",
-        "first_sl_ambiguous_bool": False,
-        "geometric_grid_levels_json": "[1.0, 2.0]",
-        "range_low": 1.0,
-        "range_high": 2.0,
-        "grid_levels_serialization_version": "grid_levels_json_v1",
-        "future_rows_available": 2,
-        "future_coverage_minutes": 1,
-        "inside_range_candle_count": 0,
-        "future_bad_ohlc_count": 0,
-        "future_zero_volume_count": 0,
-        "future_close_level_cross_count": 0,
-        "future_intrabar_level_touch_count": 0,
-        "future_unique_grid_levels_touched_count": 0,
-        "fill_activity_lower_bound_proxy": 0,
-        "fill_activity_upper_bound_proxy": 0,
-    }
+    row = compute_event_outcomes(
+        {
+            "range_action_event_id": "e",
+            "range_regime_id": "r",
+            "symbol": "BTCUSDT",
+            "profile_name": "range-actionable-v1",
+            "actionable_event_semantics_version": "range-actionable-prefix-invariance-v1",
+            "decision_time_ms": 0,
+            "signal_time_ms": 0,
+            "range_low": 1.0,
+            "range_high": 2.0,
+            "range_mid": 1.5,
+            "atr_14_abs": 0.25,
+        },
+        pl.DataFrame(
+            {
+                "open_time_ms": [60_000],
+                "open": [1.5],
+                "high": [1.6],
+                "low": [1.4],
+                "close": [1.5],
+                "volume": [1.0],
+            }
+        ),
+        pl.DataFrame(),
+        pl.DataFrame(),
+        [1],
+        [5],
+        [0.0],
+    )[0]
+    row["future_rows_available"] = 0
     pl.DataFrame([row]).write_parquet(root / "part.parquet")
     s = run_root / "summary"
     s.mkdir(parents=True, exist_ok=True)
@@ -142,6 +136,7 @@ def test_semantic_audit_rejects_future_rows_over_horizon(tmp_path: Path):
         capture_output=True,
     )
     assert res.returncode != 0
+    assert "outcome window grid diagnostics do not conserve horizon" in res.stdout
 
 
 def test_no_live_order_telegram_additions():
