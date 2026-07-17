@@ -419,10 +419,23 @@ def test_v5_validator_requires_exact_stable_match_key():
     assert any("outcome_match_key" in failure for failure in missing["failures"])
 
 
-def test_v5_close_sl_buffers_have_distinct_ids_and_match_keys():
+def test_v5_sl_buffer_identity_tokens_are_canonical_and_collision_free():
+    for buffers in (
+        [0.1234561, 0.1234562],
+        [1_000_000.0, 1_000_001.0],
+    ):
+        assert len(
+            {deterministic_outcome_id("a1", 1, 5, value) for value in buffers}
+        ) == 2
+        assert len({outcome_match_key("a1", 1, 5, value) for value in buffers}) == 2
+    assert deterministic_outcome_id("a1", 1, 5, 0.0) == deterministic_outcome_id(
+        "a1", 1, 5, -0.0
+    )
+    assert outcome_match_key("a1", 1, 5, 0.0) == outcome_match_key(
+        "a1", 1, 5, -0.0
+    )
+
     buffers = [0.1234561, 0.1234562]
-    assert len({deterministic_outcome_id("a1", 1, 5, value) for value in buffers}) == 2
-    assert len({outcome_match_key("a1", 1, 5, value) for value in buffers}) == 2
     rows = compute_event_outcomes(
         event(),
         klines([(105, 106, 104, 105)]),
