@@ -1,10 +1,10 @@
 # Frozen task contract: P0 range reference/fast configuration parity
 
-Task ID: `p0-range-reference-fast-config-parity`  
-Issue: `#155`  
-Contract version: `range-reference-fast-config-parity-v1`  
-RED sentinel: `range_reference_fast_config_parity_contract_unavailable`  
-Audit source baseline named by issue `#155`: `f7cab3fb2e08e3578cce1eb3830e944dbf0ecd0f`  
+Task ID: `p0-range-reference-fast-config-parity`
+Issue: `#155`
+Contract version: `range-reference-fast-config-parity-v1`
+RED sentinel: `range_reference_fast_config_parity_contract_unavailable`
+Audit source baseline named by issue `#155`: `f7cab3fb2e08e3578cce1eb3830e944dbf0ecd0f`
 Task-definition base: `0e2874d7ee309c3dc3d9f14ea7e7209c8a59576f`
 
 This task removes a P0 research-validity defect: the existing “reference versus fast” test reaches
