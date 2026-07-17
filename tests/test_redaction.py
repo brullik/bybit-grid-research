@@ -14,3 +14,4 @@ def test_redacts_secret_signature_and_key():
     assert data["api_secret"] == "***REDACTED***"
     assert data["nested"]["signature"] == "***REDACTED***"
     assert "hello" not in data["msg"] and "world" not in data["msg"]
+# RED PROBE: inert sink-safe ordinary-test availability check.\n
