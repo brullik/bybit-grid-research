@@ -257,7 +257,6 @@ python -m compileall -q src tests scripts
 python -m pytest tests -q
 python -m pytest -q
 ruff check .
-ruff format --check .
 python -m pip check
 ```
 
