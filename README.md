@@ -7,7 +7,10 @@ Audit baseline: 2026-07-17, production code after PR #143 at `35a3b9c05b1bf3d867
 
 ## Текущий статус
 
-Это библиотека проверенных offline-компонентов и fail-closed validate-only границы, а не готовый торговый бот. На текущем main:
+Это библиотека реализованных и покрытых текущими тестами offline-компонентов и
+fail-closed validate-only границы, а не готовый торговый бот. Для поведения,
+появившегося в PR #1–66, открыт отдельный retroactive assurance #134. На текущем
+main:
 
 - реализованы public-data модели, canonical Parquet store с read-only in-memory DuckDB views, range-компоненты, neutral-grid state machine и OHLC replay;
 - private transport разрешает только точные read-only GET и нативный POST /v5/fgridbot/validate;
@@ -33,20 +36,29 @@ Machine-readable capability status:
 Windows PowerShell:
 
 ~~~powershell
+git clone https://github.com/brullik/bybit-grid-research.git
+Set-Location bybit-grid-research
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
 ~~~
 
 Linux/macOS:
 
 ~~~bash
+git clone https://github.com/brullik/bybit-grid-research.git
+cd bybit-grid-research
 python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+cp .env.example .env
 ~~~
+
+Для offline-проверок оставьте секреты в `.env` пустыми и не добавляйте этот файл
+в Git.
 
 Полная безопасная проверка:
 
