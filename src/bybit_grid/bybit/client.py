@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 import json
 import logging
+import math
 import secrets
 import time
 import weakref
@@ -13,7 +14,7 @@ from typing import Any
 import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from bybit_grid.bybit.models import BybitAPIError
+from bybit_grid.bybit.models import BybitAPIError, BybitResponseEnvelopeError
 from bybit_grid.bybit.rate_limit import SimpleRateLimiter
 from bybit_grid.bybit.signing import build_v5_sign_payload, canonical_query, sign_v5
 from bybit_grid.bybit.validate_only import (
@@ -30,16 +31,13 @@ from bybit_grid.config import Settings
 
 
 log = logging.getLogger(__name__)
-RETRYABLE_RETCODES = {10006, "10006"}
+STRICT_API_RESPONSE_ENVELOPE_CONTRACT = "strict-envelope-v1"
+RETRYABLE_RETCODES = {10006}
 NON_RETRYABLE_RETCODES = {
     10001,
-    "10001",
     10003,
-    "10003",
     10004,
-    "10004",
     10005,
-    "10005",
 }
 RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 RATE_LIMIT_HEADER_NAMES = (
@@ -47,6 +45,67 @@ RATE_LIMIT_HEADER_NAMES = (
     "X-Bapi-Limit-Status",
     "X-Bapi-Limit-Reset-Timestamp",
 )
+_INT64_MIN = -(2**63)
+_INT64_MAX = (2**63) - 1
+
+
+class _DuplicateJSONKey(ValueError):
+    pass
+
+
+class _NonfiniteJSONConstant(ValueError):
+    pass
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateJSONKey
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_constant(_value: str) -> None:
+    raise _NonfiniteJSONConstant
+
+
+def _parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise _NonfiniteJSONConstant
+    return parsed
+
+
+def _is_exact_int64(value: object) -> bool:
+    return type(value) is int and _INT64_MIN <= value <= _INT64_MAX
+
+
+def _decode_strict_json_object(
+    body: bytes,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if body == b"":
+        return None, "response_body_empty"
+    try:
+        source = body.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None, "response_utf8_invalid"
+    try:
+        data = json.loads(
+            source,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_nonfinite_constant,
+            parse_float=_parse_finite_float,
+        )
+    except _DuplicateJSONKey:
+        return None, "response_json_duplicate_key"
+    except _NonfiniteJSONConstant:
+        return None, "response_json_nonfinite"
+    except (json.JSONDecodeError, UnicodeError, ValueError, RecursionError):
+        return None, "response_json_invalid"
+    if type(data) is not dict:
+        return None, "response_root_not_object"
+    return data, None
 
 
 @dataclass
@@ -112,7 +171,8 @@ def _is_retryable(exc: BaseException) -> bool:
         return True
     return isinstance(exc, BybitAPIError) and (
         exc.status_code in RETRYABLE_HTTP_STATUS_CODES
-        or exc.ret_code in RETRYABLE_RETCODES
+        or getattr(exc, "retry_ret_code", getattr(exc, "ret_code", None))
+        in RETRYABLE_RETCODES
     )
 
 
@@ -696,7 +756,7 @@ class BybitClient:
                     content=prepared.json_body,
                     headers=headers,
                 )
-                data = self._handle_response(
+                data = self._handle_validate_response(
                     CANONICAL_FGRID_VALIDATE_ENDPOINT,
                     response,
                     "bybit_post_validate",
@@ -737,7 +797,10 @@ class BybitClient:
             base_url = self.private_http.base_url
         except (AttributeError, TypeError) as exc:
             raise ValidateOnlyBoundaryError("private_http_origin_forbidden") from exc
-        if type(base_url) is not httpx.URL or str(base_url) != CANONICAL_BYBIT_API_BASE_URL:
+        if (
+            type(base_url) is not httpx.URL
+            or str(base_url) != CANONICAL_BYBIT_API_BASE_URL
+        ):
             raise ValidateOnlyBoundaryError("private_http_origin_forbidden")
 
     def _enforce_private_http_policy(
@@ -780,67 +843,143 @@ class BybitClient:
         response: httpx.Response,
         log_name: str,
     ) -> dict[str, Any]:
-        try:
-            data = response.json()
-        except ValueError:
-            data = {"retCode": None, "retMsg": response.text[:200]}
+        return self._handle_response_policy(
+            endpoint,
+            response,
+            log_name,
+            native_validate=False,
+        )
 
-        self._capture_rate_limit_headers(data, response)
+    def _handle_validate_response(
+        self,
+        endpoint: str,
+        response: httpx.Response,
+        log_name: str,
+    ) -> dict[str, Any]:
+        if type(endpoint) is not str or endpoint != CANONICAL_FGRID_VALIDATE_ENDPOINT:
+            raise ValidateOnlyBoundaryError("validate_response_endpoint_forbidden")
+        return self._handle_response_policy(
+            endpoint,
+            response,
+            log_name,
+            native_validate=True,
+        )
+
+    @staticmethod
+    def _decode_response_envelope(
+        endpoint: str,
+        response: httpx.Response,
+    ) -> dict[str, Any]:
+        data, reason_code = _decode_strict_json_object(response.content)
+        if reason_code is not None or data is None:
+            raise BybitResponseEnvelopeError(
+                endpoint,
+                response.status_code,
+                reason_code or "response_json_invalid",
+            )
+        return data
+
+    def _handle_response_policy(
+        self,
+        endpoint: str,
+        response: httpx.Response,
+        log_name: str,
+        *,
+        native_validate: bool,
+    ) -> dict[str, Any]:
+        if native_validate and endpoint != CANONICAL_FGRID_VALIDATE_ENDPOINT:
+            raise ValidateOnlyBoundaryError("validate_response_endpoint_forbidden")
+        data = self._decode_response_envelope(endpoint, response)
+
+        has_ret_code = "retCode" in data
+        has_status_code = "status_code" in data
         ret_code = data.get("retCode")
         status_code = data.get("status_code")
-        message = data.get("retMsg") or data.get("debug_msg")
-        has_ret_code = "retCode" in data
-        has_bot_status = "status_code" in data
 
-        if has_ret_code:
-            api_success = ret_code in (0, "0")
-            api_code = ret_code
-        elif has_bot_status:
-            api_success = status_code in (200, "200")
-            api_code = status_code
-        else:
-            api_success = 200 <= response.status_code < 300
-            api_code = None
-            if api_success:
-                data.setdefault(
-                    "parser_warning",
-                    "response missing retCode and status_code; HTTP 2xx treated as success",
+        if native_validate:
+            if not has_ret_code and not has_status_code:
+                raise BybitResponseEnvelopeError(
+                    endpoint,
+                    response.status_code,
+                    "response_marker_missing",
                 )
+            if (has_ret_code and not _is_exact_int64(ret_code)) or (
+                has_status_code and not _is_exact_int64(status_code)
+            ):
+                raise BybitResponseEnvelopeError(
+                    endpoint,
+                    response.status_code,
+                    "response_marker_type_invalid",
+                )
+            ret_success = ret_code == 0 if has_ret_code else None
+            status_success = status_code == 200 if has_status_code else None
+            if has_ret_code and has_status_code and ret_success is not status_success:
+                raise BybitResponseEnvelopeError(
+                    endpoint,
+                    response.status_code,
+                    "response_marker_conflict",
+                )
+            api_success = bool(ret_success if has_ret_code else status_success)
+            api_code = ret_code if has_ret_code else status_code
+        else:
+            if has_status_code:
+                raise BybitResponseEnvelopeError(
+                    endpoint,
+                    response.status_code,
+                    "response_marker_alias_forbidden",
+                )
+            if not has_ret_code:
+                raise BybitResponseEnvelopeError(
+                    endpoint,
+                    response.status_code,
+                    "response_marker_missing",
+                )
+            if not _is_exact_int64(ret_code):
+                raise BybitResponseEnvelopeError(
+                    endpoint,
+                    response.status_code,
+                    "response_marker_type_invalid",
+                )
+            api_success = ret_code == 0
+            api_code = ret_code
+
+        if ("retMsg" in data and type(data["retMsg"]) is not str) or (
+            "debug_msg" in data and type(data["debug_msg"]) is not str
+        ):
+            raise BybitResponseEnvelopeError(
+                endpoint,
+                response.status_code,
+                "response_message_type_invalid",
+            )
+
+        self._capture_rate_limit_headers(data, response)
+        ret_msg = data.get("retMsg")
+        debug_msg = data.get("debug_msg")
 
         log.info(
-            "%s endpoint=%s http_status=%s retCode=%s status_code=%s "
-            "message=%s parser_warning=%s",
+            "%s endpoint=%s http_status=%s retCode=%s status_code=%s",
             log_name,
             endpoint,
             response.status_code,
             ret_code,
             status_code,
-            message,
-            data.get("parser_warning"),
         )
 
-        if response.status_code in RETRYABLE_HTTP_STATUS_CODES or ret_code in RETRYABLE_RETCODES:
-            raise BybitAPIError(
-                endpoint,
-                response.status_code,
-                api_code,
-                message,
-                "retryable",
-                data,
-            )
         if response.status_code >= 400 or not api_success:
-            debug_message = (
-                "non-retryable"
-                if ret_code in NON_RETRYABLE_RETCODES
-                else data.get("debug_msg")
+            reason_code = (
+                "http_status_error"
+                if response.status_code >= 400 and api_success
+                else "api_error"
             )
             raise BybitAPIError(
                 endpoint,
                 response.status_code,
                 api_code,
-                message,
-                debug_message,
+                ret_msg,
+                debug_msg,
                 data,
+                reason_code=reason_code,
+                retry_ret_code=ret_code if has_ret_code else None,
             )
         return data
 
