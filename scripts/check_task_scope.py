@@ -7,6 +7,7 @@ import ast
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -66,8 +67,6 @@ _CONTROL_PLANE_ALLOWED = frozenset({
     "scripts/check_protected_paths.py",
     "scripts/check_task_scope.py",
     "pm_acceptance/README.md",
-    "pm_acceptance/active_task.json",
-    "pm_acceptance/conftest.py",
     "pm_acceptance/test_control_plane_self.py",
     "docs/frozen_contracts/control_plane_v1.md",
 })
@@ -673,7 +672,7 @@ def acceptance_plan_for_mode(mode: str) -> tuple[str, ...]:
     if mode == "implementation":
         return ("base-isolated-acceptance",)
     if mode == "pm-control-plane":
-        return ("base-isolated-acceptance", "head-control-plane-self-tests")
+        return ("base-control-plane-self-tests", "head-control-plane-self-tests")
     if mode == "pm-task-definition":
         return ("base-control-plane-self-tests", "head-task-definition-collect-only")
     if mode == "pm-frozen-erratum":
@@ -767,14 +766,19 @@ class _FrozenTestInspector(ast.NodeVisitor):
         self.scope: list[str] = []
         self.test_functions: list[tuple[str, str]] = []
         self.unsafe: list[str] = []
+        self.immutable_test_depth = 0
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         qualified = ".".join((*self.scope, node.name))
-        if node.name.startswith("test_"):
+        immutable_test = node.name.startswith("test_")
+        if immutable_test:
             self.test_functions.append((qualified, ast.dump(node, include_attributes=False)))
+            self.immutable_test_depth += 1
         self.scope.append(node.name)
         self.generic_visit(node)
         self.scope.pop()
+        if immutable_test:
+            self.immutable_test_depth -= 1
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
         self._visit_function(node)
@@ -789,9 +793,17 @@ class _FrozenTestInspector(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         called = _qualified_name(node.func)
-        if called in {"pytest.skip", "pytest.xfail", "pytest.importorskip", "skip", "xfail", "importorskip"}:
+        mutable_harness = self.immutable_test_depth == 0
+        if mutable_harness and called in {
+            "pytest.skip",
+            "pytest.xfail",
+            "pytest.importorskip",
+            "skip",
+            "xfail",
+            "importorskip",
+        }:
             self.unsafe.append("skip_or_xfail")
-        if called in {"pytest.raises", "raises"}:
+        if mutable_harness and called in {"pytest.raises", "raises"}:
             expected = node.args[0] if node.args else next(
                 (keyword.value for keyword in node.keywords if keyword.arg == "expected_exception"),
                 None,
@@ -801,12 +813,17 @@ class _FrozenTestInspector(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:  # noqa: N802
-        if _contains_unsafe_exception(node.type):
+        if self.immutable_test_depth == 0 and _contains_unsafe_exception(node.type):
             self.unsafe.append("broad_exception_handler")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
-        if node.attr.lower() in {"skip", "skipif", "skipunless", "xfail"}:
+        if self.immutable_test_depth == 0 and node.attr.lower() in {
+            "skip",
+            "skipif",
+            "skipunless",
+            "xfail",
+        }:
             name = _qualified_name(node)
             if name and (name.startswith("pytest.mark.") or name.startswith("unittest.")):
                 self.unsafe.append("skip_or_xfail")
@@ -1199,6 +1216,165 @@ def task_definition_base_path_errors(
     return tuple(errors)
 
 
+def run_exact_control_plane_self_tests(root: Path) -> int:
+    """Require one plain passing call for every collected control-plane self-test."""
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        print(json.dumps({"errors": [f"control_plane_root_unreadable:{type(exc).__name__}"], "ok": False}))
+        return 1
+    test_path = root / "pm_acceptance/test_control_plane_self.py"
+    config_path = root / "pytest.ini"
+    if not root.is_dir() or not test_path.is_file() or not config_path.is_file():
+        print(json.dumps({"errors": ["control_plane_self_test_harness_incomplete"], "ok": False}))
+        return 1
+    result_path = root.parent / f".control-plane-self-{os.getpid()}.json"
+    result_path.unlink(missing_ok=True)
+    child = r'''
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+
+class ExactPlainPasses:
+    def __init__(self) -> None:
+        self.call_node_ids: set[str] = set()
+        self.collected: list[str] = []
+        self.forbidden: list[str] = []
+        self.passed: list[str] = []
+
+    def pytest_collection_finish(self, session) -> None:
+        self.collected = [item.nodeid for item in session.items]
+        if len(set(self.collected)) != len(self.collected):
+            self.forbidden.append("duplicate-collected-node-id")
+
+    def pytest_collectreport(self, report) -> None:
+        if report.outcome != "passed":
+            self.forbidden.append(f"collect-{report.outcome}:{report.nodeid}")
+
+    def pytest_deselected(self, items) -> None:
+        self.forbidden.extend(f"deselected:{item.nodeid}" for item in items)
+
+    def pytest_runtest_logreport(self, report) -> None:
+        if getattr(report, "wasxfail", None) is not None:
+            self.forbidden.append(f"xfail-or-xpass:{report.nodeid}:{report.when}")
+        if report.when != "call":
+            if report.outcome != "passed":
+                self.forbidden.append(
+                    f"non-call-{report.when}-{report.outcome}:{report.nodeid}"
+                )
+            return
+        if report.nodeid in self.call_node_ids:
+            self.forbidden.append(f"duplicate-call:{report.nodeid}")
+            return
+        self.call_node_ids.add(report.nodeid)
+        if report.outcome == "passed":
+            self.passed.append(report.nodeid)
+        else:
+            self.forbidden.append(f"call-{report.outcome}:{report.nodeid}")
+
+
+root = Path(os.environ["EXACT_CONTROL_ROOT"])
+outcomes = ExactPlainPasses()
+exit_code = pytest.main(
+    [
+        str(root / "pm_acceptance/test_control_plane_self.py"),
+        "-q",
+        "-c",
+        str(root / "pytest.ini"),
+        f"--confcutdir={root / 'pm_acceptance'}",
+    ],
+    plugins=[outcomes],
+)
+Path(os.environ["EXACT_CONTROL_RESULT"]).write_text(
+    json.dumps(
+        {
+            "call_node_ids": sorted(outcomes.call_node_ids),
+            "collected": outcomes.collected,
+            "exit_code": int(exit_code),
+            "forbidden": outcomes.forbidden,
+            "passed": outcomes.passed,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    + "\n",
+    encoding="utf-8",
+)
+'''
+    environment = dict(os.environ)
+    environment.update({
+        "EXACT_CONTROL_RESULT": str(result_path),
+        "EXACT_CONTROL_ROOT": str(root),
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+    })
+    result = subprocess.run(
+        [sys.executable, "-c", child],
+        cwd=root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result_path.is_file():
+        result_path.unlink(missing_ok=True)
+        payload = {
+            "collected_count": 0,
+            "errors": [f"control-plane-self-runner-failed:{result.returncode}"],
+            "ok": False,
+            "passed_count": 0,
+        }
+        print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        return 1
+    try:
+        outcomes = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
+    finally:
+        result_path.unlink(missing_ok=True)
+    expected_keys = {"call_node_ids", "collected", "exit_code", "forbidden", "passed"}
+    if not isinstance(outcomes, dict) or set(outcomes) != expected_keys:
+        print(json.dumps({"errors": ["invalid_control_plane_self_result"], "ok": False}))
+        return 1
+    for key in ("call_node_ids", "collected", "forbidden", "passed"):
+        value = outcomes[key]
+        if (
+            not isinstance(value, list)
+            or any(not isinstance(item, str) or not item for item in value)
+            or len(set(value)) != len(value)
+        ):
+            print(json.dumps({"errors": [f"invalid_control_plane_self_{key}"], "ok": False}))
+            return 1
+
+    collected = set(outcomes["collected"])
+    call_node_ids = set(outcomes["call_node_ids"])
+    forbidden = list(outcomes["forbidden"])
+    passed = list(outcomes["passed"])
+    forbidden.extend(f"missing-call:{node_id}" for node_id in sorted(collected - call_node_ids))
+    forbidden.extend(f"call-not-collected:{node_id}" for node_id in sorted(call_node_ids - collected))
+    errors: list[str] = []
+    if type(outcomes["exit_code"]) is not int or outcomes["exit_code"] != 0:
+        errors.append(f"unexpected-pytest-exit:{outcomes['exit_code']}")
+    if not outcomes["collected"]:
+        errors.append("empty-collection")
+    errors.extend(forbidden)
+    if set(passed) != collected or len(passed) != len(outcomes["collected"]):
+        errors.append("plain-pass-set-mismatch")
+    payload = {
+        "collected_count": len(outcomes["collected"]),
+        "errors": sorted(set(errors)),
+        "ok": not errors,
+        "passed_count": len(passed),
+    }
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    return 0 if not errors else 1
+
+
 def _emit(
     changed_count: int,
     errors: tuple[str, ...],
@@ -1215,13 +1391,19 @@ def _emit(
 
 
 def main(argv: list[str] | None = None) -> int:
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--exact-control-plane-root" in effective_argv:
+        exact_parser = argparse.ArgumentParser(add_help=True)
+        exact_parser.add_argument("--exact-control-plane-root", required=True)
+        exact_args = exact_parser.parse_args(effective_argv)
+        return run_exact_control_plane_self_tests(Path(exact_args.exact_control_plane_root))
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--actor", default="")
     parser.add_argument("--labels-json", default="[]")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(effective_argv)
     errors: list[str] = []
     if args.task_file != _TASK_FILE:
         errors.append("invalid_task_file")

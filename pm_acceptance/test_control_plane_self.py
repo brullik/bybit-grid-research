@@ -324,7 +324,10 @@ def test_output_mode_for_all_valid_modes():
 
 def test_mode_acceptance_plan_selection():
     assert acceptance_plan_for_mode("implementation") == ("base-isolated-acceptance",)
-    assert acceptance_plan_for_mode("pm-control-plane") == ("base-isolated-acceptance", "head-control-plane-self-tests")
+    assert acceptance_plan_for_mode("pm-control-plane") == (
+        "base-control-plane-self-tests",
+        "head-control-plane-self-tests",
+    )
     assert acceptance_plan_for_mode("pm-task-definition") == ("base-control-plane-self-tests", "head-task-definition-collect-only")
     assert acceptance_plan_for_mode("pm-frozen-erratum") == (
         "base-control-plane-self-tests",
@@ -530,6 +533,16 @@ def test_pm_task_definition_cannot_modify_frozen_control_plane_files():
     )[1] == ("pm_task_definition_out_of_scope:pm_acceptance/conftest.py",)
 
 
+@pytest.mark.parametrize(
+    "path",
+    ("pm_acceptance/active_task.json", "pm_acceptance/conftest.py"),
+)
+def test_pm_control_plane_cannot_change_task_state_or_acceptance_conftest(path: str):
+    assert classify_pr_mode("brullik", ("pm-control-plane",), (path,))[1] == (
+        f"pm_control_plane_out_of_scope:{path}",
+    )
+
+
 def test_pm_task_definition_rejects_task_local_conftest():
     path = "pm_acceptance/tasks/task-a/conftest.py"
     assert classify_pr_mode("brullik", ("pm-task-definition",), (path,))[1] == (
@@ -657,6 +670,131 @@ def test_workflow_collects_only_the_head_task_id_directory():
     assert 'cp -R head/pm_acceptance "$RUNNER_TEMP/head_task_definition/pm_acceptance"' not in workflow
 
 
+def test_workflow_control_plane_mode_checks_base_and_head_without_running_frozen_tasks():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    base_acceptance = workflow.split("      - name: Run base isolated acceptance harness\n", 1)[1].split(
+        "      - name: Run base control-plane self-tests for PM-owned PRs\n",
+        1,
+    )[0]
+    base_control = workflow.split(
+        "      - name: Run base control-plane self-tests for PM-owned PRs\n",
+        1,
+    )[1].split("      - name: Stage head control-plane self-tests\n", 1)[0]
+    head_control = workflow.split("      - name: Stage head control-plane self-tests\n", 1)[1].split(
+        "      - name: Stage head task-definition acceptance tree\n",
+        1,
+    )[0]
+    supplemental = workflow.split("      - name: Run supplemental PR checks\n", 1)[1].split(
+        "\n  status-final:",
+        1,
+    )[0]
+
+    assert "pr-mode == 'implementation'" in base_acceptance
+    assert "pr-mode != 'implementation'" in base_control
+    assert "base/scripts/check_task_scope.py" in base_control
+    assert "--exact-control-plane-root" in base_control
+    assert head_control.count("pr-mode == 'pm-control-plane'") == 3
+    assert 'cp head/pm_acceptance/test_control_plane_self.py' in head_control
+    assert 'cp head/pm_acceptance/active_task.json' in head_control
+    assert "cp -R head/pm_acceptance" not in head_control
+    assert "conftest.py" not in head_control
+    assert "head/pm_acceptance/tasks" not in head_control
+    assert "base/scripts/check_task_scope.py" in head_control
+    assert "--exact-control-plane-root" in head_control
+    assert 'require "psych"; Psych.parse_file' in head_control
+    assert 'if [ "$PR_MODE" = "implementation" ]; then' in supplemental
+    assert "python -m pytest tests -q" in supplemental
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'" in supplemental
+
+
+def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    protected = workflow.split("\n  protected-paths:\n", 1)[1].split("\n  acceptance:\n", 1)[0]
+    acceptance = workflow.split("\n  acceptance:\n", 1)[1].split("\n  status-final:\n", 1)[0]
+
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]"
+        in workflow
+    )
+    assert "group: pm-acceptance-${{ github.event.pull_request.number }}" in workflow
+    assert "cancel-in-progress: true" in workflow
+    assert "permissions:\n  contents: read\n  pull-requests: read" in workflow
+    assert "ref: ${{ github.event.pull_request.base.sha }}" in protected
+    assert "persist-credentials: false" in protected
+    assert 'git fetch --no-tags origin "$HEAD_SHA"' in protected
+    assert "github.event.pull_request.head.sha" in protected
+    assert "statuses: write" not in protected
+    assert "statuses: write" not in acceptance
+
+
+def _run_exact_control_plane_gate(
+    tmp_path: Path,
+    *,
+    conftest: str | None = None,
+    test_source: str = "def test_plain_pass():\n    assert True\n",
+) -> subprocess.CompletedProcess[str]:
+    root = tmp_path / "exact-control"
+    acceptance = root / "pm_acceptance"
+    acceptance.mkdir(parents=True)
+    (acceptance / "test_control_plane_self.py").write_text(
+        test_source,
+        encoding="utf-8",
+    )
+    if conftest is not None:
+        (acceptance / "conftest.py").write_text(conftest, encoding="utf-8")
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    checker = Path(__file__).resolve().parents[1] / "scripts/check_task_scope.py"
+    return subprocess.run(
+        [
+            sys.executable,
+            str(checker),
+            "--exact-control-plane-root",
+            str(root),
+        ],
+        env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1"),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def test_exact_control_plane_gate_accepts_nonempty_plain_passes(tmp_path: Path):
+    result = _run_exact_control_plane_gate(tmp_path)
+    assert result.returncode == 0
+    assert '"collected_count":1' in result.stdout
+    assert '"errors":[]' in result.stdout
+    assert '"passed_count":1' in result.stdout
+
+
+def test_exact_control_plane_gate_rejects_conftest_skip_padding(tmp_path: Path):
+    result = _run_exact_control_plane_gate(
+        tmp_path,
+        conftest=(
+            "import pytest\n\n"
+            "def pytest_collection_modifyitems(items):\n"
+            "    for item in items:\n"
+            "        item.add_marker(pytest.mark.skip(reason='padding'))\n"
+        ),
+    )
+    assert result.returncode == 1
+    assert "skipped:" in result.stdout
+    assert "plain-pass-set-mismatch" in result.stdout
+
+
+def test_exact_control_plane_gate_rejects_early_success_process_exit(tmp_path: Path):
+    result = _run_exact_control_plane_gate(
+        tmp_path,
+        test_source=(
+            "import os\n\n"
+            "def test_plain_pass():\n"
+            "    os._exit(0)\n"
+        ),
+    )
+    assert result.returncode == 1
+    assert "control-plane-self-runner-failed:0" in result.stdout
+
+
 def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     pending = workflow.split("\n  status-pending:\n", 1)[1].split("\n  protected-paths:\n", 1)[0]
@@ -722,7 +860,7 @@ def test_workflow_stages_sha_pinned_frozen_erratum_and_requires_exact_red_outcom
     )[0]
 
     assert '"pm-frozen-erratum"' in workflow
-    assert "pr-mode != 'pm-frozen-erratum'" in workflow
+    assert "pr-mode == 'implementation'" in workflow
     assert "pr-mode == 'pm-frozen-erratum'" in workflow
     assert 'v1_manifest_path = Path("head/pm_acceptance/errata") / f"{task_id}.json"' in stage
     assert 'base_source = Path("base") / Path(*test_path.parts)' in stage
@@ -750,7 +888,7 @@ def test_workflow_stages_sha_pinned_frozen_erratum_and_requires_exact_red_outcom
     assert '(normal_suite,)' in execute
     assert '"PYTHONPATH": os.pathsep.join(str(path) for path in python_path)' in execute
     assert '"RUNNER_TEMP": str(suite_root)' in execute
-    assert 'if [ "$PR_MODE" = "pm-task-definition" ] || [ "$PR_MODE" = "pm-frozen-erratum" ]' in supplemental
+    assert 'if [ "$PR_MODE" = "implementation" ]; then' in supplemental
     assert "python -m pytest tests -q" in supplemental
 
 
@@ -1029,6 +1167,7 @@ def _git(repo: Path, *args: str) -> str:
 def _build_frozen_erratum_repo(
     tmp_path: Path,
     *,
+    base_test: bytes | None = None,
     head_test: bytes | None = None,
     manifest_transform=None,
 ) -> tuple[Path, str, str, ActiveTask, bytes, bytes]:
@@ -1038,12 +1177,13 @@ def _build_frozen_erratum_repo(
     active_path = repo / "pm_acceptance/active_task.json"
     test_path.parent.mkdir(parents=True)
     contract_path.parent.mkdir(parents=True)
-    base_test = (
-        b'FIXTURE = b"invalid"\n\n'
-        b"def helper():\n    return FIXTURE\n\n"
-        b"def test_contract():\n    assert helper()\n\n"
-        b"def test_compatibility():\n    assert True\n"
-    )
+    if base_test is None:
+        base_test = (
+            b'FIXTURE = b"invalid"\n\n'
+            b"def helper():\n    return FIXTURE\n\n"
+            b"def test_contract():\n    assert helper()\n\n"
+            b"def test_compatibility():\n    assert True\n"
+        )
     if head_test is None:
         head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid-zip"')
     test_path.write_bytes(base_test)
@@ -1261,6 +1401,57 @@ def test_frozen_erratum_rejects_changed_test_function_ast(tmp_path: Path):
         head_test=head_test,
     )
     assert "frozen_test_function_ast_changed" in _erratum_errors(repo, base, head, task)
+
+
+def test_frozen_erratum_allows_legacy_broad_raise_in_immutable_test_ast(
+    tmp_path: Path,
+):
+    base_test = (
+        b"import pytest\n\n"
+        b'FIXTURE = b"invalid"\n\n'
+        b"def helper():\n    return FIXTURE\n\n"
+        b"def test_contract():\n"
+        b"    with pytest.raises(Exception):\n"
+        b"        raise ValueError\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"')
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        base_test=base_test,
+        head_test=head_test,
+    )
+    assert _erratum_errors(repo, base, head, task) == ()
+
+
+def test_frozen_erratum_still_rejects_new_broad_raise_in_mutable_helper(
+    tmp_path: Path,
+):
+    base_test = (
+        b"import pytest\n\n"
+        b'FIXTURE = b"invalid"\n\n'
+        b"def helper():\n    return FIXTURE\n\n"
+        b"def test_contract():\n"
+        b"    with pytest.raises(Exception):\n"
+        b"        raise ValueError\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"') + (
+        b"\ndef helper_unsafe():\n"
+        b"    with pytest.raises(Exception):\n"
+        b"        pass\n"
+    )
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        base_test=base_test,
+        head_test=head_test,
+    )
+    assert "unsafe_frozen_test_pattern:broad_pytest_raises" in _erratum_errors(
+        repo,
+        base,
+        head,
+        task,
+    )
 
 
 @pytest.mark.parametrize(
