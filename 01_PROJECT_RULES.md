@@ -51,7 +51,7 @@ API key не имеет withdrawal permission. Секреты запрещены
 
 ## 5. Data and research
 
-UTC milliseconds, no lookahead, полный provenance и input commitments обязательны. Canonical Parquet/DuckDB store является целевым источником; silent fallback к legacy data/raw запрещается в будущем E2E. Недостающие funding/history evidence приводят к fail-closed результату.
+UTC milliseconds, no lookahead, полный provenance и input commitments обязательны. Canonical Parquet store является целевым источником, а DuckDB предоставляет только read-only in-memory views; silent fallback к legacy data/raw запрещается в будущем E2E. Недостающие funding/history evidence приводят к fail-closed результату.
 
 Range parameters, grid count, sizing и selection не задаются из головы. Current proxy scores не могут использоваться как live recommendation. OOS/test и post-signal fields запрещены для policy selection.
 
