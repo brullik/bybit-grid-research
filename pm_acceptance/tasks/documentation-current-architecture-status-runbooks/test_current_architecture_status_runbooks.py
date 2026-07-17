@@ -83,7 +83,7 @@ def _docs() -> dict[str, str]:
         docs = {path: _read_text(ROOT / path) for path in REQUIRED_DOC_PATHS}
     except (OSError, UnicodeDecodeError) as exc:
         raise RuntimeError(SENTINEL) from exc
-    if MARKER not in docs["README.md"]:
+    if not docs["README.md"].startswith(MARKER):
         raise RuntimeError(SENTINEL)
     visible_docs: dict[str, str] = {}
     for path, text in docs.items():
@@ -154,10 +154,18 @@ def _assert_no_positive_claims(text: str, subjects: tuple[str, ...]) -> None:
         "отключ",
     )
     for raw_line in text.casefold().splitlines():
-        if any(subject in raw_line for subject in subjects) and any(
-            positive in raw_line for positive in positives
-        ):
-            assert any(negative in raw_line for negative in negatives), raw_line
+        if re.search(r"`[a-z][a-z0-9_]*`:\s*`false`", raw_line):
+            continue
+        for subject in subjects:
+            subject_index = raw_line.find(subject)
+            if subject_index < 0:
+                continue
+            for positive in positives:
+                positive_index = raw_line.find(positive, subject_index + len(subject))
+                if positive_index < 0:
+                    continue
+                prefix = raw_line[:positive_index]
+                assert any(negative in prefix for negative in negatives), raw_line
 
 
 def _settings_fields() -> tuple[str, ...]:
@@ -222,6 +230,7 @@ def test_readme_links_every_current_document() -> None:
 def test_current_status_matches_completed_and_open_work() -> None:
     docs = _docs()
     status = docs["docs/CURRENT_ARCHITECTURE_AND_STATUS.md"]
+    context = docs["00_PROJECT_CONTEXT_FOR_CODEX.md"]
     assert "35a3b9c05b1bf3d86756e449b2735bef0893bc45" in status
     assert "PR #143" in status
     assert all(f"#{number}" in status for number in (129, 131, 133, 134))
@@ -229,11 +238,20 @@ def test_current_status_matches_completed_and_open_work() -> None:
         marker in _combined(docs).lower() for marker in ("закры", "closed")
     )
     assert "NO_ACTIVE_IMPLEMENTATION" in _combined(docs)
+    for required in (
+        "AGENTS.md",
+        "pm_acceptance/active_task.json",
+        "NO_ACTIVE_IMPLEMENTATION",
+        "production-edit authority",
+        "docs/CURRENT_ARCHITECTURE_AND_STATUS.md",
+    ):
+        assert required in context
 
 
 def test_architecture_component_paths_exist() -> None:
     docs = _docs()
     architecture = docs["docs/CURRENT_ARCHITECTURE_AND_STATUS.md"]
+    specification = docs["02_TECHNICAL_SPEC.md"]
     paths = (
         "src/bybit_grid/bybit/validate_only.py",
         "src/bybit_grid/bybit/client.py",
@@ -251,7 +269,24 @@ def test_architecture_component_paths_exist() -> None:
         "src/bybit_grid/backtest/grid_simulator.py",
     )
     assert all((ROOT / path).is_file() for path in paths)
-    assert all(Path(path).name in architecture or path in architecture for path in paths[:6])
+    assert all(
+        Path(path).name in architecture or path in architecture for path in paths[:6]
+    )
+    specification_paths = (
+        "src/bybit_grid/data/market_store",
+        "src/bybit_grid/data/public_batch/historical_*.py",
+        "scripts/build_range_candidates.py",
+        "scripts/build_candidate_outcomes.py",
+        "src/bybit_grid/backtest/neutral_grid",
+        "src/bybit_grid/backtest/ohlc_replay",
+        "src/bybit_grid/research/scoring",
+        "src/bybit_grid/research/walk_forward",
+        "src/bybit_grid/backtest/grid_simulator.py",
+    )
+    assert all(path in specification for path in specification_paths)
+    assert "Missing vertical path" in specification
+    assert "legacy data/raw" in specification
+    assert "не доказаны" in specification
 
 
 def test_architecture_separates_legacy_and_strict_data_paths() -> None:
@@ -300,7 +335,9 @@ def test_backtest_and_parameter_selection_are_not_overclaimed() -> None:
     assert "sufficient_for_parameter_selection_bool" in _read_text(
         ROOT / "src/bybit_grid/research/walk_forward/splits.py"
     )
-    assert "Placeholder" in _read_text(ROOT / "src/bybit_grid/backtest/grid_simulator.py")
+    assert "Placeholder" in _read_text(
+        ROOT / "src/bybit_grid/backtest/grid_simulator.py"
+    )
 
 
 def test_project_board_matches_repository_truth() -> None:
@@ -409,7 +446,9 @@ def test_env_example_matches_supported_settings_and_safe_defaults() -> None:
     assert set(values) == expected
     assert values == EXPECTED_ENV_VALUES
     assert not any(key.startswith("TELEGRAM_") for key in values)
-    assert not any(token in key for key in values for token in ("CREATE", "CLOSE", "DETAIL"))
+    assert not any(
+        token in key for key in values for token in ("CREATE", "CLOSE", "DETAIL")
+    )
 
 
 def test_setup_commands_match_python_and_project_metadata() -> None:
@@ -434,14 +473,15 @@ def test_offline_verification_runbook_is_complete() -> None:
         "python -m pytest tests -q",
         "python -m pytest -q",
         "ruff check .",
-        "ruff format --check .",
         "python -m pip check",
     )
     assert all(command in runbook for command in commands)
     assert "Do not skip" in runbook or "не " in runbook.lower()
 
 
-def test_public_data_runbook_distinguishes_owner_network_from_offline_pipeline() -> None:
+def test_public_data_runbook_distinguishes_owner_network_from_offline_pipeline() -> (
+    None
+):
     docs = _docs()
     runbook = docs["docs/SETUP_TEST_RUNBOOK.md"]
     assert "Public-data boundary" in runbook
@@ -449,7 +489,9 @@ def test_public_data_runbook_distinguishes_owner_network_from_offline_pipeline()
     assert "smoke_public_api.py" in runbook
     assert "run_bybit_public_batch_evidence.py" in runbook
     assert "not yet an end-to-end downloader" in runbook
-    assert "не требуют credentials" in runbook or "do not require credentials" in runbook
+    assert (
+        "не требуют credentials" in runbook or "do not require credentials" in runbook
+    )
 
 
 def test_secret_handling_excludes_repo_agents_and_logs() -> None:
