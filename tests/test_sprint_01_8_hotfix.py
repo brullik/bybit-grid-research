@@ -160,3 +160,5 @@ def test_static_dry_run_payload_uses_new_fgrid_validate_schema_only():
         "sampleOnly",
         "category",
     } & payload.keys()
+
+# RED probe after frozen erratum: strict API response envelope implementation intentionally unavailable.
