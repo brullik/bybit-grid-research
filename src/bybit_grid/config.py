@@ -1,5 +1,5 @@
 from pathlib import Path
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,11 +16,37 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     grid_validate_enabled: bool = False
     bybit_fgrid_validate_path: str = "/v5/fgridbot/validate"
-    bybit_fgrid_create_path: str = "/v5/fgridbot/create"
-    bybit_fgrid_close_path: str = "/v5/fgridbot/close"
-    bybit_fgrid_detail_path: str = "/v5/fgridbot/detail"
-    bybit_fgrid_grid_mode_neutral: int | str = 1
-    bybit_fgrid_grid_type_geometric: int | str = 2
+    bybit_fgrid_grid_mode_neutral: int = 1
+    bybit_fgrid_grid_type_geometric: int = 2
+
+    @field_validator(
+        "bybit_recv_window",
+        "bybit_fgrid_grid_mode_neutral",
+        "bybit_fgrid_grid_type_geometric",
+        mode="before",
+    )
+    @classmethod
+    def _validate_exact_unsigned_integer_input(cls, value):
+        if type(value) is int:
+            return value
+        if (
+            type(value) is str
+            and value
+            and value.isascii()
+            and value.isdecimal()
+            and (value == "0" or value[0] != "0")
+        ):
+            return value
+        raise ValueError("value must be an exact integer or canonical unsigned decimal text")
+
+    @field_validator("grid_validate_enabled", "live_trading_enabled", mode="before")
+    @classmethod
+    def _validate_exact_boolean_input(cls, value):
+        if type(value) is bool:
+            return value
+        if type(value) is str and value in {"true", "false"}:
+            return value
+        raise ValueError("value must be an exact boolean or lowercase true/false text")
 
     def require_private_credentials(self) -> None:
         if not self.bybit_api_key or not self.bybit_api_secret:

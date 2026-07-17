@@ -32,7 +32,11 @@ from bybit_grid.bybit.fgrid_min_sweep import (
     should_stop_symbol,
 )
 from bybit_grid.bybit.rate_limit import TokenBucketRateLimiter
-from bybit_grid.config import load_settings
+from bybit_grid.bybit.validate_only import (
+    ValidateOnlyBoundaryError,
+    enforce_validate_only_settings as _enforce_validate_only_settings,
+)
+from bybit_grid.config import Settings, load_settings
 from scripts.build_universe import build_universe
 
 
@@ -117,38 +121,49 @@ def _max_lev(row: dict[str, Any]) -> Any:
 
 def _plan(
     universe: pl.DataFrame, max_profiles: int, absolute_max: int
-) -> tuple[list[dict[str, Any]], int]:
-    rows = universe.to_dicts()
+) -> tuple[
+    list[
+        tuple[
+            dict[str, Any],
+            list[tuple[dict[str, Any], dict[str, Any]]],
+        ]
+    ],
+    int,
+]:
+    work: list[
+        tuple[
+            dict[str, Any],
+            list[tuple[dict[str, Any], dict[str, Any]]],
+        ]
+    ] = []
     total = 0
-    for r in rows:
-        total += len(
-            build_min_sweep_candidates(
-                r["symbol"], r["lastPrice"], r["tickSize"], _max_lev(r), max_profiles, absolute_max
-            )
+    for row in universe.to_dicts():
+        candidates = build_min_sweep_candidates(
+            row["symbol"],
+            row["lastPrice"],
+            row["tickSize"],
+            _max_lev(row),
+            max_profiles,
+            absolute_max,
         )
-    return rows, total
+        work.append((row, candidates))
+        total += len(candidates)
+    return work, total
 
 
 def _validate_symbol(
     row: dict[str, Any],
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]],
+    settings: Settings,
     args: argparse.Namespace,
     limiter: TokenBucketRateLimiter,
     done: set[tuple[Any, ...]],
     done_lock: Lock,
     raw_dir: Path,
 ) -> tuple[list[dict[str, Any]], int, int, dict[str, int | None]]:
-    settings = load_settings()
     rows: list[dict[str, Any]] = []
     skipped = 0
     errors = 0
-    candidates = build_min_sweep_candidates(
-        row["symbol"],
-        row["lastPrice"],
-        row["tickSize"],
-        _max_lev(row),
-        args.max_profiles_per_symbol,
-        args.absolute_max_profiles_per_symbol,
-    )
     stats: dict[str, int | None] = {
         "api_calls_attempted": 0,
         "api_calls_succeeded": 0,
@@ -168,6 +183,8 @@ def _validate_symbol(
             try:
                 response = client.validate_grid_bot(payload)
                 status_code = None
+            except ValidateOnlyBoundaryError:
+                raise
             except Exception as exc:
                 errors += 1
                 response = getattr(exc, "payload", {}) or {
@@ -224,6 +241,8 @@ def main() -> None:
     parser.add_argument("--min-turnover", type=float, default=5_000_000)
     parser.add_argument("--universe-max-symbols", type=int, default=150)
     args = parser.parse_args()
+    settings = load_settings()
+    _enforce_validate_only_settings(settings=settings)
     if args.purge_skipped_constraints:
         purge_skipped_constraints()
         return
@@ -238,13 +257,13 @@ def main() -> None:
     if args.sleep_sec and args.max_requests_per_second:
         print("warning: --sleep-sec is deprecated; using shared rate limiter")
 
-    settings = load_settings()
-    if not args.dry_run_plan and not settings.grid_validate_enabled:
-        raise SystemExit(
-            "GRID_VALIDATE_ENABLED=false. This command would not call Bybit validate. "
-            "Set GRID_VALIDATE_ENABLED=true for real min-investment sweep, or use --dry-run-plan."
-        )
     if not args.dry_run_plan:
+        if settings.grid_validate_enabled is False:
+            raise SystemExit(
+                "GRID_VALIDATE_ENABLED=false. This command would not call Bybit validate. "
+                "Set GRID_VALIDATE_ENABLED=true for real min-investment sweep, "
+                "or use --dry-run-plan."
+            )
         settings.require_private_credentials()
 
     output = Path("data/processed/fgrid_validate_constraints.parquet")
@@ -259,12 +278,14 @@ def main() -> None:
         counts = build_universe(args.min_turnover, args.universe_max_symbols)
         print(f"step=build_universe status=ok selected_count={counts.get('selected', counts.get('selected_count', 0))}")
     universe = pl.read_parquet(universe_path).head(args.max_symbols)
-    symbol_rows, planned = _plan(
+    symbol_work, planned = _plan(
         universe, args.max_profiles_per_symbol, args.absolute_max_profiles_per_symbol
     )
     est = int(planned / args.max_requests_per_second) if args.max_requests_per_second else 0
     print(
-        f"symbols={len(symbol_rows)} profiles_per_symbol_max={args.max_profiles_per_symbol} planned_requests<={planned} estimated_seconds_at_{args.max_requests_per_second}rps={est}"
+        f"symbols={len(symbol_work)} profiles_per_symbol_max={args.max_profiles_per_symbol} "
+        f"planned_requests<={planned} "
+        f"estimated_seconds_at_{args.max_requests_per_second}rps={est}"
     )
     if args.dry_run_plan:
         return
@@ -288,8 +309,18 @@ def main() -> None:
     try:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futures = [
-                pool.submit(_validate_symbol, r, args, limiter, done, done_lock, raw_dir)
-                for r in symbol_rows
+                pool.submit(
+                    _validate_symbol,
+                    row,
+                    candidates,
+                    settings,
+                    args,
+                    limiter,
+                    done,
+                    done_lock,
+                    raw_dir,
+                )
+                for row, candidates in symbol_work
             ]
             for fut in as_completed(futures):
                 rows, sk, er, stats = fut.result()

@@ -3,6 +3,12 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Any
 
+from bybit_grid.bybit.validate_only import (
+    CANONICAL_FGRID_GRID_MODE_NEUTRAL,
+    CANONICAL_FGRID_GRID_TYPE_GEOMETRIC,
+    enforce_validate_only_payload as _enforce_validate_only_payload,
+    enforce_validate_only_settings as _enforce_validate_only_settings,
+)
 from bybit_grid.config import load_settings
 
 
@@ -31,8 +37,6 @@ def build_fgrid_validate_payload(
     last_price: Decimal,
     tick_size: Decimal,
     leverage: Decimal | int = 1,
-    grid_mode: int | str | None = None,
-    grid_type: int | str | None = None,
     cell_number: int = 10,
     init_margin: Decimal | str = "100",
     lower_mult: Decimal = Decimal("0.90"),
@@ -40,6 +44,7 @@ def build_fgrid_validate_payload(
     stop_loss_mult: Decimal = Decimal("0.85"),
 ) -> dict[str, Any]:
     settings = load_settings()
+    _enforce_validate_only_settings(settings=settings)
     last_price = _decimal(last_price)
     tick_size = _decimal(tick_size)
     lower_mult = _decimal(lower_mult)
@@ -59,14 +64,16 @@ def build_fgrid_validate_payload(
     if not stop_loss_price < min_price:
         raise ValueError("dynamic fgrid payload invalid: expected stop_loss_price < min_price")
 
-    return {
+    payload = {
         "symbol": symbol,
         "leverage": _format_decimal(_decimal(leverage)),
-        "grid_mode": settings.bybit_fgrid_grid_mode_neutral if grid_mode is None else grid_mode,
-        "grid_type": settings.bybit_fgrid_grid_type_geometric if grid_type is None else grid_type,
+        "grid_mode": CANONICAL_FGRID_GRID_MODE_NEUTRAL,
+        "grid_type": CANONICAL_FGRID_GRID_TYPE_GEOMETRIC,
         "min_price": _format_decimal(min_price),
         "max_price": _format_decimal(max_price),
         "cell_number": cell_number,
         "init_margin": _format_decimal(_decimal(init_margin)),
         "stop_loss_price": _format_decimal(stop_loss_price),
     }
+    _enforce_validate_only_payload(payload=payload)
+    return payload
