@@ -146,3 +146,4 @@ def compute_event_outcomes(
                     "label_stayed_in_range_until_horizon": first_exit_side == "none", "label_sl_hit_before_horizon": first_sl_side != "none", "label_good_chop_proxy": inside_ratio >= 0.70 and grid_cross >= min_cross, "label_low_activity_proxy": grid_cross < min_cross, "label_high_breakout_risk_proxy": first_sl_side != "none" or inside_ratio < 0.40,
                 })
     return rows
+# mandatory-red-probe: p0-outcome-window-completeness-provenance; intentionally inert
