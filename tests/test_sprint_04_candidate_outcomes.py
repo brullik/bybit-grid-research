@@ -19,7 +19,7 @@ from bybit_grid.research.range_core.adapter import numpy_is_project_shadow
 
 
 def event():
-    return {"range_action_event_id":"a1","range_regime_id":"r1","symbol":"BTCUSDT","signal_time_ms":0,"range_low":100.0,"range_high":110.0,"range_mid":105.0,"range_height_atr_14":1.0}
+    return {"range_action_event_id":"a1","range_regime_id":"r1","symbol":"BTCUSDT","profile_name":"range-actionable-v1","actionable_event_semantics_version":"range-actionable-prefix-invariance-v1","decision_time_ms":0,"signal_time_ms":0,"range_low":100.0,"range_high":110.0,"range_mid":105.0,"range_height_atr_14":1.0}
 
 def klines(vals):
     return pl.DataFrame({"open_time_ms":[60_000*(i+1) for i in range(len(vals))],"open":[v[0] for v in vals],"high":[v[1] for v in vals],"low":[v[2] for v in vals],"close":[v[3] for v in vals],"volume":[1.0]*len(vals)})
@@ -119,7 +119,7 @@ def _write_minimal_review_pack(path: Path, perf: dict) -> None:
         z.writestr("outcome_quality_summary.parquet", b"placeholder")
         z.writestr("outcome_perf.json", json.dumps(perf))
         z.writestr("outcome_semantic_audit.md", "# audit\n")
-        z.writestr("outcome_semantic_audit.json", json.dumps({"semantic_audit_ok": True, "outcome_semantics_version": "v4_native_grid_geometry", "checks": {"grid_count_rows_failed": 0}}))
+        z.writestr("outcome_semantic_audit.json", json.dumps({"semantic_audit_ok": True, "outcome_semantics_version": "v5_exact_outcome_window_provenance", "checks": {"grid_count_rows_failed": 0}}))
         z.writestr("outcome_input_hygiene.json", json.dumps({"input_hygiene_ok": True}))
         z.writestr("outcome_input_hygiene_by_symbol.parquet", b"placeholder")
         z.writestr("outcome_core_equivalence_report.json", json.dumps({"equivalence_ok": True}))
@@ -238,7 +238,7 @@ def test_v3_summary_grains_not_multiplied(tmp_path: Path):
     rows = []
     for grid in [5, 10, 20]:
         for sl in [0.0, 0.5, 1.0]:
-            r = compute_event_outcomes(event(), klines([(105, 106, 104, 105)]), pl.DataFrame(), pl.DataFrame({"funding_time_ms": [1], "funding_rate": [0.1]}), [1], [grid], [sl])[0]
+            r = compute_event_outcomes(event(), klines([(105, 106, 104, 105)]), pl.DataFrame(), pl.DataFrame({"funding_time_ms": [1], "funding_rate": [0.1]}), [1], [grid], [sl], range_run_id="range-test", outcome_run_id="outcome-test")[0]
             r["funding_rows_in_horizon"] = 1
             r["funding_source_status"] = "ok"
             rows.append(r)
@@ -272,10 +272,10 @@ def test_native_geometric_grid_invalid_bounds_raise():
             geometric_grid_levels(*args)
 
 
-def test_v4_grid_semantic_fields_and_activity_use_n_plus_1_levels():
+def test_v5_grid_semantic_fields_and_activity_use_n_plus_1_levels():
     row = compute_event_outcomes(event(), klines([(100, 110, 100, 110)]), pl.DataFrame(), pl.DataFrame(), [1], [5], [0.0])[0]
     levels = json.loads(row["geometric_grid_levels_json"])
-    assert row["outcome_semantics_version"] == "v4_native_grid_geometry"
+    assert row["outcome_semantics_version"] == "v5_exact_outcome_window_provenance"
     assert row["grid_cell_number"] == 5
     assert row["grid_price_level_count"] == 6
     assert row["grid_interval_count"] == 5
@@ -285,8 +285,9 @@ def test_v4_grid_semantic_fields_and_activity_use_n_plus_1_levels():
     assert row["future_internal_level_intrabar_touch_count"] == 4
 
 
-def test_v4_ids_versioned_and_match_key_stable():
+def test_v5_ids_versioned_and_match_key_stable():
     v3 = deterministic_outcome_id("a", 60, 10, 0.5, "v3_atr_correct")
     v4 = deterministic_outcome_id("a", 60, 10, 0.5, "v4_native_grid_geometry")
-    assert v3 != v4
+    v5 = deterministic_outcome_id("a", 60, 10, 0.5, "v5_exact_outcome_window_provenance")
+    assert len({v3, v4, v5}) == 3
     assert outcome_match_key("a", 60, 10, 0.5) == outcome_match_key("a", 60, 10, 0.5)
