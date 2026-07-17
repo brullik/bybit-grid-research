@@ -450,3 +450,4 @@ def compute_event_outcomes(
         profile_name,
     )
     return compute_symbol_outcomes_fast(pl.DataFrame([event]), arrays, cfg).to_dicts()
+# mandatory-red-probe: p0-outcome-window-completeness-provenance; intentionally inert
