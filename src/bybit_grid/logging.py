@@ -65,3 +65,4 @@ def setup_logging(level: str = "INFO") -> None:
 
 def redacted_json_dump(data: Any) -> str:
     return json.dumps(redact(data), indent=2, sort_keys=True, default=str)
+# RED PROBE: inert sink-safe logging availability check.\n
