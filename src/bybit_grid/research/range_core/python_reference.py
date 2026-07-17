@@ -163,3 +163,4 @@ def detect_from_frame(df: pl.DataFrame, symbol: str, config: DetectionConfig, pr
         if prof.min_range_quality_score:
             out = out.filter(pl.col("range_quality_score") >= prof.min_range_quality_score)
     return out
+# mandatory-red-probe: p0-range-reference-fast-config-parity; intentionally inert
