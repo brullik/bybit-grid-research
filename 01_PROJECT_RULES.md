@@ -140,3 +140,4 @@ score =
 ## 9. Change control
 
 Любая новая идея добавляется в `PROJECT_BOARD.md` как backlog item. Она не внедряется в текущий спринт, если не является blocker.
+<!-- RED probe only: no documentation behavior -->
