@@ -1,175 +1,110 @@
 # Risk and Research Policy
 
-## 1. Research principle
+## Binding risk
 
-Параметры не придумываются из головы. Проект идет так:
+| Поле | Норматив |
+|---|---:|
+| capital_usdt | 500 |
+| max_total_loss_per_grid_usdt | 5 |
+| max_grids_per_instrument | 1 |
+| initial_global_concurrency_cap | 1 |
+| product | Bybit native USDT linear perpetual Futures Grid |
+| mode | neutral |
+| grid_type | geometric |
+| exit | SL-only |
+| TP | forbidden |
+| trailing | forbidden |
+| withdrawal permission | forbidden |
+| first live actions | manual Telegram confirmation |
 
-1. Сначала собираются данные.
-2. Потом строятся признаки диапазонов.
-3. Потом размечается будущий outcome.
-4. Потом ищутся устойчивые зоны параметров.
-5. Потом делается реалистичный backtest.
-6. Потом shadow/paper live.
-7. Потом минимальный live.
+5 USDT — максимальный полный убыток, не investment. Полный worst-case включает fees, spread, slippage, funding и forced SL. Недоказанный risk budget означает rejection.
 
-Запрещено сначала подобрать параметры под красивый ROI, а потом объяснять их логикой.
+Exact policy state:
 
-## 2. No-lookahead rules
+~~~text
+`capital_usdt`: `500`
+`max_loss_per_grid_usdt`: `5`
+`max_grids_per_instrument`: `1`
+`initial_global_concurrency_cap`: `1`
+`grid_mode`: `neutral`
+`grid_type`: `geometric`
+`exit_policy`: `SL-only`
+`take_profit_enabled`: `false`
+`trailing_enabled`: `false`
+`withdrawals_authorized`: `false`
+`first_live_requires_manual_telegram_confirmation`: `true`
+~~~
 
-В момент сигнала `t` разрешено использовать только данные `<= t`.
+## Research gates
 
-Запрещено:
+До выбора параметров обязательны:
 
-- брать будущий high/low для построения диапазона;
-- использовать будущую длительность диапазона в признаках;
-- фильтровать сигналы по информации, которая появляется после входа;
-- оптимизировать параметры на том же периоде, где считаем итоговую доходность.
+- canonical input provenance and coverage;
+- no-lookahead features frozen at signal time;
+- semantic neutral-grid replay, а не crossing proxies;
+- native quantity/level mapping and exchange constraints;
+- liquidation, fees, spread, slippage, funding and SL accounting;
+- train/validation/test or walk-forward separation;
+- robustness across time, symbols and cost stress;
+- explicit insufficient_evidence/no_policy_passes artifact;
+- portfolio concurrency and capital constraints.
 
-## 3. Dataset split
+Текущее состояние не проходит эти gates: outcome/scoring proxy-only, sufficient_for_parameter_selection=false, risk_budget_proven=false, native equivalence и profitability не доказаны.
 
-Минимальная схема:
+## No-lookahead and dataset split
 
-- Train: поиск первичных зон параметров.
-- Validation: отбор устойчивых параметров.
-- Test: финальная проверка, один раз.
-- Out-of-symbol: отдельная группа symbols, не участвующих в подборе.
-- Stress buckets: отдельные рыночные режимы.
+В момент сигнала `t` разрешены только данные `<= t`. Future high/low, lifetime, crossings, death reason, PnL/R и любая фильтрация по post-signal исходу запрещены.
 
-## 4. Instrument grouping
+Минимальное разделение evidence:
 
-Стратегия должна проверяться минимум по группам:
+- Train — формирование первичных зон параметров;
+- Validation — выбор устойчивых policy;
+- Test — однократная финальная проверка;
+- Out-of-symbol — инструменты, не участвовавшие в выборе;
+- Stress buckets — отдельные режимы рынка и cost stress.
 
-- BTC/ETH;
-- high liquidity alts;
-- mid liquidity alts;
-- low-but-allowed liquidity alts;
-- young listings;
-- older instruments;
-- delisted/closed history, если данные доступны.
+Результат должен быть устойчив по BTC/ETH, liquidity cohorts, возрасту листинга и доступной closed/delisted истории. Один symbol не может давать более 25% итоговой net profit.
 
-No single symbol должен давать больше 20–25% чистой прибыли финального теста. Если дает — стратегия подозрительно зависима от одного инструмента.
+## Required metrics
 
-## 5. Core metrics
+Основные метрики: net PnL after all costs, expectancy в R, profit factor, max drawdown, worst 1%, consecutive losses, Monte Carlo/risk of ruin, capital locked minutes, frequency, simultaneous signals, capital efficiency и robustness по symbol/regime. Raw ROI, win rate и Sharpe/Sortino вторичны.
 
-Главные метрики:
+## Promotion thresholds
 
-- net PnL after fees/funding;
-- expectancy per signal in R;
-- profit factor;
-- max drawdown;
-- worst 1% trades;
-- consecutive losses;
-- risk of ruin / Monte Carlo;
-- capital locked minutes;
-- signal frequency;
-- max simultaneous signals;
-- net PnL per capital-minute;
-- robustness by symbol group and market regime.
+Для shadow/paper требуются no-lookahead backtest, exchange constraints, полные costs, OOS profit factor >= 1.20, положительный EV, сохранённый 5 USDT risk model и single-symbol concentration <= 25%.
 
-Вторичные метрики:
+Для minimal live дополнительно требуются:
 
-- raw ROI;
-- win rate;
-- Sharpe/Sortino.
+- OOS profit factor >= 1.25;
+- EV >= +0.05R after all costs, где R = 5 USDT;
+- historical portfolio max drawdown при cap 1–3 <= 20%;
+- max drawdown > 25% означает автоматический NO-GO;
+- Monte Carlo probability 50% drawdown за 1000 signals <= 10%;
+- Bybit validate, shadow comparability и Telegram emergency/pause/resume gates.
 
-## 6. Launch gates
+Profit factor interpretation: `<1.10` — NO-GO; `1.10–1.20` — research only; `1.20–1.25` — shadow/paper only; `>=1.25` может стать minimal-live candidate только при прохождении всех остальных gates. Высокий PF не заменяет robustness.
 
-Для допуска к shadow/paper:
+## Prohibited selection inputs
 
-- no-lookahead backtest готов;
-- fees/funding учтены;
-- Bybit tick/qty/min investment constraints учтены;
-- out-of-sample profit factor >= 1.20;
-- expected value after fees/funding > 0;
-- worst 1% outcomes не ломают risk model;
-- single-symbol concentration <= 25%;
-- стратегия работает минимум в нескольких market regimes, а не в одном отрезке.
+Future net PnL/R, lifetime, future crossings, death reason, oracle rank и любые post-signal values запрещены. OOS/test нельзя использовать для выбора policy.
 
-Для допуска к минимальному real live:
+Если сигнал по symbol уже имеет активную сетку, новый сигнал должен стать `duplicate_signal_ignored`: активная grid не обновляется, не пересоздаётся и не расширяется.
 
-- out-of-sample profit factor >= 1.25;
-- expected value >= +0.05R after fees/funding;
-- historical portfolio max drawdown при live cap 1–3 сетки <= 20%;
-- если max drawdown > 25%, live запрещен;
-- Monte Carlo risk of 50% drawdown на горизонте 1000 сигналов <= 10%;
-- все Bybit validate checks проходят;
-- shadow/paper signals похожи на historical signals по частоте и качеству;
-- Telegram emergency и pause/resume проверены.
+## Live promotion
 
-Для semi-auto:
+Paper/owner-public runs возможны только после deterministic synthetic E2E. Private credentials — только после чистого #133 и security assurance. Первые live actions требуют owner checkpoint и manual Telegram confirmation.
 
-- минимум 100 завершенных ручных операций без системных ошибок;
+Semi-auto остаётся будущим gate и допускается только после выполнения всех условий:
+
+- минимум 100 завершённых подтверждённых операций без системных ошибок;
 - live/paper profit factor >= 1.10;
 - нет расхождения между planned risk и фактическим закрытием;
-- нет необъясненных Bybit/API ошибок;
-- emergency stop протестирован.
+- нет необъяснённых Bybit/API ошибок;
+- emergency stop протестирован;
+- пройдены все остальные performance и operational gates.
 
-## 7. Profit factor thresholds
+Эта policy задаёт gates, но не утверждает наличие live runtime.
 
-- `< 1.10`: не торговать.
-- `1.10–1.20`: только research, не live.
-- `1.20–1.25`: допустимо shadow/paper.
-- `1.25–1.50`: допустимо минимальный real live.
-- `1.50+`: сильный кандидат, но все равно нужен robustness check.
+## Evidence truthfulness
 
-## 8. Expected value thresholds
-
-`R = 5 USDT`.
-
-- Minimum for paper: EV > 0 after all costs.
-- Minimum for live: EV >= +0.05R, то есть примерно +0.25 USDT на сигнал.
-- Preferred: EV >= +0.10R, то есть примерно +0.50 USDT на сигнал.
-- Excellent: EV >= +0.20R, то есть примерно +1.00 USDT на сигнал.
-
-## 9. Rare vs frequent strategies
-
-Для депозита 500 USDT предпочтение получает не самая редкая стратегия с огромным ROI, а стратегия с:
-
-- достаточной частотой сигналов;
-- положительным EV;
-- контролируемым tail risk;
-- невысокой просадкой;
-- устойчивостью на разных инструментах.
-
-Редкая сверхприбыльная стратегия может быть добавлена позже как отдельный режим, но она не должна быть основным способом раскачки депозита.
-
-## 10. Duplicate signal rule
-
-Если по symbol уже есть активная сетка:
-
-- новый сигнал игнорируется;
-- параметры активной сетки не обновляются;
-- бот не пересоздается;
-- событие нового сигнала сохраняется в лог как `duplicate_signal_ignored`.
-
-Причина: пересоздание усложняет backtest/live equivalence и добавляет операционный риск.
-
-## 11. Ranking when many signals appear
-
-Если одновременно появилось больше сигналов, чем можно открыть, используется score:
-
-```text
-score =
-  0.35 * expected_value_R
-+ 0.20 * robustness_score
-+ 0.15 * liquidity_score
-+ 0.10 * fill_potential_score
-+ 0.10 * capital_efficiency_score
-+ 0.10 * regime_score
-- 0.25 * tail_risk_score
-- 0.15 * funding_penalty_score
-```
-
-Tie-breakers:
-
-1. higher liquidity;
-2. lower tail risk;
-3. lower funding penalty;
-4. lower correlation with already active symbols;
-5. earlier signal time.
-
-## 12. Trailing up/down decision
-
-Trailing up/down запрещен в V1.
-
-Причина: это меняет природу стратегии. Мы исследуем grid внутри проторговки, а trailing превращает сетку в адаптивную стратегию следования за рынком. Это отдельный research-проект, который нельзя смешивать с первым тестом.
+Synthetic evidence не является real-market evidence. Validate success не доказывает profitability. Legacy proxy scoring не является native-grid replay. Недостаточное evidence обязано завершаться `insufficient_evidence`, `no_policy_passes` или NO-GO, а не оптимистичным fallback.
