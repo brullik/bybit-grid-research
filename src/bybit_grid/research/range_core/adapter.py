@@ -116,3 +116,4 @@ def detect_ranges_core(
     core: str = "numpy_fast",
 ) -> pl.DataFrame:
     return detect_ranges_core_with_funnel(arrays, symbol, profile, lookbacks, core=core)[0]
+# mandatory-red-probe: p0-range-reference-fast-config-parity; intentionally inert
