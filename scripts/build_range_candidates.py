@@ -21,11 +21,20 @@ from bybit_grid.research.range_actionable_events import ActionableEventConfig, b
 from bybit_grid.research.range_features import DEFAULT_LOOKBACKS
 from bybit_grid.research.range_profiles import RANGE_PROFILES, resolve_profiles
 
+RANGE_REFERENCE_FAST_CONFIG_PARITY_CONTRACT = "range-reference-fast-config-parity-v1"
+
 REJECTION_KEYS = FUNNEL_KEYS
 
 
 def default_workers() -> int:
     return min(32, os.cpu_count() or 8)
+
+
+def _detection_config_from_args(args_dict: dict) -> DetectionConfig:
+    return DetectionConfig(
+        lookbacks=tuple(int(value) for value in args_dict["lookbacks"].split(",")),
+        max_zero_volume_window_pct=args_dict["max_zero_volume_window_pct"],
+    )
 
 
 def _read_symbol(data_dir: str, symbol: str, start_ms: int | None, end_ms: int | None) -> pl.DataFrame:
@@ -48,6 +57,7 @@ def _existing(base: Path, symbol: str) -> bool:
 
 def _worker(row: dict, args_dict: dict) -> dict:
     symbol = row["symbol"]
+    cfg = _detection_config_from_args(args_dict)
     end_ms = int(row.get("end_ms") or 0) or None
     start_ms = int(row.get("start_ms") or 0) or None
     if args_dict.get("days_limit") and end_ms:
@@ -62,16 +72,29 @@ def _worker(row: dict, args_dict: dict) -> dict:
     if args_dict.get("skip_existing_ok") and all(
         _existing(base, symbol) for base in [raw_base if "raw" in layers else event_base, event_base if "event" in layers else raw_base]
     ):
-        return {"symbol": symbol, "skipped_existing_ok": True, "candles_scanned": 0, "raw_candidate_rows": 0, "event_candidate_rows": 0}
+        return {
+            "symbol": symbol,
+            "skipped_existing_ok": True,
+            "candles_scanned": 0,
+            "raw_candidate_rows": 0,
+            "event_candidate_rows": 0,
+            "max_zero_volume_window_pct": cfg.max_zero_volume_window_pct,
+        }
     df = _read_symbol(args_dict["data_dir"], symbol, start_ms, end_ms)
-    cfg = DetectionConfig(lookbacks=tuple(int(x) for x in args_dict["lookbacks"].split(",")))
     arrays = arrays_from_frame(df) if not df.is_empty() else None
     core_start = time.monotonic()
     raw_parts = []
     counters = {k: 0 for k in REJECTION_KEYS}
     if arrays is not None:
         for prof in resolve_profiles(args_dict["profile"]):
-            part, funnel = detect_ranges_core_with_funnel(arrays, symbol, prof, cfg.lookbacks, core=args_dict.get("core", "numpy_fast"))
+            part, funnel = detect_ranges_core_with_funnel(
+                arrays,
+                symbol,
+                prof,
+                cfg.lookbacks,
+                core=args_dict.get("core", "numpy_fast"),
+                config=cfg,
+            )
             raw_parts.append(part)
             for k in REJECTION_KEYS:
                 counters[k] += int(funnel.get(k, 0))
@@ -102,6 +125,7 @@ def _worker(row: dict, args_dict: dict) -> dict:
         "core_detect_seconds": core_detect_seconds,
         "coalesce_seconds": coalesce_seconds,
         "write_seconds": write_seconds,
+        "max_zero_volume_window_pct": cfg.max_zero_volume_window_pct,
         **counters,
     }
 
@@ -154,6 +178,7 @@ def main() -> None:
     p.add_argument("--max-zero-volume-window-pct", type=float, default=0.05)
     p.add_argument("--debug-write-all-features", action="store_true")
     args = p.parse_args()
+    requested_config = _detection_config_from_args(vars(args))
     if args.run_id == "auto":
         args.run_id = time.strftime("range_%Y%m%d_%H%M%S")
     run_root = Path("data/processed/range_runs") / args.run_id
@@ -170,7 +195,7 @@ def main() -> None:
         work = work.head(args.symbols_limit)
     est_rows, est_source = estimate_rows(work, args.days_limit)
     profiles = ",".join(p.name for p in resolve_profiles(args.profile))
-    plan = {"run_id": args.run_id, "symbols": work.height, "workers": args.workers, "estimated_kline_rows": est_rows, "estimated_source": est_source, "profiles": profiles, "lookbacks": args.lookbacks, "output_layer": args.output_layer, "core_name": args.core}
+    plan = {"run_id": args.run_id, "symbols": work.height, "workers": args.workers, "estimated_kline_rows": est_rows, "estimated_source": est_source, "profiles": profiles, "lookbacks": args.lookbacks, "max_zero_volume_window_pct": requested_config.max_zero_volume_window_pct, "output_layer": args.output_layer, "core_name": args.core}
     print("dry_run_plan " + " ".join(f"{k}={v}" for k, v in plan.items()))
     if args.dry_run_plan:
         return
