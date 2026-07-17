@@ -112,8 +112,13 @@ def _window_diagnostics(
     }
 
 
+def _sl_buffer_id_token(sl_atr_buffer: float) -> str:
+    value = float(sl_atr_buffer)
+    return f"{value:g}" if value.is_integer() else repr(value)
+
+
 def outcome_match_key(event_id: str, horizon: int, grid_cell_number: int, sl_atr_buffer: float) -> str:
-    key = f"{event_id}|{horizon}|{grid_cell_number}|{sl_atr_buffer:g}"
+    key = f"{event_id}|{horizon}|{grid_cell_number}|{_sl_buffer_id_token(sl_atr_buffer)}"
     return hashlib.sha256(key.encode()).hexdigest()[:24]
 
 
@@ -127,7 +132,7 @@ def deterministic_outcome_id(
 ) -> str:
     key = (
         f"{semantics_version}|{window_semantics_version}|{event_id}|"
-        f"{horizon}|{grid_cell_number}|{sl_atr_buffer:g}"
+        f"{horizon}|{grid_cell_number}|{_sl_buffer_id_token(sl_atr_buffer)}"
     )
     return hashlib.sha256(key.encode()).hexdigest()[:24]
 
@@ -174,7 +179,7 @@ def validate_event_identity(event: dict) -> None:
 
 
 def validate_kline_schema(klines: pl.DataFrame, time_col: str) -> None:
-    if klines.is_empty() and not klines.columns:
+    if klines.is_empty():
         return
     missing = {time_col, "open", "high", "low", "close"} - set(klines.columns)
     if missing:
@@ -214,7 +219,7 @@ def compute_event_outcomes(
         end = entry + horizon * MINUTE_MS
         fut = (
             pl.DataFrame()
-            if klines.is_empty() and not klines.columns
+            if klines.is_empty()
             else klines.filter(
                 (pl.col(time_col) >= entry) & (pl.col(time_col) < end)
             ).sort(time_col)
@@ -261,7 +266,16 @@ def compute_event_outcomes(
         inside = int(np.sum((highs <= range_high) & (lows >= range_low))) if highs.size else 0
         inside_ratio = inside / horizon if horizon else 0.0
         fund = aggregate_funding(funding, entry, end)
-        mark_rows = mark_klines.filter((pl.col(time_col) >= entry) & (pl.col(time_col) < end)) if not mark_klines.is_empty() and time_col in mark_klines.columns else pl.DataFrame()
+        mark_time_col = (
+            "open_time_ms" if "open_time_ms" in mark_klines.columns else "start_time_ms"
+        )
+        mark_rows = (
+            mark_klines.filter(
+                (pl.col(mark_time_col) >= entry) & (pl.col(mark_time_col) < end)
+            )
+            if not mark_klines.is_empty() and mark_time_col in mark_klines.columns
+            else pl.DataFrame()
+        )
         mark_dev = 0.0
         if not mark_rows.is_empty() and closes.size and "close" in mark_rows.columns:
             mc = mark_rows["close"].cast(pl.Float64).to_numpy()
