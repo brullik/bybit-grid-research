@@ -4,8 +4,12 @@ from pathlib import Path
 
 import polars as pl
 
-from bybit_grid.research.range_core.models import RangeInputArrays, empty_funnel
+from bybit_grid.research.range_core.models import RangeInputArrays
+from bybit_grid.research.range_detector import DetectionConfig
 from bybit_grid.research.range_profiles import RangeProfile
+
+
+RANGE_REFERENCE_FAST_CONFIG_PARITY_CONTRACT = "range-reference-fast-config-parity-v1"
 
 
 def _col(df: pl.DataFrame, *names: str) -> str:
@@ -83,6 +87,17 @@ def _frame_from_arrays(a: RangeInputArrays) -> pl.DataFrame:
     return pl.DataFrame(data)
 
 
+def _resolve_config(
+    lookbacks: tuple[int, ...],
+    config: DetectionConfig | None,
+) -> DetectionConfig:
+    if config is None:
+        return DetectionConfig(lookbacks=lookbacks)
+    if config.lookbacks != lookbacks:
+        raise ValueError("config.lookbacks must exactly match positional lookbacks")
+    return config
+
+
 def detect_ranges_core_with_funnel(
     arrays: RangeInputArrays,
     symbol: str,
@@ -90,21 +105,19 @@ def detect_ranges_core_with_funnel(
     lookbacks: tuple[int, ...],
     *,
     core: str = "numpy_fast",
+    config: DetectionConfig | None = None,
 ) -> tuple[pl.DataFrame, dict[str, int]]:
+    cfg = _resolve_config(lookbacks, config)
     if core in {"numpy_fast", "numba_optional"}:
         _import_real_numpy_for_fast_core()
         from bybit_grid.research.range_core.numpy_fast import detect_ranges
 
-        return detect_ranges(arrays, symbol, profile, lookbacks)
-    from bybit_grid.research.range_detector import DetectionConfig
-    from bybit_grid.research.range_core.python_reference import detect_from_frame
+        return detect_ranges(arrays, symbol, profile, lookbacks, config=cfg)
+    from bybit_grid.research.range_core.python_reference import (
+        detect_from_frame_with_funnel,
+    )
 
-    out = detect_from_frame(_frame_from_arrays(arrays), symbol, DetectionConfig(lookbacks=lookbacks), profile)
-    funnel = empty_funnel()
-    funnel["total_window_positions"] = sum(max(0, len(arrays.open_time_ms) - lb + 1) for lb in lookbacks)
-    funnel["range_height_rejection_count"] = max(0, funnel["total_window_positions"] - out.height)
-    funnel["raw_candidate_pass_count"] = out.height
-    return out, funnel
+    return detect_from_frame_with_funnel(_frame_from_arrays(arrays), symbol, cfg, profile)
 
 
 def detect_ranges_core(
@@ -114,5 +127,13 @@ def detect_ranges_core(
     lookbacks: tuple[int, ...],
     *,
     core: str = "numpy_fast",
+    config: DetectionConfig | None = None,
 ) -> pl.DataFrame:
-    return detect_ranges_core_with_funnel(arrays, symbol, profile, lookbacks, core=core)[0]
+    return detect_ranges_core_with_funnel(
+        arrays,
+        symbol,
+        profile,
+        lookbacks,
+        core=core,
+        config=config,
+    )[0]
