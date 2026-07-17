@@ -63,3 +63,4 @@ def detect_range_candidates(
     from bybit_grid.research.range_core.adapter import arrays_from_frame, detect_ranges_core
 
     return detect_ranges_core(arrays_from_frame(df), symbol, prof, cfg.lookbacks, core="numpy_fast")
+# mandatory-red-probe: p0-range-reference-fast-config-parity; intentionally inert
