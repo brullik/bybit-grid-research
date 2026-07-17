@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib
+import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -121,7 +122,25 @@ from bybit_grid.research.range_core.adapter import (
 )
 from bybit_grid.research.range_detector import DetectionConfig, detect_range_candidates
 from bybit_grid.research.range_profiles import RANGE_PROFILES, RangeProfile
-from scripts import build_range_candidates
+
+def _load_build_range_candidates() -> Any:
+    path = (
+        Path(range_detector.__file__).resolve().parents[3]
+        / "scripts"
+        / "build_range_candidates.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "pm_acceptance_build_range_candidates",
+        path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(SENTINEL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+build_range_candidates = _load_build_range_candidates()
 
 
 RANGE_REFERENCE_FAST_CONFIG_PARITY_TEST_CONTRACT = (
