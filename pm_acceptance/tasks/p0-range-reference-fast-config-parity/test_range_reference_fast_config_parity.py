@@ -115,6 +115,7 @@ from dataclasses import replace
 import polars as pl
 import pytest
 
+import bybit_grid.research.range_detector as range_detector
 from bybit_grid.research.range_core import numpy_fast, python_reference
 from bybit_grid.research.range_core.adapter import (
     arrays_from_frame,
