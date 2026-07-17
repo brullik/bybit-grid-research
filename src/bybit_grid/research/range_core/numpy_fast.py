@@ -151,3 +151,4 @@ def detect_ranges(arrays: RangeInputArrays, symbol: str, profile: RangeProfile, 
         funnel["quality_score_rejection_count"] += before - out.height
     funnel["raw_candidate_pass_count"] += out.height
     return out, funnel
+# mandatory-red-probe: p0-range-reference-fast-config-parity; intentionally inert
