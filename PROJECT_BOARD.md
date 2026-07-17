@@ -19,3 +19,4 @@ Bounded historical downloader, data coverage gate, parameter research.
 ## Closed
 
 Private/live/Telegram work is closed.
+<!-- RED probe only: no documentation behavior -->
