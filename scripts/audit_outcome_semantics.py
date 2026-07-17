@@ -10,14 +10,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import polars as pl
 from bybit_grid.research.outcome_store import read_outcomes
 from bybit_grid.research.outcome_core.grid_crossings import GRID_LEVELS_SERIALIZATION_VERSION
+from bybit_grid.research.outcome_semantics import (
+    OUTCOME_SEMANTICS_VERSION,
+    OUTCOME_WINDOW_SEMANTICS_VERSION,
+    fail,
+    validate_outcome_window_semantics,
+)
 
-OUTCOME_SEMANTICS_VERSION = "v4_native_grid_geometry"
 GRID_GEOMETRY_SEMANTICS_VERSION = "v1_n_cells_n_plus_1_levels"
+OUTCOME_WINDOW_COMPLETENESS_PROVENANCE_CONTRACT = (
+    "outcome-window-completeness-provenance-v1"
+)
 
 
-def fail(msgs: list[str], msg: str) -> None:
-    if msg not in msgs:
-        msgs.append(msg)
 
 
 def write_artifacts(run_id: str, result: dict) -> None:
@@ -57,7 +62,13 @@ def main() -> None:
     if not failures:
         checks["outcome_semantics_version"] = df["outcome_semantics_version"].unique().to_list()
         if set(checks["outcome_semantics_version"]) != {OUTCOME_SEMANTICS_VERSION}:
-            fail(failures, "outcome_semantics_version is not v4_native_grid_geometry")
+            fail(failures, "outcome_semantics_version is not v5_exact_outcome_window_provenance")
+        window_audit = validate_outcome_window_semantics(df)
+        checks["outcome_window_semantic_audit_ok"] = window_audit[
+            "outcome_window_semantic_audit_ok"
+        ]
+        for window_failure in window_audit["failures"]:
+            fail(failures, str(window_failure))
         if set(df["grid_geometry_semantics_version"].unique().to_list()) != {GRID_GEOMETRY_SEMANTICS_VERSION}:
             fail(failures, "grid_geometry_semantics_version invalid")
         dup_composite = df.height - df.select(["range_action_event_id", "future_horizon_minutes", "grid_count", "sl_atr_buffer"]).unique().height
@@ -124,7 +135,6 @@ def main() -> None:
                 fail(failures, f"missing activity proxy {c}")
 
         invariant_checks = [
-            (("future_rows_available", "future_horizon_minutes"), pl.col("future_rows_available") <= pl.col("future_horizon_minutes"), "future_rows_available > horizon"),
             (("future_coverage_minutes", "future_horizon_minutes"), pl.col("future_coverage_minutes") <= pl.col("future_horizon_minutes"), "future_coverage_minutes > horizon"),
             (("inside_range_candle_count", "future_rows_available"), pl.col("inside_range_candle_count") <= pl.col("future_rows_available"), "inside_range_candle_count > future_rows_available"),
             (("future_bad_ohlc_count", "future_rows_available"), pl.col("future_bad_ohlc_count") <= pl.col("future_rows_available"), "future_bad_ohlc_count > future_rows_available"),
@@ -147,7 +157,7 @@ def main() -> None:
 
         if "grid_step_fee_multiple_proxy" in cols and df.filter(pl.col("grid_step_fee_multiple_proxy").is_not_null()).height:
             fail(failures, "hardcoded fee proxy remains populated")
-    result = {"semantic_audit_ok": not failures, "outcome_run_id": args.outcome_run_id, "outcome_semantics_version": OUTCOME_SEMANTICS_VERSION, "rows_checked": df.height, "failures": failures, "checks": checks}
+    result = {"semantic_audit_ok": not failures, "outcome_run_id": args.outcome_run_id, "outcome_semantics_version": OUTCOME_SEMANTICS_VERSION, "outcome_window_semantics_version": OUTCOME_WINDOW_SEMANTICS_VERSION, "rows_checked": df.height, "failures": failures, "checks": checks}
     write_artifacts(args.outcome_run_id, result)
     print(json.dumps(result, separators=(",", ":")))
     raise SystemExit(0 if not failures else 1)
