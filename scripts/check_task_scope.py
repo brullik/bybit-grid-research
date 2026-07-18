@@ -965,6 +965,41 @@ def git_blob_from_ref(ref: str, path: str) -> bytes:
     return proc.stdout
 
 
+def git_tree_entry_mode(ref: str, path: str) -> str:
+    if not _SHA_RE.fullmatch(ref):
+        raise ValueError("invalid_git_tree_entry_ref")
+    if _path_error(path) is not None:
+        raise ValueError("invalid_git_tree_entry_path")
+    proc = subprocess.run(
+        ["git", "ls-tree", "-z", "--full-tree", ref, "--", path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    failure = RuntimeError("git_tree_entry_mode_failed")
+    if proc.returncode != 0 or proc.stderr or not proc.stdout.endswith(b"\0"):
+        raise failure
+    records = proc.stdout[:-1].split(b"\0")
+    if len(records) != 1:
+        raise failure
+    try:
+        metadata, returned_path = records[0].split(b"\t")
+        mode, object_type, object_id = metadata.split(b" ")
+        returned_path_text = returned_path.decode("utf-8", "strict")
+        mode_text = mode.decode("ascii", "strict")
+        object_id_text = object_id.decode("ascii", "strict")
+    except (UnicodeDecodeError, ValueError):
+        raise failure from None
+    if (
+        returned_path_text != path
+        or object_type != b"blob"
+        or re.fullmatch(r"[0-7]{6}", mode_text) is None
+        or _COMMIT_SHA_RE.fullmatch(object_id_text) is None
+    ):
+        raise failure
+    return mode_text
+
+
 def git_object_exists(ref: str, path: str) -> bool:
     if not _SHA_RE.fullmatch(ref):
         raise ValueError("invalid_git_object_ref")
@@ -1101,6 +1136,14 @@ def recovery_bundle_history_errors(
     )
     if hashlib.sha256(corrected_test).hexdigest() != manifest.erratum_v1.corrected_test_sha256:
         return ("recovery_bundle_erratum_corrected_test_sha256_mismatch",)
+    actual_mode = git_tree_entry_mode(
+        base_sha, manifest.erratum_v1.corrected_test_path,
+    )
+    if actual_mode != manifest.erratum_v1.corrected_test_mode:
+        return (
+            "recovery_bundle_erratum_corrected_test_mode_mismatch:"
+            f"{actual_mode}:{manifest.erratum_v1.corrected_test_mode}",
+        )
     return ()
 
 
