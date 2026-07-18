@@ -516,6 +516,42 @@ def test_recovery_history_requires_v1_erratum_as_current_predecessor(tmp_path: P
         os.chdir(old_cwd)
 
 
+def test_recovery_history_requires_erratum_directly_after_suspension(tmp_path: Path):
+    from dataclasses import replace
+
+    import scripts.check_task_scope as check_task_scope
+
+    repo, suspension_sha, erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(tmp_path)
+    )
+    _git(repo, "checkout", "-q", suspension_sha)
+    intervening_path = repo / "ordinary-between-suspension-and-erratum.txt"
+    intervening_path.write_text(
+        "ordinary between suspension and erratum\n", encoding="utf-8"
+    )
+    _git(repo, "add", "ordinary-between-suspension-and-erratum.txt")
+    _git(repo, "commit", "-q", "-m", "ordinary between suspension and erratum")
+    intervening_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "cherry-pick", erratum_sha)
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    mutated_manifest = replace(
+        manifest,
+        erratum_v1=replace(manifest.erratum_v1, commit_sha=base_sha),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(
+            base_sha, mutated_manifest
+        ) == (
+            f"recovery_bundle_erratum_predecessor_not_suspension:"
+            f"{suspension_sha}:{intervening_sha}",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_history_requires_hash_pinned_v1_erratum_manifest(tmp_path: Path):
     from dataclasses import replace
 
