@@ -1077,6 +1077,9 @@ def recovery_bundle_history_errors(
     changed_paths = git_commit_changed_paths(manifest.suspension.commit_sha)
     if changed_paths != (_TASK_FILE,) and set(changed_paths) != {_TASK_FILE}:
         return ("recovery_bundle_suspension_changed_paths_mismatch",)
+    inactive_task = git_blob_from_ref(manifest.suspension.commit_sha, _TASK_FILE)
+    if hashlib.sha256(inactive_task).hexdigest() != manifest.suspension.inactive_task_sha256:
+        return ("recovery_bundle_suspension_inactive_task_sha256_mismatch",)
     return ()
 
 
