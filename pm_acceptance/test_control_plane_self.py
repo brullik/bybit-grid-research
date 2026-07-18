@@ -32,13 +32,69 @@ from scripts.check_task_scope import (
 
 
 def _recovery_bundle_bytes() -> bytes:
+    walk_forward_nodes = [
+        "test_contract_markers_exact_scope_and_embedded_source",
+        "test_contract_versions_and_review_pack_members_are_pinned",
+        "test_grains_preserve_non_aligned_v5_persisted_exclusive_end_without_legacy_alias",
+        "test_grains_fail_closed_on_invalid_v5_boundary_contract[outcome_end_exclusive_ms-None]",
+        "test_grains_fail_closed_on_invalid_v5_boundary_contract[outcome_end_exclusive_ms-3660000.0]",
+        "test_grains_fail_closed_on_invalid_v5_boundary_contract[outcome_end_exclusive_ms-True]",
+        "test_grains_fail_closed_on_invalid_v5_boundary_contract[decision_time_source-signal_time_fallback]",
+        "test_grains_fail_closed_on_invalid_v5_boundary_contract[causal_provenance_complete_bool-False]",
+        "test_grains_fail_closed_on_invalid_v5_boundary_contract[future_outcome_eligible_bool-False]",
+        "test_grains_fail_closed_on_invalid_v5_boundary_contract[signal_time_ms--1]",
+        "test_grains_reject_legacy_alias_and_duplicate_source_provenance",
+        "test_split_accepts_exact_persisted_end_at_each_own_role_boundary",
+        "test_split_excludes_valid_persisted_end_one_ms_past_each_role_boundary",
+        "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[missing_canonical_end]",
+        "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[legacy_only]",
+        "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[duplicate_event_horizon]",
+        "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[float_end]",
+        "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[boolean_end]",
+        "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[wrong_decision_source]",
+        "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[eligibility_mismatch]",
+        "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[negative_signal]",
+        "test_schema_less_empty_split_input_does_not_bypass_required_contract",
+        "test_missing_and_ineligible_max_horizons_are_distinct_and_universe_is_not_shrunk",
+        "test_write_splits_persists_full_disposition_ledger_and_zero_derivation",
+        "test_leakage_audit_uses_each_roles_own_end_not_the_next_role_start[train]",
+        "test_leakage_audit_uses_each_roles_own_end_not_the_next_role_start[validation]",
+        "test_leakage_audit_uses_each_roles_own_end_not_the_next_role_start[test]",
+        "test_leakage_audit_rejects_duplicate_fold_event_inconsistent_bounds_and_legacy_alias",
+        "test_checker_rejects_coherent_legacy_v4_contract",
+        "test_checker_recomputes_dispositions_instead_of_trusting_coherently_relabelled_summaries",
+        "test_checker_rejects_assigned_ledger_split_divergence_even_with_fresh_hashes",
+        "test_maker_declares_v5_contract_and_canonical_boundary_copy_is_lazy_import_safe",
+    ]
+    committed_key_nodes = [
+        "test_contract_markers_and_exact_implementation_scope",
+        "test_contract_markers_and_exact_public_surface",
+        "test_platform_path_reaches_preflight_without_creating_store_root",
+        "test_source_hash_revalidation_is_typed_and_prewrite",
+        "test_projection_revalidation_rejects_forged_instance",
+        "test_exact_accepted_evidence_reimport_is_typed_noop",
+        "test_receipt_appearing_after_plan_is_still_exact_typed_noop",
+        "test_preflight_rejects_real_different_evidence_key_conflict",
+        "test_stale_plan_rechecks_committed_keys_before_transaction_root",
+        "test_equal_committed_rows_are_rejected_for_every_dataset[instrument_snapshot]",
+        "test_equal_committed_rows_are_rejected_for_every_dataset[trade_kline_1m]",
+        "test_equal_committed_rows_are_rejected_for_every_dataset[mark_kline_1m]",
+        "test_equal_committed_rows_are_rejected_for_every_dataset[funding_rate]",
+        "test_different_committed_rows_are_rejected_for_every_dataset[instrument_snapshot]",
+        "test_different_committed_rows_are_rejected_for_every_dataset[trade_kline_1m]",
+        "test_different_committed_rows_are_rejected_for_every_dataset[mark_kline_1m]",
+        "test_different_committed_rows_are_rejected_for_every_dataset[funding_rate]",
+        "test_nonoverlapping_second_import_remains_valid",
+        "test_nonexact_existing_receipt_graph_is_not_a_noop",
+        "test_conflicting_immutable_chunk_path_fails_before_transaction_root",
+    ]
     members = [
         {
             "activation_commit_sha": "1305abb1517944e2cc9790e5546ca52ae66f592e",
             "active_task_sha256": "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e",
             "contract_path": "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
             "contract_sha256": "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05",
-            "expected_red_node_ids": [f"pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_walk_forward_exclusive_outcome_end.py::node_{i}" for i in range(32)],
+            "expected_red_node_ids": [f"pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_walk_forward_exclusive_outcome_end.py::{node}" for node in walk_forward_nodes],
             "issue_number": 156,
             "required_paths": ["src/bybit_grid/research/scoring/outcome_grains.py", "src/bybit_grid/research/walk_forward/splits.py", "src/bybit_grid/research/walk_forward/leakage_audit.py", "scripts/check_scoring_review_pack.py", "scripts/make_scoring_review_pack.py", "tests/test_sprint_05_cost_scoring_walkforward.py", "tests/test_sprint_05_6_review_pack_closure.py", "tests/test_persisted_exclusive_outcome_end_walk_forward.py"],
             "sentinel": "persisted_exclusive_outcome_end_walk_forward_contract_unavailable",
@@ -51,7 +107,7 @@ def _recovery_bundle_bytes() -> bytes:
             "active_task_sha256": "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89",
             "contract_path": "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
             "contract_sha256": "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696",
-            "expected_red_node_ids": [f"pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py::node_{i}" for i in range(20)],
+            "expected_red_node_ids": [f"pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py::{node}" for node in committed_key_nodes],
             "issue_number": 157,
             "required_paths": ["src/bybit_grid/data/market_store/models.py", "src/bybit_grid/data/market_store/import_public_batch.py", "src/bybit_grid/data/market_store/transaction.py", "tests/test_store_committed_key_preflight.py"],
             "sentinel": "committed_key_preflight_contract_unavailable",
@@ -78,6 +134,25 @@ def test_recovery_bundle_manifest_rejects_noncanonical_and_substituted_identity(
     obj["members"][1]["issue_number"] = 158
     raw = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     with pytest.raises(ValueError, match="^recovery_bundle_identity_mismatch$"):
+        parse_recovery_bundle_manifest_bytes(raw)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "extra", "substituted", "reordered", "duplicate"))
+def test_recovery_bundle_manifest_rejects_every_real_node_sequence_mutation(mutation: str):
+    obj = json.loads(_recovery_bundle_bytes())
+    nodes = obj["members"][0]["expected_red_node_ids"]
+    if mutation == "missing":
+        nodes.pop()
+    elif mutation == "extra":
+        nodes.append(nodes[-1] + "_extra")
+    elif mutation == "substituted":
+        nodes[-1] += "_substituted"
+    elif mutation == "reordered":
+        nodes[0], nodes[1] = nodes[1], nodes[0]
+    else:
+        nodes[-1] = nodes[0]
+    raw = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    with pytest.raises(ValueError):
         parse_recovery_bundle_manifest_bytes(raw)
 
 CANONICAL = json.dumps({
