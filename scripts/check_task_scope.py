@@ -1019,12 +1019,18 @@ def recovery_bundle_history_errors(
     base_sha: str, manifest: RecoveryBundleManifest,
 ) -> tuple[str, ...]:
     first_parent_commits = frozenset(git_first_parent_commits(base_sha))
-    return tuple(
+    errors = [
         f"recovery_bundle_activation_not_on_first_parent_history:"
         f"{member.task_id}:{member.activation_commit_sha}"
         for member in manifest.members
         if member.activation_commit_sha not in first_parent_commits
-    )
+    ]
+    if manifest.suspension.commit_sha not in first_parent_commits:
+        errors.append(
+            "recovery_bundle_suspension_not_on_first_parent_history:"
+            f"{manifest.suspension.commit_sha}"
+        )
+    return tuple(errors)
 
 
 def recovery_bundle_transition_errors(
