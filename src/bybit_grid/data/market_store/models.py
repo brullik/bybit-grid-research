@@ -532,3 +532,4 @@ class ReplaySlice:
         _tuple_exact(self.trade_klines, "trade_klines")
         _tuple_exact(self.mark_klines, "mark_klines")
         _tuple_exact(self.funding_observations, "funding_observations")
+# Fresh mandatory RED probe: implementation intentionally absent.
