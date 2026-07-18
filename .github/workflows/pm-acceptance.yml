@@ -924,39 +924,9 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: |
           test "$PR_DRAFT" = true
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          from scripts.check_task_scope import parse_recovery_bundle_manifest_bytes
-
-          path = Path("pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json")
-          manifest = parse_recovery_bundle_manifest_bytes(path.read_bytes())
-          Path("/tmp/recovery-nodes").write_text(
-              "\n".join(node for member in manifest.members for node in member.expected_red_node_ids),
-              encoding="utf-8",
-          )
-          PY
-          set +e
-          python -m pytest \
-            pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_walk_forward_exclusive_outcome_end.py \
-            pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py \
-            -q --json-report --json-report-file=/tmp/recovery-red.json
-          status=$?
-          set -e
-          test "$status" -eq 1
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          report = json.loads(Path("/tmp/recovery-red.json").read_text())
-          expected = set(Path("/tmp/recovery-nodes").read_text().splitlines())
-          tests = report.get("tests", [])
-          calls = [item for item in tests if item.get("call")]
-          failed = {item["nodeid"] for item in calls if item["call"].get("outcome") == "failed"}
-          forbidden = [item for item in tests if item.get("outcome") != "failed" or item.get("setup", {}).get("outcome") != "passed" or item.get("teardown", {}).get("outcome") != "passed"]
-          if len(expected) != 52 or len(calls) != 52 or failed != expected or forbidden:
-              raise SystemExit("combined_recovery_exact_red_mismatch")
-          PY
+          python ../base/scripts/check_task_scope.py \
+            --exact-recovery-root . \
+            --recovery-manifest pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json
       - name: Run supplemental PR checks
         working-directory: head
         env:

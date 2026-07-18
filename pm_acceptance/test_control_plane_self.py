@@ -61,6 +61,51 @@ def test_recovery_bundle_exact_red_gate_accepts_exact_failed_calls(tmp_path: Pat
     assert _run_synthetic_recovery_gate(tmp_path, source) == 0
 
 
+def test_workflow_recovery_red_uses_only_base_owned_dependency_free_gate():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    step = workflow.split("      - name: Run combined recovery bundle Draft RED\n", 1)[1].split(
+        "      - name: Run supplemental PR checks\n", 1
+    )[0]
+    assert "python ../base/scripts/check_task_scope.py" in step
+    assert "--exact-recovery-root ." in step
+    assert "--recovery-manifest pm_acceptance/reactivations/" in step
+    assert "--json-report" not in step
+    assert "python -m pytest" not in step
+
+
+@pytest.mark.parametrize("mutation", ("duplicate_collection", "duplicate_call", "deselected", "malformed", "subprocess"))
+def test_recovery_bundle_exact_red_gate_fails_closed_on_runner_anomalies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+):
+    root = tmp_path / "head"
+    test = root / "pm_acceptance/tasks/synthetic/test_contract.py"
+    test.parent.mkdir(parents=True)
+    test.write_text("", encoding="utf-8")
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    manifest = _synthetic_recovery_manifest(root)
+    nodes = [node for member in manifest.members for node in member.expected_red_node_ids]
+
+    def fake_run(*args, **kwargs):
+        if mutation != "subprocess":
+            payload = {
+                "calls": [[node, "failed", "synthetic_contract_unavailable"] for node in nodes],
+                "collected": list(nodes), "exit_code": 1, "forbidden": [],
+            }
+            if mutation == "duplicate_collection":
+                payload["collected"].append(nodes[0])
+            elif mutation == "duplicate_call":
+                payload["calls"].append(payload["calls"][0])
+            elif mutation == "deselected":
+                payload["forbidden"].append(f"deselected:{nodes[0]}")
+            elif mutation == "malformed":
+                payload = {"calls": "not-a-list"}
+            Path(kwargs["env"]["RECOVERY_RESULT"]).write_text(json.dumps(payload), encoding="utf-8")
+        return subprocess.CompletedProcess(args[0], 7 if mutation == "subprocess" else 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert run_exact_recovery_bundle_red(root, manifest) == 1
+
+
 @pytest.mark.parametrize(
     ("source", "nodes"),
     (

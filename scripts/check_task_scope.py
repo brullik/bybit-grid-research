@@ -1416,6 +1416,124 @@ def task_definition_base_path_errors(
     return tuple(errors)
 
 
+def run_exact_recovery_bundle_red(root: Path, manifest: RecoveryBundleManifest) -> int:
+    """Run the frozen recovery tests and require their exact sentinel RED profile."""
+    try:
+        root = root.resolve(strict=True)
+    except OSError:
+        return 1
+    expected = {
+        node_id: member.sentinel
+        for member in manifest.members
+        for node_id in member.expected_red_node_ids
+    }
+    test_paths = [root / member.test_path for member in manifest.members]
+    if (
+        not root.is_dir()
+        or not (root / "pytest.ini").is_file()
+        or not expected
+        or len(expected) != sum(len(member.expected_red_node_ids) for member in manifest.members)
+        or any(not path.is_file() for path in test_paths)
+    ):
+        return 1
+    result_path = root.parent / f".recovery-red-{os.getpid()}.json"
+    result_path.unlink(missing_ok=True)
+    child = r'''
+import json
+import os
+from pathlib import Path
+import pytest
+
+class ExactRecoveryRed:
+    def __init__(self):
+        self.calls = []
+        self.collected = []
+        self.forbidden = []
+
+    def pytest_collection_finish(self, session):
+        self.collected = [item.nodeid for item in session.items]
+
+    def pytest_collectreport(self, report):
+        if report.outcome != "passed":
+            self.forbidden.append(f"collect-{report.outcome}:{report.nodeid}")
+
+    def pytest_deselected(self, items):
+        self.forbidden.extend(f"deselected:{item.nodeid}" for item in items)
+
+    def pytest_runtest_logreport(self, report):
+        if getattr(report, "wasxfail", None) is not None:
+            self.forbidden.append(f"xfail-or-xpass:{report.nodeid}:{report.when}")
+        if report.when == "call":
+            self.calls.append([report.nodeid, report.outcome, report.longreprtext])
+        elif report.outcome != "passed":
+            self.forbidden.append(f"non-call-{report.when}-{report.outcome}:{report.nodeid}")
+
+expected = json.loads(os.environ["RECOVERY_EXPECTED"])
+plugin = ExactRecoveryRed()
+exit_code = pytest.main(
+    [*json.loads(os.environ["RECOVERY_TEST_PATHS"]), "-q", "--noconftest", "-o", "addopts="],
+    plugins=[plugin],
+)
+Path(os.environ["RECOVERY_RESULT"]).write_text(json.dumps({
+    "calls": plugin.calls,
+    "collected": plugin.collected,
+    "exit_code": int(exit_code),
+    "forbidden": plugin.forbidden,
+}, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+'''
+    environment = dict(os.environ)
+    environment.update({
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "RECOVERY_EXPECTED": json.dumps(expected, sort_keys=True, separators=(",", ":")),
+        "RECOVERY_RESULT": str(result_path),
+        "RECOVERY_TEST_PATHS": json.dumps([str(path) for path in test_paths]),
+    })
+    result = subprocess.run(
+        [sys.executable, "-c", child], cwd=root, env=environment,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+    )
+    if result.returncode != 0 or not result_path.is_file():
+        result_path.unlink(missing_ok=True)
+        return 1
+    try:
+        outcomes = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return 1
+    finally:
+        result_path.unlink(missing_ok=True)
+    if not isinstance(outcomes, dict) or set(outcomes) != {"calls", "collected", "exit_code", "forbidden"}:
+        return 1
+    collected = outcomes["collected"]
+    calls = outcomes["calls"]
+    forbidden = outcomes["forbidden"]
+    if (
+        type(outcomes["exit_code"]) is not int
+        or outcomes["exit_code"] != 1
+        or not isinstance(collected, list)
+        or any(not isinstance(node, str) or not node for node in collected)
+        or len(collected) != len(set(collected))
+        or set(collected) != set(expected)
+        or not isinstance(forbidden, list)
+        or forbidden
+        or not isinstance(calls, list)
+        or len(calls) != len(expected)
+    ):
+        return 1
+    seen: set[str] = set()
+    for call in calls:
+        if (
+            not isinstance(call, list)
+            or len(call) != 3
+            or not all(isinstance(value, str) for value in call)
+        ):
+            return 1
+        node_id, outcome, longrepr = call
+        if node_id in seen or node_id not in expected or outcome != "failed" or expected[node_id] not in longrepr:
+            return 1
+        seen.add(node_id)
+    return 0 if seen == set(expected) else 1
+
+
 def run_exact_control_plane_self_tests(root: Path) -> int:
     """Require one plain passing call for every collected control-plane self-test."""
     try:
@@ -1592,6 +1710,18 @@ def _emit(
 
 def main(argv: list[str] | None = None) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--exact-recovery-root" in effective_argv:
+        recovery_parser = argparse.ArgumentParser(add_help=True)
+        recovery_parser.add_argument("--exact-recovery-root", required=True)
+        recovery_parser.add_argument("--recovery-manifest", required=True)
+        recovery_args = recovery_parser.parse_args(effective_argv)
+        try:
+            manifest = parse_recovery_bundle_manifest_bytes(
+                Path(recovery_args.recovery_manifest).read_bytes()
+            )
+        except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            return 1
+        return run_exact_recovery_bundle_red(Path(recovery_args.exact_recovery_root), manifest)
     if "--exact-control-plane-root" in effective_argv:
         exact_parser = argparse.ArgumentParser(add_help=True)
         exact_parser.add_argument("--exact-control-plane-root", required=True)
