@@ -398,3 +398,4 @@ def test_build_scoring_dataset_failed_status_never_remains_complete(
     )
     assert status["status"] == "failed"
     assert status["error_summary"] == "deliberate"
+# Mandatory RED probe for issue #156 (7/8); behavior intentionally unchanged.
