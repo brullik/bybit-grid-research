@@ -1109,6 +1109,13 @@ def recovery_bundle_history_errors(
             "recovery_bundle_suspension_predecessor_mismatch:"
             f"{declared_predecessor}:{actual_predecessor}",
         )
+    current_member = manifest.members[-1]
+    predecessor_task = git_blob_from_ref(actual_predecessor, _TASK_FILE)
+    if hashlib.sha256(predecessor_task).hexdigest() != current_member.active_task_sha256:
+        return (
+            "recovery_bundle_suspension_predecessor_active_task_mismatch:"
+            f"{current_member.task_id}",
+        )
     changed_paths = git_commit_changed_paths(manifest.suspension.commit_sha)
     if changed_paths != (_TASK_FILE,) and set(changed_paths) != {_TASK_FILE}:
         return ("recovery_bundle_suspension_changed_paths_mismatch",)
