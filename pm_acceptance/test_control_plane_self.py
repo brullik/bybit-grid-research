@@ -516,6 +516,58 @@ def test_recovery_history_requires_v1_erratum_as_current_predecessor(tmp_path: P
         os.chdir(old_cwd)
 
 
+def test_recovery_history_requires_suspension_of_current_member(tmp_path: Path):
+    from dataclasses import replace
+
+    import scripts.check_task_scope as check_task_scope
+
+    repo, _suspension_sha, erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(tmp_path)
+    )
+    activation_sha = manifest.members[-1].activation_commit_sha
+    _git(repo, "checkout", "-q", activation_sha)
+    active_path = repo / "pm_acceptance/active_task.json"
+    active_path.write_bytes(_task_bytes(_active_task(task_id="another-task")))
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "activate another task")
+    another_activation_sha = _git(repo, "rev-parse", "HEAD")
+    active_path.write_bytes(CANONICAL)
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "inactive base with frozen task")
+    rebuilt_suspension_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "cherry-pick", erratum_sha)
+    rebuilt_erratum_sha = _git(repo, "rev-parse", "HEAD")
+
+    rebuilt_manifest = replace(
+        manifest,
+        suspension=replace(
+            manifest.suspension,
+            commit_sha=rebuilt_suspension_sha,
+            predecessor_commit_sha=another_activation_sha,
+            inactive_task_sha256=hashlib.sha256(CANONICAL).hexdigest(),
+        ),
+        erratum_v1=replace(
+            manifest.erratum_v1,
+            commit_sha=rebuilt_erratum_sha,
+            manifest_sha256=hashlib.sha256(
+                (repo / manifest.erratum_v1.manifest_path).read_bytes()
+            ).hexdigest(),
+            corrected_test_sha256=hashlib.sha256(
+                (repo / manifest.erratum_v1.corrected_test_path).read_bytes()
+            ).hexdigest(),
+        ),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(
+            rebuilt_erratum_sha, rebuilt_manifest
+        ) == ("recovery_bundle_suspension_predecessor_active_task_mismatch:task-a",)
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_history_requires_erratum_directly_after_suspension(tmp_path: Path):
     from dataclasses import replace
 
