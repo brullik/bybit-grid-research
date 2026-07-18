@@ -322,6 +322,17 @@ def test_output_mode_for_all_valid_modes():
     )[0] == "pm-frozen-erratum"
 
 
+def test_pm_recovery_bundle_classifies_exact_owner_two_path_payload():
+    assert classify_pr_mode(
+        "brullik",
+        ("pm-recovery-bundle",),
+        (
+            "pm_acceptance/active_task.json",
+            "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json",
+        ),
+    ) == ("pm-recovery-bundle", ())
+
+
 def test_mode_acceptance_plan_selection():
     assert acceptance_plan_for_mode("implementation") == ("base-isolated-acceptance",)
     assert acceptance_plan_for_mode("pm-control-plane") == (
