@@ -1015,6 +1015,24 @@ def git_first_parent_commits(start_sha: str) -> tuple[str, ...]:
     return commits
 
 
+def git_commit_parents(commit_sha: str) -> tuple[str, ...]:
+    if not _COMMIT_SHA_RE.fullmatch(commit_sha):
+        raise ValueError("invalid_git_commit_ref")
+    proc = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", commit_sha],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    line_pattern = re.compile(rf"{commit_sha}(?: [0-9a-f]{{40}})*\n")
+    fields = proc.stdout[:-1].split(" ") if line_pattern.fullmatch(proc.stdout) else []
+    if (proc.returncode != 0 or proc.stderr or not fields
+            or len(set(fields)) != len(fields)):
+        raise RuntimeError("git_commit_parents_failed")
+    return tuple(fields[1:])
+
+
 def recovery_bundle_history_errors(
     base_sha: str, manifest: RecoveryBundleManifest,
 ) -> tuple[str, ...]:
@@ -1025,12 +1043,27 @@ def recovery_bundle_history_errors(
         for member in manifest.members
         if member.activation_commit_sha not in first_parent_commits
     ]
+    if errors:
+        return tuple(errors)
     if manifest.suspension.commit_sha not in first_parent_commits:
-        errors.append(
+        return (
             "recovery_bundle_suspension_not_on_first_parent_history:"
-            f"{manifest.suspension.commit_sha}"
+            f"{manifest.suspension.commit_sha}",
         )
-    return tuple(errors)
+    parents = git_commit_parents(manifest.suspension.commit_sha)
+    if len(parents) != 1:
+        return (
+            "recovery_bundle_suspension_requires_single_parent:"
+            f"{manifest.suspension.commit_sha}",
+        )
+    actual_predecessor = parents[0]
+    declared_predecessor = manifest.suspension.predecessor_commit_sha
+    if actual_predecessor != declared_predecessor:
+        return (
+            "recovery_bundle_suspension_predecessor_mismatch:"
+            f"{declared_predecessor}:{actual_predecessor}",
+        )
+    return ()
 
 
 def recovery_bundle_transition_errors(
