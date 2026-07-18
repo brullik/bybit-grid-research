@@ -710,6 +710,8 @@ def classify_pr_mode(actor: str, labels: tuple[str, ...], changed_paths: tuple[s
                     errors.append(f"task_local_conftest_forbidden:{path}")
         elif label == "pm-recovery-bundle":
             mode = "pm-recovery-bundle"
+            if labels != ("pm-recovery-bundle",):
+                errors.append("pm_recovery_bundle_requires_exactly_one_label")
             expected_paths = frozenset({
                 _TASK_FILE,
                 "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json",
@@ -765,6 +767,8 @@ def acceptance_plan_for_mode(mode: str) -> tuple[str, ...]:
             "base-control-plane-self-tests",
             "head-frozen-erratum-exact-red",
         )
+    if mode == "pm-recovery-bundle":
+        return ("base-control-plane-self-tests", "head-recovery-bundle-exact-red")
     raise ValueError(f"invalid_mode:{mode}")
 
 
