@@ -329,3 +329,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# Mandatory RED probe for issue #156 (4/8); behavior intentionally unchanged.
