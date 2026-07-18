@@ -8,8 +8,18 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.check_scoring_review_pack import REQUIRED, check_zip
+from scripts.check_scoring_review_pack import (
+    GRAIN_CONTRACT_VERSION,
+    OUTCOME_BOUNDARY_SEMANTICS_VERSION,
+    REQUIRED,
+    REVIEW_PACK_SCHEMA_VERSION,
+    check_zip,
+)
 from scripts.report_cost_and_scoring import generate_cost_and_scoring_reports
+
+PERSISTED_EXCLUSIVE_OUTCOME_END_WALK_FORWARD_CONTRACT = (
+    "persisted-exclusive-outcome-end-walk-forward-v1"
+)
 
 
 def _load_json(path: Path) -> dict[str, object]:
@@ -86,6 +96,78 @@ def _preflight_complete_scoring(scoring_run_id: str, data: Path, rep: Path) -> N
                 sort_keys=True,
             )
         )
+    grain = _load_json(data / "outcome_grain_contract_audit.json")
+    coverage = _load_json(data / "walk_forward_coverage_audit.json")
+    temporal = _load_json(data / "walk_forward_temporal_leakage_audit.json")
+    leakage_summary = _load_json(data / "walk_forward_leakage_audit_summary.json")
+    if (
+        grain.get("grain_contract_audit_ok") is not True
+        or grain.get("grain_contract_version") != GRAIN_CONTRACT_VERSION
+        or grain.get("outcome_boundary_semantics_version")
+        != OUTCOME_BOUNDARY_SEMANTICS_VERSION
+        or grain.get("persisted_outcome_end_required_bool") is not True
+        or type(grain.get("derived_outcome_end_count")) is not int
+        or grain.get("derived_outcome_end_count") != 0
+        or grain.get("legacy_outcome_end_column_allowed_bool") is not False
+    ):
+        raise SystemExit(
+            json.dumps(
+                {
+                    "review_pack_ok": False,
+                    "error": "persisted_outcome_grain_contract_not_ok",
+                    "scoring_run_id": scoring_run_id,
+                },
+                sort_keys=True,
+            )
+        )
+    for name, audit, ok_key in [
+        ("walk_forward_coverage_audit.json", coverage, "walk_forward_coverage_audit_ok"),
+        (
+            "walk_forward_temporal_leakage_audit.json",
+            temporal,
+            "temporal_leakage_audit_ok",
+        ),
+        ("walk_forward_leakage_audit_summary.json", leakage_summary, "leakage_audit_ok"),
+    ]:
+        if (
+            audit.get(ok_key) is not True
+            or audit.get("outcome_boundary_semantics_version")
+            != OUTCOME_BOUNDARY_SEMANTICS_VERSION
+            or audit.get("persisted_outcome_end_required_bool") is not True
+            or type(audit.get("derived_outcome_end_count")) is not int
+            or audit.get("derived_outcome_end_count") != 0
+            or audit.get("legacy_outcome_end_column_allowed_bool") is not False
+        ):
+            raise SystemExit(
+                json.dumps(
+                    {
+                        "review_pack_ok": False,
+                        "error": "persisted_outcome_boundary_audit_not_ok",
+                        "member": name,
+                        "scoring_run_id": scoring_run_id,
+                    },
+                    sort_keys=True,
+                )
+            )
+    boundary_artifacts = [
+        data / "walk_forward_event_eligibility.parquet",
+        data / "walk_forward_splits.parquet",
+        data / "walk_forward_fold_summary.parquet",
+        data / "walk_forward_exclusion_reason_summary.parquet",
+    ]
+    missing_boundary = [str(path) for path in boundary_artifacts if not path.exists()]
+    if missing_boundary:
+        raise SystemExit(
+            json.dumps(
+                {
+                    "review_pack_ok": False,
+                    "error": "missing_walk_forward_boundary_artifacts",
+                    "missing": missing_boundary,
+                    "scoring_run_id": scoring_run_id,
+                },
+                sort_keys=True,
+            )
+        )
     required_cost = [
         data / "cost_summary_audit.json",
         rep / "cost_scenario_summary.parquet",
@@ -121,8 +203,21 @@ def make_pack(scoring_run_id: str) -> dict[str, object]:
     for p, b in before.items():
         if p.read_bytes() != b:
             raise RuntimeError(f"canonical provenance overwritten: {p}")
+    canonical_boundary_members = {
+        "walk_forward_event_eligibility.parquet",
+        "walk_forward_splits.parquet",
+        "walk_forward_fold_summary.parquet",
+        "walk_forward_exclusion_reason_summary.parquet",
+        "walk_forward_coverage_audit.json",
+        "walk_forward_temporal_leakage_audit.json",
+        "walk_forward_leakage_audit_summary.json",
+    }
+    for name in canonical_boundary_members:
+        shutil.copyfile(data / name, rep / name)
     for name in REQUIRED:
         if name == "review_pack_manifest.json":
+            continue
+        if name in canonical_boundary_members:
             continue
         if not (rep / name).exists() and (data / name).exists():
             shutil.copyfile(data / name, rep / name)
@@ -132,7 +227,7 @@ def make_pack(scoring_run_id: str) -> dict[str, object]:
     cost = json.loads((rep / "cost_model_audit.json").read_text())
     fee = json.loads((data / "fee_coverage_audit.json").read_text())
     manifest = {
-        "review_pack_schema_version": "scoring_review_pack_v4_audit_complete",
+        "review_pack_schema_version": REVIEW_PACK_SCHEMA_VERSION,
         "manifest_hash_policy": "self_excluded_v1",
         "review_phase": "state_machine_engineering_ready",
         "parameter_selection_authorized_bool": False,
@@ -145,7 +240,8 @@ def make_pack(scoring_run_id: str) -> dict[str, object]:
         else None,
         "fee_snapshot_id_resolved": fee.get("fee_snapshot_id_resolved"),
         "cost_formula_version": cost.get("cost_formula_version"),
-        "grain_contract_version": "grain_contract_v3_whole_row",
+        "grain_contract_version": GRAIN_CONTRACT_VERSION,
+        "outcome_boundary_semantics_version": OUTCOME_BOUNDARY_SEMANTICS_VERSION,
         "canonical_score_version": "v3",
         "risk_budget_proven_bool": False,
         "members": sorted(REQUIRED),
