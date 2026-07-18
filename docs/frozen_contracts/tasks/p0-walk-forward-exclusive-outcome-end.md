@@ -76,8 +76,9 @@ integers or strings. The row pins
 `outcome_semantics_version = "v5_exact_outcome_window_provenance"` and
 `outcome_window_semantics_version = "exact-minute-outcome-window-v1"`,
 `actionable_event_semantics_version = "range-actionable-prefix-invariance-v1"`, and
-`decision_time_source = "event_decision_time"`. Event ID, regime ID, symbol, range/outcome run IDs,
-range/outcome profiles, and every version/source field are required, non-null, and nonblank.
+`decision_time_source = "event_decision_time"`. Event ID, regime ID, symbol, and every
+version/source field named above are required, non-null, and nonblank. Range/outcome run IDs and
+range/outcome profiles are preserved when present but are not made mandatory by this task.
 Exact-integer decision, signal, entry, horizon, and exclusive-end values are nonnegative (horizon
 strictly positive) and satisfy the upstream causal identities:
 `decision_time_ms == signal_time_ms`,
