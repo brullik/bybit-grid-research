@@ -59,6 +59,72 @@ def _run_synthetic_recovery_gate(tmp_path: Path, source: str, node_names=("test_
     return run_exact_recovery_bundle_red(root, _synthetic_recovery_manifest(root, node_names))
 
 
+def _build_recovery_bundle_erratum_predecessor_fixture(tmp_path: Path):
+    from scripts.check_task_scope import (
+        RecoveryBundleManifest,
+        RecoveryBundleMember,
+        RecoveryErratumV1Evidence,
+        RecoverySuspensionEvidence,
+    )
+
+    repo, suspension_sha, erratum_sha, task, _base_test, _head_test = (
+        _build_frozen_erratum_repo(tmp_path)
+    )
+    activation_sha = _git(repo, "rev-parse", f"{suspension_sha}^")
+    manifest_path = "pm_acceptance/errata/task-a.json"
+    test_path = "pm_acceptance/tasks/task-a/test_contract.py"
+    contract_path = "docs/frozen_contracts/tasks/task-a.md"
+
+    def committed_bytes(commit_sha: str, path: str) -> bytes:
+        return subprocess.run(
+            ["git", "show", f"{commit_sha}:{path}"],
+            cwd=repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
+
+    activation_task = committed_bytes(activation_sha, "pm_acceptance/active_task.json")
+    activation_test = committed_bytes(activation_sha, test_path)
+    activation_contract = committed_bytes(activation_sha, contract_path)
+    suspension_task = committed_bytes(suspension_sha, "pm_acceptance/active_task.json")
+    erratum_manifest = committed_bytes(erratum_sha, manifest_path)
+    erratum_test = committed_bytes(erratum_sha, test_path)
+
+    member = RecoveryBundleMember(
+        task.task_id,
+        210,
+        activation_sha,
+        hashlib.sha256(activation_task).hexdigest(),
+        test_path,
+        hashlib.sha256(activation_test).hexdigest(),
+        contract_path,
+        hashlib.sha256(activation_contract).hexdigest(),
+        task.required_paths,
+        (f"{test_path}::test_contract",),
+        "synthetic_contract_unavailable",
+    )
+    manifest = RecoveryBundleManifest(
+        "pm_recovery_bundle_v1",
+        "p0-recovery-walk-forward-committed-key",
+        RecoverySuspensionEvidence(
+            suspension_sha,
+            activation_sha,
+            hashlib.sha256(suspension_task).hexdigest(),
+        ),
+        RecoveryErratumV1Evidence(
+            erratum_sha,
+            manifest_path,
+            hashlib.sha256(erratum_manifest).hexdigest(),
+            test_path,
+            hashlib.sha256(erratum_test).hexdigest(),
+            "100644",
+        ),
+        (member,),
+    )
+    return repo, suspension_sha, erratum_sha, manifest
+
+
 def test_recovery_history_rejects_activation_outside_canonical_first_parent(tmp_path: Path):
     import scripts.check_task_scope as check_task_scope
     from scripts.check_task_scope import (
@@ -430,60 +496,9 @@ def test_recovery_history_requires_canonical_inactive_suspension_task(tmp_path: 
 
 def test_recovery_history_requires_v1_erratum_as_current_predecessor(tmp_path: Path):
     import scripts.check_task_scope as check_task_scope
-    from scripts.check_task_scope import (
-        RecoveryBundleManifest,
-        RecoveryBundleMember,
-        RecoveryErratumV1Evidence,
-        RecoverySuspensionEvidence,
-    )
 
-    repo, suspension_sha, erratum_sha, task, _base_test, _head_test = (
-        _build_frozen_erratum_repo(tmp_path)
-    )
-    activation_sha = _git(repo, "rev-parse", f"{suspension_sha}^")
-    manifest_path = "pm_acceptance/errata/task-a.json"
-    test_path = "pm_acceptance/tasks/task-a/test_contract.py"
-    contract_path = "docs/frozen_contracts/tasks/task-a.md"
-
-    def committed_bytes(commit_sha: str, path: str) -> bytes:
-        return subprocess.run(
-            ["git", "show", f"{commit_sha}:{path}"],
-            cwd=repo,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
-
-    member = RecoveryBundleMember(
-        task.task_id,
-        210,
-        activation_sha,
-        hashlib.sha256(committed_bytes(activation_sha, "pm_acceptance/active_task.json")).hexdigest(),
-        test_path,
-        hashlib.sha256(committed_bytes(activation_sha, test_path)).hexdigest(),
-        contract_path,
-        hashlib.sha256(committed_bytes(activation_sha, contract_path)).hexdigest(),
-        task.required_paths,
-        (f"{test_path}::test_contract",),
-        "synthetic_contract_unavailable",
-    )
-    manifest = RecoveryBundleManifest(
-        "pm_recovery_bundle_v1",
-        "p0-recovery-walk-forward-committed-key",
-        RecoverySuspensionEvidence(
-            suspension_sha,
-            activation_sha,
-            hashlib.sha256(CANONICAL).hexdigest(),
-        ),
-        RecoveryErratumV1Evidence(
-            erratum_sha,
-            manifest_path,
-            hashlib.sha256(committed_bytes(erratum_sha, manifest_path)).hexdigest(),
-            test_path,
-            hashlib.sha256(committed_bytes(erratum_sha, test_path)).hexdigest(),
-            "100644",
-        ),
-        (member,),
+    repo, _suspension_sha, erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(tmp_path)
     )
 
     (repo / "ordinary.txt").write_text("ordinary post-erratum commit\n", encoding="utf-8")
