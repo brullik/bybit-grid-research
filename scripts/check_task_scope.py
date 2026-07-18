@@ -997,6 +997,36 @@ def git_is_ancestor(ancestor_sha: str, descendant_sha: str) -> bool:
     raise RuntimeError("git_ancestor_check_failed")
 
 
+def git_first_parent_commits(start_sha: str) -> tuple[str, ...]:
+    if not _COMMIT_SHA_RE.fullmatch(start_sha):
+        raise ValueError("invalid_git_first_parent_ref")
+    proc = subprocess.run(
+        ["git", "rev-list", "--first-parent", start_sha],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    commits = tuple(proc.stdout.splitlines())
+    if (proc.returncode != 0 or not commits or commits[0] != start_sha
+            or any(not _COMMIT_SHA_RE.fullmatch(commit) for commit in commits)
+            or len(set(commits)) != len(commits)):
+        raise RuntimeError("git_first_parent_history_failed")
+    return commits
+
+
+def recovery_bundle_history_errors(
+    base_sha: str, manifest: RecoveryBundleManifest,
+) -> tuple[str, ...]:
+    first_parent_commits = frozenset(git_first_parent_commits(base_sha))
+    return tuple(
+        f"recovery_bundle_activation_not_on_first_parent_history:"
+        f"{member.task_id}:{member.activation_commit_sha}"
+        for member in manifest.members
+        if member.activation_commit_sha not in first_parent_commits
+    )
+
+
 def recovery_bundle_transition_errors(
     base_sha: str, head_sha: str, base_task: ActiveTask, head_task: ActiveTask,
     changed_paths: tuple[str, ...],
@@ -1028,6 +1058,7 @@ def recovery_bundle_transition_errors(
         errors.append("recovery_bundle_replay")
     try:
         manifest = parse_recovery_bundle_manifest_bytes(git_blob_from_ref(head_sha, manifest_path))
+        errors.extend(recovery_bundle_history_errors(base_sha, manifest))
         if tuple(path for member in manifest.members for path in member.required_paths) != expected_scope:
             errors.append("recovery_bundle_manifest_scope_mismatch")
         for member in manifest.members:
