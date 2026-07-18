@@ -395,6 +395,20 @@ def test_mode_acceptance_plan_selection():
         "base-control-plane-self-tests",
         "head-frozen-erratum-exact-red",
     )
+    assert acceptance_plan_for_mode("pm-recovery-bundle") == (
+        "base-control-plane-self-tests",
+        "head-recovery-bundle-exact-red",
+    )
+
+
+def test_recovery_bundle_rejects_extra_label_even_when_payload_is_exact():
+    paths = (
+        "pm_acceptance/active_task.json",
+        "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json",
+    )
+    assert classify_pr_mode("brullik", ("pm-recovery-bundle", "documentation"), paths)[1] == (
+        "pm_recovery_bundle_requires_exactly_one_label",
+    )
 
 
 def test_pr_mode_labels_and_scope_fail_closed():
