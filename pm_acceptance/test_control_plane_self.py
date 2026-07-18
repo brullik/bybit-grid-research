@@ -22,12 +22,63 @@ from scripts.check_task_scope import (
     parse_frozen_erratum_manifest_bytes,
     parse_frozen_erratum_v2_manifest_bytes,
     parse_labels_json,
+    parse_recovery_bundle_manifest_bytes,
     pr_mode_scope_errors,
     task_definition_base_path_errors,
     task_definition_head_path_errors,
     task_definition_transition_errors,
     task_scope_errors,
 )
+
+
+def _recovery_bundle_bytes() -> bytes:
+    members = [
+        {
+            "activation_commit_sha": "1305abb1517944e2cc9790e5546ca52ae66f592e",
+            "active_task_sha256": "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e",
+            "contract_path": "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
+            "contract_sha256": "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05",
+            "expected_red_node_ids": [f"pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_walk_forward_exclusive_outcome_end.py::node_{i}" for i in range(32)],
+            "issue_number": 156,
+            "required_paths": ["src/bybit_grid/research/scoring/outcome_grains.py", "src/bybit_grid/research/walk_forward/splits.py", "src/bybit_grid/research/walk_forward/leakage_audit.py", "scripts/check_scoring_review_pack.py", "scripts/make_scoring_review_pack.py", "tests/test_sprint_05_cost_scoring_walkforward.py", "tests/test_sprint_05_6_review_pack_closure.py", "tests/test_persisted_exclusive_outcome_end_walk_forward.py"],
+            "sentinel": "persisted_exclusive_outcome_end_walk_forward_contract_unavailable",
+            "task_id": "p0-walk-forward-exclusive-outcome-end",
+            "test_path": "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_walk_forward_exclusive_outcome_end.py",
+            "test_sha256": "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e",
+        },
+        {
+            "activation_commit_sha": "3b826f2a6a3b02897047a30de8e920e2f5b72431",
+            "active_task_sha256": "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89",
+            "contract_path": "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
+            "contract_sha256": "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696",
+            "expected_red_node_ids": [f"pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py::node_{i}" for i in range(20)],
+            "issue_number": 157,
+            "required_paths": ["src/bybit_grid/data/market_store/models.py", "src/bybit_grid/data/market_store/import_public_batch.py", "src/bybit_grid/data/market_store/transaction.py", "tests/test_store_committed_key_preflight.py"],
+            "sentinel": "committed_key_preflight_contract_unavailable",
+            "task_id": "p0-committed-key-preflight",
+            "test_path": "pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py",
+            "test_sha256": "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513",
+        },
+    ]
+    obj = {"bundle_id": "p0-recovery-walk-forward-committed-key", "members": members, "schema": "pm_recovery_bundle_v1"}
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def test_recovery_bundle_manifest_is_canonical_and_exactly_pinned():
+    manifest = parse_recovery_bundle_manifest_bytes(_recovery_bundle_bytes())
+    assert manifest.bundle_id == "p0-recovery-walk-forward-committed-key"
+    assert tuple(member.issue_number for member in manifest.members) == (156, 157)
+    assert tuple(len(member.expected_red_node_ids) for member in manifest.members) == (32, 20)
+
+
+def test_recovery_bundle_manifest_rejects_noncanonical_and_substituted_identity():
+    with pytest.raises(ValueError, match="^noncanonical_recovery_bundle_bytes$"):
+        parse_recovery_bundle_manifest_bytes(json.dumps(json.loads(_recovery_bundle_bytes()), indent=2).encode() + b"\n")
+    obj = json.loads(_recovery_bundle_bytes())
+    obj["members"][1]["issue_number"] = 158
+    raw = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    with pytest.raises(ValueError, match="^recovery_bundle_identity_mismatch$"):
+        parse_recovery_bundle_manifest_bytes(raw)
 
 CANONICAL = json.dumps({
     "schema": "pm_active_task_v1",
