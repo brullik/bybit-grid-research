@@ -64,3 +64,4 @@ def write_leakage_audit(scoring_run_id: str) -> dict[str, object]:
     if res["leakage_violations"]:
         raise ValueError(json.dumps(res))
     return res
+# Mandatory RED probe for issue #156 (3/8); behavior intentionally unchanged.
