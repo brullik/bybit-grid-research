@@ -1091,6 +1091,11 @@ def recovery_bundle_history_errors(
             "recovery_bundle_erratum_not_current_predecessor:"
             f"{manifest.erratum_v1.commit_sha}:{base_sha}",
         )
+    erratum_manifest = git_blob_from_ref(
+        base_sha, manifest.erratum_v1.manifest_path,
+    )
+    if hashlib.sha256(erratum_manifest).hexdigest() != manifest.erratum_v1.manifest_sha256:
+        return ("recovery_bundle_erratum_manifest_sha256_mismatch",)
     return ()
 
 
