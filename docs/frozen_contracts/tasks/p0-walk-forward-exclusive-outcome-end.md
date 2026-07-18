@@ -105,7 +105,7 @@ Whole-row invariance is strict. After legitimate grid/SL raw rows have been redu
 event-horizon grain, any duplicate `(range_action_event_id, future_horizon_minutes)` in the
 walk-forward input fails before folds are built, including a byte-for-byte identical duplicate.
 Invariant fields must already agree across each raw event/horizon grid/SL expansion. Conflicting
-event-invariant symbol, regime, decision, signal, entry, boundary, profile, eligibility, or
+event-invariant symbol, regime, decision, signal, entry, boundary, eligibility, or
 semantics metadata across horizons also fails. Integer and boolean validation uses exact types
 rather than coercion, so `True`, `1.0`, and numeric strings cannot masquerade as timestamps or
 contract booleans. These columns are required at the persisted event-horizon grain; being absent
