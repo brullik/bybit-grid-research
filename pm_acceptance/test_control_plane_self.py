@@ -543,6 +543,44 @@ def test_recovery_history_requires_hash_pinned_v1_erratum_manifest(tmp_path: Pat
         os.chdir(old_cwd)
 
 
+def test_recovery_history_requires_valid_merged_v1_erratum_transition(tmp_path: Path):
+    from dataclasses import replace
+
+    import scripts.check_task_scope as check_task_scope
+
+    repo, _suspension_sha, _erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(tmp_path)
+    )
+    manifest_path = repo / "pm_acceptance/errata/task-a.json"
+    erratum_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    erratum_manifest["base_sha256"] = hashlib.sha256(b"wrong-v1-base").hexdigest()
+    manifest_path.write_text(
+        json.dumps(erratum_manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "pm_acceptance/errata/task-a.json")
+    _git(repo, "commit", "-q", "--amend", "--no-edit")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    amended_manifest_bytes = manifest_path.read_bytes()
+    mutated_manifest = replace(
+        manifest,
+        erratum_v1=replace(
+            manifest.erratum_v1,
+            commit_sha=base_sha,
+            manifest_sha256=hashlib.sha256(amended_manifest_bytes).hexdigest(),
+        ),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(
+            base_sha, mutated_manifest
+        ) == ("base_erratum_test_sha256_mismatch",)
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_history_requires_hash_pinned_v1_corrected_test(tmp_path: Path):
     from dataclasses import replace
 
