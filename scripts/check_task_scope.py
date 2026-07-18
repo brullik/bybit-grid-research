@@ -1148,6 +1148,11 @@ def recovery_bundle_history_errors(
     if len(erratum_parents) != 1:
         return ("recovery_bundle_requires_one_direct_nonmerge_commit",)
     erratum_parent = erratum_parents[0]
+    if erratum_parent != manifest.suspension.commit_sha:
+        return (
+            "recovery_bundle_erratum_predecessor_not_suspension:"
+            f"{manifest.suspension.commit_sha}:{erratum_parent}",
+        )
     parent_task = parse_active_task_bytes(git_blob_from_ref(erratum_parent, _TASK_FILE))
     head_task = parse_active_task_bytes(git_blob_from_ref(base_sha, _TASK_FILE))
     erratum_changed_paths = changed_paths_from_git(erratum_parent, base_sha)
