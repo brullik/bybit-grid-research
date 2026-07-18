@@ -16,6 +16,24 @@ from bybit_grid.research.walk_forward.splits import build_splits
 from scripts.check_scoring_review_pack import REQUIRED
 
 
+def _outcome_contract(
+    signal_time_ms: int, horizon_minutes: int, *, complete: bool = True
+) -> dict[str, object]:
+    entry_time_ms = ((signal_time_ms // 60_000) + 1) * 60_000
+    return {
+        "outcome_semantics_version": "v5_exact_outcome_window_provenance",
+        "outcome_window_semantics_version": "exact-minute-outcome-window-v1",
+        "actionable_event_semantics_version": "range-actionable-prefix-invariance-v1",
+        "decision_time_source": "event_decision_time",
+        "causal_provenance_complete_bool": True,
+        "decision_time_ms": signal_time_ms,
+        "entry_time_ms": entry_time_ms,
+        "outcome_end_exclusive_ms": entry_time_ms + horizon_minutes * 60_000,
+        "future_data_complete_bool": complete,
+        "future_outcome_eligible_bool": complete,
+    }
+
+
 def test_safety_audit_has_no_external_rg_or_git_dependency():
     tree = ast.parse(Path("src/bybit_grid/common/source_safety_audit.py").read_text())
     names = {getattr(n, "id", "") for n in ast.walk(tree)}
@@ -64,6 +82,7 @@ def test_cost_config_has_four_versioned_scenarios():
 
 
 def test_grains_unique_and_funding_not_multiplied():
+    contract = _outcome_contract(1, 60)
     df = pl.DataFrame(
         {
             "range_action_event_id": ["e1"] * 4,
@@ -75,6 +94,7 @@ def test_grains_unique_and_funding_not_multiplied():
             "outcome_match_key": [f"m{i}" for i in range(4)],
             "symbol": ["BTCUSDT"] * 4,
             "signal_time_ms": [1] * 4,
+            **{key: [value] * 4 for key, value in contract.items()},
         }
     )
     grains, audit = build_outcome_grains(df)
@@ -111,6 +131,7 @@ def test_walk_forward_regime_grouping_embargo_and_deterministic_ids():
             "signal_time_ms": i * day,
             "future_horizon_minutes": 2880,
             "symbol": "BTCUSDT",
+            **_outcome_contract(i * day, 2880),
         }
         for i in range(90)
     ]
@@ -146,17 +167,19 @@ def test_review_pack_allowlist(tmp_path: Path):
 
 
 def test_whole_row_grain_invariance_catches_split_null_patterns():
+    contract = _outcome_contract(1, 60)
     base = {
         "range_action_event_id": ["e1", "e1"],
         "future_horizon_minutes": [60, 60],
         "grid_cell_number": [5, 5],
-        "sl_atr_buffer": [1.0, 1.0],
+        "sl_atr_buffer": [1.0, 2.0],
         "outcome_id": ["o1", "o2"],
         "outcome_match_key": ["m1", "m2"],
         "symbol": ["BTCUSDT", "BTCUSDT"],
         "signal_time_ms": [1, 1],
         "funding_rate_sum": [0.1, None],
         "funding_rate_mean": [None, 0.2],
+        **{key: [value, value] for key, value in contract.items()},
     }
     import pytest
 
@@ -165,17 +188,19 @@ def test_whole_row_grain_invariance_catches_split_null_patterns():
 
 
 def test_whole_row_grain_invariance_allows_identical_null_rows():
+    contract = _outcome_contract(1, 60)
     df = pl.DataFrame(
         {
             "range_action_event_id": ["e1", "e1"],
             "future_horizon_minutes": [60, 60],
             "grid_cell_number": [5, 5],
-            "sl_atr_buffer": [1.0, 1.0],
+            "sl_atr_buffer": [1.0, 2.0],
             "outcome_id": ["o1", "o2"],
             "outcome_match_key": ["m1", "m2"],
             "symbol": ["BTCUSDT", "BTCUSDT"],
             "signal_time_ms": [1, 1],
             "funding_rate_sum": [None, None],
+            **{key: [value, value] for key, value in contract.items()},
         }
     )
     _, audit = build_outcome_grains(df)
@@ -195,6 +220,7 @@ def test_walk_forward_excludes_incomplete_max_horizon_events_and_marks_prototype
                 "future_horizon_minutes": 2880,
                 "future_data_complete_bool": i != 10,
                 "symbol": "BTCUSDT",
+                **_outcome_contract(i * day, 2880, complete=i != 10),
             }
         )
     out = build_splits(pl.DataFrame(rows), "prototype_90d")
@@ -213,9 +239,8 @@ def test_walk_forward_boundary_and_cross_role_regime_counts_reconcile():
                 "range_regime_id": "span" if i in (40, 47) else f"r{i}",
                 "signal_time_ms": i * day,
                 "future_horizon_minutes": 2880,
-                "future_data_complete_bool": True,
-                "outcome_end_ms": (i + 2) * day,
                 "symbol": "BTCUSDT",
+                **_outcome_contract(i * day, 2880),
             }
         )
     out = build_splits(pl.DataFrame(rows), "prototype_90d")
@@ -232,6 +257,8 @@ def test_walk_forward_boundary_and_cross_role_regime_counts_reconcile():
 def test_review_pack_requires_cost_audit_and_exclusion_summary():
     assert "cost_summary_audit.json" in REQUIRED
     assert "walk_forward_exclusion_reason_summary.parquet" in REQUIRED
+    assert "walk_forward_event_eligibility.parquet" in REQUIRED
+    assert "walk_forward_splits.parquet" in REQUIRED
 
 
 def test_category_normalization_defaults_source_outcomes_and_grains_include_category():
@@ -247,6 +274,7 @@ def test_category_normalization_defaults_source_outcomes_and_grains_include_cate
             "outcome_match_key": ["m1"],
             "symbol": ["BTCUSDT"],
             "signal_time_ms": [1],
+            **{key: [value] for key, value in _outcome_contract(1, 60).items()},
         }
     )
     normalized, category_audit = normalize_outcome_category(df)
