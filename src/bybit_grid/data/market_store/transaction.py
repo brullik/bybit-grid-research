@@ -222,3 +222,4 @@ def commit_import_preflight_plan(
         raise
     finally:
         shutil.rmtree(txn, ignore_errors=True)
+# Mandatory RED probe only: contract intentionally unavailable.
