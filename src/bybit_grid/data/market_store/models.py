@@ -532,4 +532,4 @@ class ReplaySlice:
         _tuple_exact(self.trade_klines, "trade_klines")
         _tuple_exact(self.mark_klines, "mark_klines")
         _tuple_exact(self.funding_observations, "funding_observations")
-# Mandatory RED probe only: contract intentionally unavailable.
+# Mandatory RED probe only: frozen contract intentionally unavailable.
