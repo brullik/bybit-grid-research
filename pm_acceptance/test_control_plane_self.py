@@ -1156,6 +1156,11 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
         "PR_AUTHOR": "brullik",
         "PR_DRAFT": "false",
         "HEAD_REF": "pm/task-a",
+        "BASE_REF": "main",
+        "BASE_SHA": "b" * 40,
+        "EVENT_NAME": "pull_request_target",
+        "EVENT_ACTION": "synchronize",
+        "PR_SENDER": "brullik",
     }
     environment.update(overrides)
     for name, value in environment.items():
@@ -1193,14 +1198,15 @@ def test_final_status_script_succeeds_only_for_ready_owner_non_probe(monkeypatch
     assert payload["context"] == "pm-acceptance"
     assert payload["target_url"].endswith("/actions/runs/123")
 
-    for ineligible in (
-        {"PR_DRAFT": "true"},
-        {"PR_AUTHOR": "someone-else"},
-        {"HEAD_REF": "probe/task-a-red"},
+    for ineligible, expected_exit in (
+        ({"PR_DRAFT": "true"}, "pm_acceptance_failed"),
+        ({"PR_AUTHOR": "someone-else"}, "invalid_live_owner_identity"),
+        ({"HEAD_REF": "probe/task-a-red"}, "pm_acceptance_failed"),
     ):
         exit_reason, payload = _execute_final_status_script(monkeypatch, **ineligible)
-        assert exit_reason == "pm_acceptance_failed"
-        assert payload["state"] == "failure"
+        assert exit_reason == expected_exit
+        if expected_exit == "pm_acceptance_failed":
+            assert payload["state"] == "failure"
 
 
 def test_final_status_script_distinguishes_failure_from_cancelled(monkeypatch):

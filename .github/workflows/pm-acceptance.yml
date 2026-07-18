@@ -96,7 +96,7 @@ jobs:
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
-          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum"}, mode; print(mode)')
+          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum","pm-recovery-bundle"}, mode; print(mode)')
           task_id=$(JSON_PAYLOAD="$json" python -c 'import json, os; task_id=json.loads(os.environ["JSON_PAYLOAD"]).get("task_id"); assert isinstance(task_id, str) and task_id; print(task_id)')
           printf 'pr_mode=%s\n' "$pr_mode" >> "$GITHUB_OUTPUT"
           printf 'task_id=%s\n' "$task_id" >> "$GITHUB_OUTPUT"
@@ -916,6 +916,47 @@ jobs:
               )
           )
           PY
+      - name: Run combined recovery bundle Draft RED
+        if: needs.protected-paths.outputs.pr-mode == 'pm-recovery-bundle'
+        working-directory: head
+        env:
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          test "$PR_DRAFT" = true
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.check_task_scope import parse_recovery_bundle_manifest_bytes
+
+          path = Path("pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json")
+          manifest = parse_recovery_bundle_manifest_bytes(path.read_bytes())
+          Path("/tmp/recovery-nodes").write_text(
+              "\n".join(node for member in manifest.members for node in member.expected_red_node_ids),
+              encoding="utf-8",
+          )
+          PY
+          set +e
+          python -m pytest \
+            pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_walk_forward_exclusive_outcome_end.py \
+            pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py \
+            -q --json-report --json-report-file=/tmp/recovery-red.json
+          status=$?
+          set -e
+          test "$status" -eq 1
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("/tmp/recovery-red.json").read_text())
+          expected = set(Path("/tmp/recovery-nodes").read_text().splitlines())
+          tests = report.get("tests", [])
+          calls = [item for item in tests if item.get("call")]
+          failed = {item["nodeid"] for item in calls if item["call"].get("outcome") == "failed"}
+          forbidden = [item for item in tests if item.get("outcome") != "failed" or item.get("setup", {}).get("outcome") != "passed" or item.get("teardown", {}).get("outcome") != "passed"]
+          if len(expected) != 52 or len(calls) != 52 or failed != expected or forbidden:
+              raise SystemExit("combined_recovery_exact_red_mismatch")
+          PY
       - name: Run supplemental PR checks
         working-directory: head
         env:
@@ -959,6 +1000,11 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_SENDER: ${{ github.event.sender.login }}
         run: |
           python - <<'PY'
           import json
@@ -971,6 +1017,12 @@ jobs:
               raise SystemExit("invalid_repository")
           if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
               raise SystemExit("invalid_head_sha")
+          if os.environ["EVENT_NAME"] != "pull_request_target" or os.environ["BASE_REF"] != "main":
+              raise SystemExit("invalid_live_event_identity")
+          if os.environ["PR_AUTHOR"] != "brullik" or os.environ["PR_SENDER"] != "brullik":
+              raise SystemExit("invalid_live_owner_identity")
+          if re.fullmatch(r"[0-9a-f]{40}", os.environ["BASE_SHA"]) is None:
+              raise SystemExit("invalid_live_base_sha")
           results = {
               "pending": os.environ["PENDING_RESULT"],
               "protected": os.environ["PROTECTED_RESULT"],

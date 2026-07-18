@@ -820,6 +820,55 @@ def git_is_ancestor(ancestor_sha: str, descendant_sha: str) -> bool:
     raise RuntimeError("git_ancestor_check_failed")
 
 
+def recovery_bundle_transition_errors(
+    base_sha: str, head_sha: str, base_task: ActiveTask, head_task: ActiveTask,
+    changed_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Validate the only authorized two-task recovery activation commit."""
+    manifest_path = f"pm_acceptance/reactivations/{_RECOVERY_ID}.json"
+    errors: list[str] = []
+    if changed_paths != (_TASK_FILE, manifest_path) and set(changed_paths) != {_TASK_FILE, manifest_path}:
+        errors.append("recovery_bundle_exact_paths_mismatch")
+    if base_task.task_id != _INACTIVE_TASK_ID:
+        errors.append("recovery_bundle_base_task_not_inactive")
+    expected_scope = (
+        "src/bybit_grid/research/scoring/outcome_grains.py",
+        "src/bybit_grid/research/walk_forward/splits.py",
+        "src/bybit_grid/research/walk_forward/leakage_audit.py",
+        "scripts/check_scoring_review_pack.py", "scripts/make_scoring_review_pack.py",
+        "tests/test_sprint_05_cost_scoring_walkforward.py",
+        "tests/test_sprint_05_6_review_pack_closure.py",
+        "tests/test_persisted_exclusive_outcome_end_walk_forward.py",
+        "src/bybit_grid/data/market_store/models.py",
+        "src/bybit_grid/data/market_store/import_public_batch.py",
+        "src/bybit_grid/data/market_store/transaction.py",
+        "tests/test_store_committed_key_preflight.py",
+    )
+    if (head_task.task_id != _RECOVERY_ID or head_task.allowed_paths != expected_scope
+            or head_task.required_paths != expected_scope):
+        errors.append("recovery_bundle_active_scope_mismatch")
+    if git_object_exists(base_sha, manifest_path):
+        errors.append("recovery_bundle_replay")
+    try:
+        manifest = parse_recovery_bundle_manifest_bytes(git_blob_from_ref(head_sha, manifest_path))
+        if tuple(path for member in manifest.members for path in member.required_paths) != expected_scope:
+            errors.append("recovery_bundle_manifest_scope_mismatch")
+        for member in manifest.members:
+            for path, expected_hash in ((member.test_path, member.test_sha256),
+                                        (member.contract_path, member.contract_sha256),
+                                        (_TASK_FILE, member.active_task_sha256)):
+                if _sha256(git_blob_from_ref(member.activation_commit_sha, path)) != expected_hash:
+                    errors.append(f"recovery_bundle_historical_hash_mismatch:{member.task_id}:{path}")
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as exc:
+        errors.append(str(exc))
+    proc = subprocess.run(["git", "rev-list", "--parents", "-n", "1", head_sha],
+                          text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+    parents = proc.stdout.split()
+    if proc.returncode != 0 or len(parents) != 2 or parents[1] != base_sha:
+        errors.append("recovery_bundle_requires_one_direct_nonmerge_commit")
+    return tuple(sorted(set(errors)))
+
+
 def _erratum_manifest_path(task_id: str) -> str:
     return f"{_ERRATUM_PREFIX}{task_id}.json"
 
@@ -1540,6 +1589,12 @@ def main(argv: list[str] | None = None) -> int:
                     changed,
                 )
             return _emit(len(changed), erratum_errors, mode, head_task.task_id)
+        if mode == "pm-recovery-bundle":
+            head_task = parse_active_task_bytes(git_blob_from_ref(args.head_sha, _TASK_FILE))
+            bundle_errors = recovery_bundle_transition_errors(
+                args.base_sha, args.head_sha, task, head_task, changed,
+            )
+            return _emit(len(changed), bundle_errors, mode, head_task.task_id)
         return _emit(len(changed), (), mode, task.task_id)
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as exc:
         return _emit(0, (str(exc),))
