@@ -1033,6 +1033,17 @@ def git_commit_parents(commit_sha: str) -> tuple[str, ...]:
     return tuple(fields[1:])
 
 
+def git_commit_changed_paths(commit_sha: str) -> tuple[str, ...]:
+    parents = git_commit_parents(commit_sha)
+    if len(parents) != 1:
+        raise RuntimeError("git_commit_changed_paths_requires_single_parent")
+    changed_paths = changed_paths_from_git(parents[0], commit_sha)
+    errors = _changed_path_errors(changed_paths)
+    if errors:
+        raise RuntimeError(errors[0])
+    return changed_paths
+
+
 def recovery_bundle_history_errors(
     base_sha: str, manifest: RecoveryBundleManifest,
 ) -> tuple[str, ...]:
@@ -1063,6 +1074,9 @@ def recovery_bundle_history_errors(
             "recovery_bundle_suspension_predecessor_mismatch:"
             f"{declared_predecessor}:{actual_predecessor}",
         )
+    changed_paths = git_commit_changed_paths(manifest.suspension.commit_sha)
+    if changed_paths != (_TASK_FILE,) and set(changed_paths) != {_TASK_FILE}:
+        return ("recovery_bundle_suspension_changed_paths_mismatch",)
     return ()
 
 
