@@ -174,3 +174,4 @@ if __name__ == "__main__":
     p.add_argument("--scoring-run-id", required=True)
     a = p.parse_args()
     print(json.dumps(make_pack(a.scoring_run_id), sort_keys=True))
+# Mandatory RED probe for issue #156 (5/8); behavior intentionally unchanged.
