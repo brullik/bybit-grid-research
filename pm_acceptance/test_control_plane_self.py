@@ -428,6 +428,79 @@ def test_recovery_history_requires_canonical_inactive_suspension_task(tmp_path: 
         os.chdir(old_cwd)
 
 
+def test_recovery_history_requires_v1_erratum_as_current_predecessor(tmp_path: Path):
+    import scripts.check_task_scope as check_task_scope
+    from scripts.check_task_scope import (
+        RecoveryBundleManifest,
+        RecoveryBundleMember,
+        RecoveryErratumV1Evidence,
+        RecoverySuspensionEvidence,
+    )
+
+    repo, suspension_sha, erratum_sha, task, _base_test, _head_test = (
+        _build_frozen_erratum_repo(tmp_path)
+    )
+    activation_sha = _git(repo, "rev-parse", f"{suspension_sha}^")
+    manifest_path = "pm_acceptance/errata/task-a.json"
+    test_path = "pm_acceptance/tasks/task-a/test_contract.py"
+    contract_path = "docs/frozen_contracts/tasks/task-a.md"
+
+    def committed_bytes(commit_sha: str, path: str) -> bytes:
+        return subprocess.run(
+            ["git", "show", f"{commit_sha}:{path}"],
+            cwd=repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
+
+    member = RecoveryBundleMember(
+        task.task_id,
+        210,
+        activation_sha,
+        hashlib.sha256(committed_bytes(activation_sha, "pm_acceptance/active_task.json")).hexdigest(),
+        test_path,
+        hashlib.sha256(committed_bytes(activation_sha, test_path)).hexdigest(),
+        contract_path,
+        hashlib.sha256(committed_bytes(activation_sha, contract_path)).hexdigest(),
+        task.required_paths,
+        (f"{test_path}::test_contract",),
+        "synthetic_contract_unavailable",
+    )
+    manifest = RecoveryBundleManifest(
+        "pm_recovery_bundle_v1",
+        "p0-recovery-walk-forward-committed-key",
+        RecoverySuspensionEvidence(
+            suspension_sha,
+            activation_sha,
+            hashlib.sha256(CANONICAL).hexdigest(),
+        ),
+        RecoveryErratumV1Evidence(
+            erratum_sha,
+            manifest_path,
+            hashlib.sha256(committed_bytes(erratum_sha, manifest_path)).hexdigest(),
+            test_path,
+            hashlib.sha256(committed_bytes(erratum_sha, test_path)).hexdigest(),
+            "100644",
+        ),
+        (member,),
+    )
+
+    (repo / "ordinary.txt").write_text("ordinary post-erratum commit\n", encoding="utf-8")
+    _git(repo, "add", "ordinary.txt")
+    _git(repo, "commit", "-q", "-m", "ordinary post-erratum commit")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(base_sha, manifest) == (
+            f"recovery_bundle_erratum_not_current_predecessor:{erratum_sha}:{base_sha}",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_history_rejects_merge_suspension(tmp_path: Path):
     import scripts.check_task_scope as check_task_scope
     from scripts.check_task_scope import (
