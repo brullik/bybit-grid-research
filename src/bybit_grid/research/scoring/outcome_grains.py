@@ -473,3 +473,4 @@ def write_outcome_grains(outcome_run_id: str, scoring_run_id: str) -> dict[str, 
         incomplete.write_parquet(root / "outcome_cartesian_incomplete_keys.parquet")
         raise ValueError(json.dumps(cart))
     return audit | {"source_audit": source, "cartesian_audit": cart}
+# Mandatory RED probe for issue #156 (1/8); behavior intentionally unchanged.
