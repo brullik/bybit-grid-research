@@ -1096,6 +1096,11 @@ def recovery_bundle_history_errors(
     )
     if hashlib.sha256(erratum_manifest).hexdigest() != manifest.erratum_v1.manifest_sha256:
         return ("recovery_bundle_erratum_manifest_sha256_mismatch",)
+    corrected_test = git_blob_from_ref(
+        base_sha, manifest.erratum_v1.corrected_test_path,
+    )
+    if hashlib.sha256(corrected_test).hexdigest() != manifest.erratum_v1.corrected_test_sha256:
+        return ("recovery_bundle_erratum_corrected_test_sha256_mismatch",)
     return ()
 
 
