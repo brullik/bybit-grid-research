@@ -585,4 +585,3 @@ if (
 _FROZEN_AVAILABLE = _available
 exec(compile(ORDINARY_TEST_SOURCE, ORDINARY_TEST_PATH, "exec"), globals())
 _available = _FROZEN_AVAILABLE
-
