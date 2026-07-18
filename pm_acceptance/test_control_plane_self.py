@@ -182,6 +182,125 @@ def test_recovery_history_rejects_suspension_outside_canonical_first_parent(tmp_
         os.chdir(old_cwd)
 
 
+def test_recovery_history_requires_exact_suspension_predecessor(tmp_path: Path):
+    import scripts.check_task_scope as check_task_scope
+    from scripts.check_task_scope import (
+        RecoveryBundleManifest,
+        RecoveryBundleMember,
+        RecoveryErratumV1Evidence,
+        RecoverySuspensionEvidence,
+    )
+
+    repo = tmp_path / "recovery-history"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "pm@example.test")
+    _git(repo, "config", "user.name", "PM")
+    (repo / "root.txt").write_text("root\n", encoding="utf-8")
+    _git(repo, "add", "root.txt")
+    _git(repo, "commit", "-q", "-m", "root")
+    root_sha = _git(repo, "rev-parse", "HEAD")
+
+    (repo / "activation.txt").write_text("activation\n", encoding="utf-8")
+    _git(repo, "add", "activation.txt")
+    _git(repo, "commit", "-q", "-m", "member activation")
+    activation_sha = _git(repo, "rev-parse", "HEAD")
+
+    (repo / "suspension.txt").write_text("suspension\n", encoding="utf-8")
+    _git(repo, "add", "suspension.txt")
+    _git(repo, "commit", "-q", "-m", "task suspension")
+    suspension_sha = _git(repo, "rev-parse", "HEAD")
+    base_sha = suspension_sha
+
+    member = RecoveryBundleMember(
+        "synthetic", 210, activation_sha, "a" * 64,
+        "pm_acceptance/tasks/synthetic/test_contract.py", "b" * 64,
+        "docs/frozen_contracts/tasks/synthetic.md", "c" * 64, (),
+        ("pm_acceptance/tasks/synthetic/test_contract.py::test_contract",),
+        "synthetic_contract_unavailable",
+    )
+    manifest = RecoveryBundleManifest(
+        "pm_recovery_bundle_v1",
+        "p0-recovery-walk-forward-committed-key",
+        RecoverySuspensionEvidence(suspension_sha, root_sha, "d" * 64),
+        RecoveryErratumV1Evidence(
+            "1" * 40, "pm_acceptance/errata/synthetic.json", "2" * 64,
+            member.test_path, "3" * 64, "100644",
+        ),
+        (member,),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(base_sha, manifest) == (
+            f"recovery_bundle_suspension_predecessor_mismatch:{root_sha}:{activation_sha}",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_recovery_history_rejects_merge_suspension(tmp_path: Path):
+    import scripts.check_task_scope as check_task_scope
+    from scripts.check_task_scope import (
+        RecoveryBundleManifest,
+        RecoveryBundleMember,
+        RecoveryErratumV1Evidence,
+        RecoverySuspensionEvidence,
+    )
+
+    repo = tmp_path / "recovery-history"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "pm@example.test")
+    _git(repo, "config", "user.name", "PM")
+    (repo / "root.txt").write_text("root\n", encoding="utf-8")
+    _git(repo, "add", "root.txt")
+    _git(repo, "commit", "-q", "-m", "root")
+
+    (repo / "activation.txt").write_text("activation\n", encoding="utf-8")
+    _git(repo, "add", "activation.txt")
+    _git(repo, "commit", "-q", "-m", "member activation")
+    activation_sha = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "checkout", "-q", "-b", "suspension")
+    (repo / "suspension.txt").write_text("suspension\n", encoding="utf-8")
+    _git(repo, "add", "suspension.txt")
+    _git(repo, "commit", "-q", "-m", "task suspension payload")
+
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "suspension", "-m", "task suspension")
+    suspension_sha = _git(repo, "rev-parse", "HEAD")
+    base_sha = suspension_sha
+
+    member = RecoveryBundleMember(
+        "synthetic", 210, activation_sha, "a" * 64,
+        "pm_acceptance/tasks/synthetic/test_contract.py", "b" * 64,
+        "docs/frozen_contracts/tasks/synthetic.md", "c" * 64, (),
+        ("pm_acceptance/tasks/synthetic/test_contract.py::test_contract",),
+        "synthetic_contract_unavailable",
+    )
+    manifest = RecoveryBundleManifest(
+        "pm_recovery_bundle_v1",
+        "p0-recovery-walk-forward-committed-key",
+        RecoverySuspensionEvidence(suspension_sha, activation_sha, "d" * 64),
+        RecoveryErratumV1Evidence(
+            "1" * 40, "pm_acceptance/errata/synthetic.json", "2" * 64,
+            member.test_path, "3" * 64, "100644",
+        ),
+        (member,),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(base_sha, manifest) == (
+            f"recovery_bundle_suspension_requires_single_parent:{suspension_sha}",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_bundle_exact_red_gate_accepts_exact_failed_calls(tmp_path: Path):
     source = (
         "def test_a():\n    raise AssertionError('synthetic_contract_unavailable')\n\n"
