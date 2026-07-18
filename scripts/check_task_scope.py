@@ -35,7 +35,12 @@ _OWNER = "brullik"
 _TASK_FILE = "pm_acceptance/active_task.json"
 _INACTIVE_TASK_ID = "NO_ACTIVE_IMPLEMENTATION"
 _TASK_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
-_MODE_LABELS = frozenset({"pm-task-definition", "pm-control-plane", "pm-frozen-erratum"})
+_MODE_LABELS = frozenset({
+    "pm-task-definition",
+    "pm-control-plane",
+    "pm-frozen-erratum",
+    "pm-recovery-bundle",
+})
 _ERRATUM_SCHEMA = "pm_frozen_erratum_v1"
 _ERRATUM_V2_SCHEMA = "pm_frozen_erratum_v2"
 _ERRATUM_PREFIX = "pm_acceptance/errata/"
@@ -631,6 +636,14 @@ def classify_pr_mode(actor: str, labels: tuple[str, ...], changed_paths: tuple[s
                     errors.append(f"pm_task_definition_out_of_scope:{path}")
                 if task_path and Path(path).name == "conftest.py":
                     errors.append(f"task_local_conftest_forbidden:{path}")
+        elif label == "pm-recovery-bundle":
+            mode = "pm-recovery-bundle"
+            expected_paths = frozenset({
+                _TASK_FILE,
+                "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json",
+            })
+            if len(valid) != len(expected_paths) or frozenset(valid) != expected_paths:
+                errors.append("pm_recovery_bundle_path_payload_mismatch")
         elif label == "pm-frozen-erratum":
             mode = "pm-frozen-erratum"
             for path in valid:
