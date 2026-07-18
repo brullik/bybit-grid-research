@@ -164,6 +164,78 @@ class FrozenErratumV2Manifest:
     expected_red_passed_node_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class RecoveryBundleMember:
+    task_id: str
+    issue_number: int
+    activation_commit_sha: str
+    active_task_sha256: str
+    test_path: str
+    test_sha256: str
+    contract_path: str
+    contract_sha256: str
+    required_paths: tuple[str, ...]
+    expected_red_node_ids: tuple[str, ...]
+    sentinel: str
+
+
+@dataclass(frozen=True)
+class RecoveryBundleManifest:
+    schema: str
+    bundle_id: str
+    members: tuple[RecoveryBundleMember, ...]
+
+
+_RECOVERY_SCHEMA = "pm_recovery_bundle_v1"
+_RECOVERY_ID = "p0-recovery-walk-forward-committed-key"
+_RECOVERY_KEYS = frozenset({"schema", "bundle_id", "members"})
+_RECOVERY_MEMBER_KEYS = frozenset({
+    "activation_commit_sha", "active_task_sha256", "contract_path",
+    "contract_sha256", "expected_red_node_ids", "issue_number",
+    "required_paths", "sentinel", "task_id", "test_path", "test_sha256",
+})
+_RECOVERY_IDENTITIES = (
+    ("p0-walk-forward-exclusive-outcome-end", 156, "1305abb1517944e2cc9790e5546ca52ae66f592e", "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e", "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e", "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05", 32, "persisted_exclusive_outcome_end_walk_forward_contract_unavailable"),
+    ("p0-committed-key-preflight", 157, "3b826f2a6a3b02897047a30de8e920e2f5b72431", "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89", "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513", "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696", 20, "committed_key_preflight_contract_unavailable"),
+)
+
+
+def parse_recovery_bundle_manifest_bytes(data: bytes) -> RecoveryBundleManifest:
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("utf8_bom")
+    obj = json.loads(data.decode("utf-8", "strict"), object_pairs_hook=_pairs_hook,
+                     parse_float=_reject_float, parse_constant=_reject_constant)
+    if not isinstance(obj, dict) or set(obj) != _RECOVERY_KEYS:
+        raise ValueError("invalid_recovery_bundle_keys")
+    if obj["schema"] != _RECOVERY_SCHEMA or obj["bundle_id"] != _RECOVERY_ID:
+        raise ValueError("recovery_bundle_identity_mismatch")
+    if not isinstance(obj["members"], list) or len(obj["members"]) != 2:
+        raise ValueError("recovery_bundle_identity_mismatch")
+    members: list[RecoveryBundleMember] = []
+    for value, identity in zip(obj["members"], _RECOVERY_IDENTITIES, strict=True):
+        if not isinstance(value, dict) or set(value) != _RECOVERY_MEMBER_KEYS:
+            raise ValueError("invalid_recovery_bundle_member_keys")
+        task_id, issue, activation, active_hash, test_hash, contract_hash, count, sentinel = identity
+        pinned = (value["task_id"], value["issue_number"], value["activation_commit_sha"],
+                  value["active_task_sha256"], value["test_sha256"], value["contract_sha256"],
+                  len(value["expected_red_node_ids"]) if isinstance(value["expected_red_node_ids"], list) else -1,
+                  value["sentinel"])
+        if pinned != identity or type(value["issue_number"]) is not int:
+            raise ValueError("recovery_bundle_identity_mismatch")
+        test_path = f"pm_acceptance/tasks/{task_id}/" + ("test_walk_forward_exclusive_outcome_end.py" if issue == 156 else "test_store_committed_key_preflight.py")
+        contract_path = f"docs/frozen_contracts/tasks/{task_id}.md"
+        if value["test_path"] != test_path or value["contract_path"] != contract_path:
+            raise ValueError("recovery_bundle_identity_mismatch")
+        required = _strings("required_paths", value["required_paths"])
+        nodes = _erratum_node_ids("expected_red_node_ids", value["expected_red_node_ids"], test_path)
+        members.append(RecoveryBundleMember(task_id, issue, activation, active_hash, test_path,
+                                             test_hash, contract_path, contract_hash, required, nodes, sentinel))
+    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if data != canonical:
+        raise ValueError("noncanonical_recovery_bundle_bytes")
+    return RecoveryBundleManifest(_RECOVERY_SCHEMA, _RECOVERY_ID, tuple(members))
+
+
 def _reject_constant(value: str) -> None:
     raise ValueError(f"invalid_json_constant:{value}")
 
