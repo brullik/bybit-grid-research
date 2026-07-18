@@ -41,7 +41,13 @@ def _synthetic_recovery_manifest(root: Path, node_names: tuple[str, ...] = ("tes
         "docs/frozen_contracts/tasks/synthetic.md", "d" * 64, (),
         tuple(f"{test_path}::{name}" for name in node_names), "synthetic_contract_unavailable",
     )
-    return RecoveryBundleManifest("synthetic", "synthetic", (member,))
+    from scripts.check_task_scope import RecoveryErratumV1Evidence, RecoverySuspensionEvidence
+
+    suspension = RecoverySuspensionEvidence("a" * 40, "b" * 40, "c" * 64)
+    erratum = RecoveryErratumV1Evidence(
+        "d" * 40, "synthetic.json", "e" * 64, test_path, "f" * 64, "100644"
+    )
+    return RecoveryBundleManifest("synthetic", "synthetic", suspension, erratum, (member,))
 
 
 def _run_synthetic_recovery_gate(tmp_path: Path, source: str, node_names=("test_a", "test_b")) -> int:
@@ -299,6 +305,7 @@ def test_recovery_bundle_manifest_rejects_every_real_node_sequence_mutation(muta
         ("erratum_v1", "zero_hash"),
         ("erratum_v1", "placeholder_hash"),
         ("erratum_v1", "wrong_mode"),
+        ("erratum_v1", "reused_commit"),
     ),
 )
 def test_recovery_bundle_manifest_rejects_unpinned_future_evidence(
@@ -326,6 +333,8 @@ def test_recovery_bundle_manifest_rejects_unpinned_future_evidence(
         value["predecessor_commit_sha"] = value["commit_sha"]
     elif mutation == "wrong_mode":
         value["corrected_test_mode"] = "100755"
+    elif mutation == "reused_commit":
+        value["commit_sha"] = obj["suspension"]["commit_sha"]
     raw = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     with pytest.raises(ValueError, match="^invalid_recovery_bundle_"):
         parse_recovery_bundle_manifest_bytes(raw)
@@ -335,7 +344,7 @@ def test_recovery_bundle_manifest_rejects_unpinned_future_evidence(
     "raw",
     (
         b"{\"bundle_id\":\"x\",\"bundle_id\":\"y\"}\n",
-        b"{}",
+        b"{",
         b"\xef\xbb\xbf{}\n",
         b"{\"value\":1.5}\n",
         b"{\"value\":NaN}\n",

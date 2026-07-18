@@ -180,15 +180,40 @@ class RecoveryBundleMember:
 
 
 @dataclass(frozen=True)
+class RecoverySuspensionEvidence:
+    commit_sha: str
+    predecessor_commit_sha: str
+    inactive_task_sha256: str
+
+
+@dataclass(frozen=True)
+class RecoveryErratumV1Evidence:
+    commit_sha: str
+    manifest_path: str
+    manifest_sha256: str
+    corrected_test_path: str
+    corrected_test_sha256: str
+    corrected_test_mode: str
+
+
+@dataclass(frozen=True)
 class RecoveryBundleManifest:
     schema: str
     bundle_id: str
+    suspension: RecoverySuspensionEvidence
+    erratum_v1: RecoveryErratumV1Evidence
     members: tuple[RecoveryBundleMember, ...]
 
 
 _RECOVERY_SCHEMA = "pm_recovery_bundle_v1"
 _RECOVERY_ID = "p0-recovery-walk-forward-committed-key"
-_RECOVERY_KEYS = frozenset({"schema", "bundle_id", "members"})
+_RECOVERY_KEYS = frozenset({"schema", "bundle_id", "suspension", "erratum_v1", "members"})
+_RECOVERY_SUSPENSION_KEYS = frozenset({
+    "commit_sha", "inactive_task_sha256", "predecessor_commit_sha",
+})
+_RECOVERY_ERRATUM_V1_KEYS = frozenset({
+    "commit_sha", "corrected_test_mode", "corrected_test_sha256", "manifest_sha256",
+})
 _RECOVERY_MEMBER_KEYS = frozenset({
     "activation_commit_sha", "active_task_sha256", "contract_path",
     "contract_sha256", "expected_red_node_ids", "issue_number",
@@ -198,6 +223,32 @@ _RECOVERY_IDENTITIES = (
     ("p0-walk-forward-exclusive-outcome-end", 156, "1305abb1517944e2cc9790e5546ca52ae66f592e", "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e", "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e", "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05", 32, "persisted_exclusive_outcome_end_walk_forward_contract_unavailable"),
     ("p0-committed-key-preflight", 157, "3b826f2a6a3b02897047a30de8e920e2f5b72431", "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89", "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513", "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696", 20, "committed_key_preflight_contract_unavailable"),
 )
+_RECOVERY_REQUIRED_PATHS = (
+    (
+        "src/bybit_grid/research/scoring/outcome_grains.py",
+        "src/bybit_grid/research/walk_forward/splits.py",
+        "src/bybit_grid/research/walk_forward/leakage_audit.py",
+        "scripts/check_scoring_review_pack.py",
+        "scripts/make_scoring_review_pack.py",
+        "tests/test_sprint_05_cost_scoring_walkforward.py",
+        "tests/test_sprint_05_6_review_pack_closure.py",
+        "tests/test_persisted_exclusive_outcome_end_walk_forward.py",
+    ),
+    (
+        "src/bybit_grid/data/market_store/models.py",
+        "src/bybit_grid/data/market_store/import_public_batch.py",
+        "src/bybit_grid/data/market_store/transaction.py",
+        "tests/test_store_committed_key_preflight.py",
+    ),
+)
+_RECOVERY_ERRATUM_MANIFEST_PATH = (
+    "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json"
+)
+_RECOVERY_ERRATUM_TEST_PATH = (
+    "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/"
+    "test_walk_forward_exclusive_outcome_end.py"
+)
+_RECOVERY_REGULAR_FILE_MODE = "100644"
 _RECOVERY_NODE_NAMES = (
     (
         "test_contract_markers_exact_scope_and_embedded_source",
@@ -260,18 +311,70 @@ _RECOVERY_NODE_NAMES = (
 
 def parse_recovery_bundle_manifest_bytes(data: bytes) -> RecoveryBundleManifest:
     if data.startswith(b"\xef\xbb\xbf"):
-        raise ValueError("utf8_bom")
-    obj = json.loads(data.decode("utf-8", "strict"), object_pairs_hook=_pairs_hook,
-                     parse_float=_reject_float, parse_constant=_reject_constant)
+        raise ValueError("invalid_recovery_bundle_json")
+    try:
+        obj = json.loads(data.decode("utf-8", "strict"), object_pairs_hook=_pairs_hook,
+                         parse_float=_reject_float, parse_constant=_reject_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("invalid_recovery_bundle_json") from exc
     if not isinstance(obj, dict) or set(obj) != _RECOVERY_KEYS:
         raise ValueError("invalid_recovery_bundle_keys")
     if obj["schema"] != _RECOVERY_SCHEMA or obj["bundle_id"] != _RECOVERY_ID:
         raise ValueError("recovery_bundle_identity_mismatch")
     if not isinstance(obj["members"], list) or len(obj["members"]) != 2:
         raise ValueError("recovery_bundle_identity_mismatch")
+    suspension_value = obj["suspension"]
+    if (
+        not isinstance(suspension_value, dict)
+        or set(suspension_value) != _RECOVERY_SUSPENSION_KEYS
+    ):
+        raise ValueError("invalid_recovery_bundle_suspension_keys")
+    for key, pattern in (
+        ("commit_sha", _COMMIT_SHA_RE),
+        ("predecessor_commit_sha", _COMMIT_SHA_RE),
+        ("inactive_task_sha256", _SHA256_RE),
+    ):
+        if not _recovery_evidence_hash(suspension_value[key], pattern):
+            raise ValueError(f"invalid_recovery_bundle_suspension_{key}")
+    if suspension_value["commit_sha"] == suspension_value["predecessor_commit_sha"]:
+        raise ValueError("invalid_recovery_bundle_suspension_commit_chain")
+    suspension = RecoverySuspensionEvidence(
+        commit_sha=suspension_value["commit_sha"],
+        predecessor_commit_sha=suspension_value["predecessor_commit_sha"],
+        inactive_task_sha256=suspension_value["inactive_task_sha256"],
+    )
+    erratum_value = obj["erratum_v1"]
+    if (
+        not isinstance(erratum_value, dict)
+        or set(erratum_value) != _RECOVERY_ERRATUM_V1_KEYS
+    ):
+        raise ValueError("invalid_recovery_bundle_erratum_v1_keys")
+    for key, pattern in (
+        ("commit_sha", _COMMIT_SHA_RE),
+        ("manifest_sha256", _SHA256_RE),
+        ("corrected_test_sha256", _SHA256_RE),
+    ):
+        if not _recovery_evidence_hash(erratum_value[key], pattern):
+            raise ValueError(f"invalid_recovery_bundle_erratum_v1_{key}")
+    if erratum_value["corrected_test_mode"] != _RECOVERY_REGULAR_FILE_MODE:
+        raise ValueError("invalid_recovery_bundle_erratum_v1_corrected_test_mode")
+    if erratum_value["commit_sha"] in {
+        suspension.commit_sha,
+        suspension.predecessor_commit_sha,
+    }:
+        raise ValueError("invalid_recovery_bundle_erratum_v1_commit_chain")
+    erratum_v1 = RecoveryErratumV1Evidence(
+        commit_sha=erratum_value["commit_sha"],
+        manifest_path=_RECOVERY_ERRATUM_MANIFEST_PATH,
+        manifest_sha256=erratum_value["manifest_sha256"],
+        corrected_test_path=_RECOVERY_ERRATUM_TEST_PATH,
+        corrected_test_sha256=erratum_value["corrected_test_sha256"],
+        corrected_test_mode=_RECOVERY_REGULAR_FILE_MODE,
+    )
     members: list[RecoveryBundleMember] = []
-    for value, identity, node_names in zip(
-        obj["members"], _RECOVERY_IDENTITIES, _RECOVERY_NODE_NAMES, strict=True
+    for value, identity, required_identity, node_names in zip(
+        obj["members"], _RECOVERY_IDENTITIES, _RECOVERY_REQUIRED_PATHS,
+        _RECOVERY_NODE_NAMES, strict=True
     ):
         if not isinstance(value, dict) or set(value) != _RECOVERY_MEMBER_KEYS:
             raise ValueError("invalid_recovery_bundle_member_keys")
@@ -287,6 +390,8 @@ def parse_recovery_bundle_manifest_bytes(data: bytes) -> RecoveryBundleManifest:
         if value["test_path"] != test_path or value["contract_path"] != contract_path:
             raise ValueError("recovery_bundle_identity_mismatch")
         required = _strings("required_paths", value["required_paths"])
+        if required != required_identity:
+            raise ValueError("recovery_bundle_identity_mismatch")
         nodes = _erratum_node_ids("expected_red_node_ids", value["expected_red_node_ids"], test_path)
         if nodes != tuple(f"{test_path}::{name}" for name in node_names):
             raise ValueError("recovery_bundle_identity_mismatch")
@@ -295,7 +400,17 @@ def parse_recovery_bundle_manifest_bytes(data: bytes) -> RecoveryBundleManifest:
     canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     if data != canonical:
         raise ValueError("noncanonical_recovery_bundle_bytes")
-    return RecoveryBundleManifest(_RECOVERY_SCHEMA, _RECOVERY_ID, tuple(members))
+    return RecoveryBundleManifest(
+        _RECOVERY_SCHEMA, _RECOVERY_ID, suspension, erratum_v1, tuple(members)
+    )
+
+
+def _recovery_evidence_hash(value: Any, pattern: re.Pattern[str]) -> bool:
+    return (
+        isinstance(value, str)
+        and pattern.fullmatch(value) is not None
+        and len(set(value)) > 1
+    )
 
 
 def _reject_constant(value: str) -> None:
