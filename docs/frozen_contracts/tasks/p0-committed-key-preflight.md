@@ -47,7 +47,7 @@ COMMITTED_KEY_PREFLIGHT_TEST_CONTRACT = "committed-key-preflight-v1"
 Its complete UTF-8/LF raw bytes are embedded once as `ORDINARY_TEST_SOURCE` and pinned at SHA-256
 `2477ebbc0f011521805a5e3787eff7629639f7226f030afcd337d91f33cafb02`.
 The complete frozen-suite raw bytes are SHA-256
-`64e91cce985763c95c76d571c11ddf6844cf23e15d61abb469be0426383693f4`.
+`d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513`.
 
 After task-definition merge, a mandatory fresh Draft `probe/` PR changes all four required paths
 and no others. The three production paths receive inert comment-only edits, and the new ordinary
