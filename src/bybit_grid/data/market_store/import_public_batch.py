@@ -105,3 +105,4 @@ def import_validated_public_batch_to_store(evidence, store_root):
     from .transaction import build_import_preflight_plan, commit_import_preflight_plan
     plan = build_import_preflight_plan(evidence, Path(store_root))
     return commit_import_preflight_plan(plan)
+# Mandatory RED probe only: contract intentionally unavailable.
