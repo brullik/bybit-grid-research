@@ -59,6 +59,65 @@ def _run_synthetic_recovery_gate(tmp_path: Path, source: str, node_names=("test_
     return run_exact_recovery_bundle_red(root, _synthetic_recovery_manifest(root, node_names))
 
 
+def test_recovery_history_rejects_activation_outside_canonical_first_parent(tmp_path: Path):
+    import scripts.check_task_scope as check_task_scope
+    from scripts.check_task_scope import (
+        RecoveryBundleManifest,
+        RecoveryBundleMember,
+        RecoveryErratumV1Evidence,
+        RecoverySuspensionEvidence,
+    )
+
+    repo = tmp_path / "recovery-history"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "pm@example.test")
+    _git(repo, "config", "user.name", "PM")
+    (repo / "root.txt").write_text("root\n", encoding="utf-8")
+    _git(repo, "add", "root.txt")
+    _git(repo, "commit", "-q", "-m", "root")
+
+    _git(repo, "checkout", "-q", "-b", "activation")
+    (repo / "activation.txt").write_text("activation\n", encoding="utf-8")
+    _git(repo, "add", "activation.txt")
+    _git(repo, "commit", "-q", "-m", "member activation")
+    activation_sha = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "checkout", "-q", "main")
+    (repo / "canonical.txt").write_text("canonical\n", encoding="utf-8")
+    _git(repo, "add", "canonical.txt")
+    _git(repo, "commit", "-q", "-m", "canonical history")
+    _git(repo, "merge", "-q", "--no-ff", "activation", "-m", "merge activation object")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+
+    member = RecoveryBundleMember(
+        "synthetic", 210, activation_sha, "a" * 64,
+        "pm_acceptance/tasks/synthetic/test_contract.py", "b" * 64,
+        "docs/frozen_contracts/tasks/synthetic.md", "c" * 64, (),
+        ("pm_acceptance/tasks/synthetic/test_contract.py::test_contract",),
+        "synthetic_contract_unavailable",
+    )
+    manifest = RecoveryBundleManifest(
+        "pm_recovery_bundle_v1",
+        "p0-recovery-walk-forward-committed-key",
+        RecoverySuspensionEvidence("d" * 40, "e" * 40, "f" * 64),
+        RecoveryErratumV1Evidence(
+            "1" * 40, "pm_acceptance/errata/synthetic.json", "2" * 64,
+            member.test_path, "3" * 64, "100644",
+        ),
+        (member,),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(base_sha, manifest) == (
+            f"recovery_bundle_activation_not_on_first_parent_history:synthetic:{activation_sha}",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_bundle_exact_red_gate_accepts_exact_failed_calls(tmp_path: Path):
     source = (
         "def test_a():\n    raise AssertionError('synthetic_contract_unavailable')\n\n"
