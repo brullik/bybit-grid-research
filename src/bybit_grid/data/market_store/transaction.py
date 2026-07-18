@@ -222,3 +222,4 @@ def commit_import_preflight_plan(
         raise
     finally:
         shutil.rmtree(txn, ignore_errors=True)
+# Fresh mandatory RED probe: implementation intentionally absent.
