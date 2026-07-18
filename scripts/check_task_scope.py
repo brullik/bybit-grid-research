@@ -1080,6 +1080,12 @@ def recovery_bundle_history_errors(
     inactive_task = git_blob_from_ref(manifest.suspension.commit_sha, _TASK_FILE)
     if hashlib.sha256(inactive_task).hexdigest() != manifest.suspension.inactive_task_sha256:
         return ("recovery_bundle_suspension_inactive_task_sha256_mismatch",)
+    suspension_task = parse_active_task_bytes(inactive_task)
+    if suspension_task.task_id != _INACTIVE_TASK_ID:
+        return (
+            "recovery_bundle_suspension_task_not_inactive:"
+            f"{suspension_task.task_id}",
+        )
     return ()
 
 
