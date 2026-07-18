@@ -240,6 +240,69 @@ def test_recovery_history_requires_exact_suspension_predecessor(tmp_path: Path):
         os.chdir(old_cwd)
 
 
+def test_recovery_history_requires_suspension_to_change_only_active_task(tmp_path: Path):
+    import scripts.check_task_scope as check_task_scope
+    from scripts.check_task_scope import (
+        RecoveryBundleManifest,
+        RecoveryBundleMember,
+        RecoveryErratumV1Evidence,
+        RecoverySuspensionEvidence,
+    )
+
+    repo = tmp_path / "recovery-history"
+    active_path = repo / "pm_acceptance/active_task.json"
+    active_path.parent.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "pm@example.test")
+    _git(repo, "config", "user.name", "PM")
+    active_path.write_bytes(CANONICAL)
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "root")
+
+    active_task = _task_bytes(_active_task(task_id="synthetic"))
+    active_path.write_bytes(active_task)
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "member activation")
+    activation_sha = _git(repo, "rev-parse", "HEAD")
+
+    active_path.write_bytes(CANONICAL)
+    (repo / "unrelated.txt").write_text("not suspension payload\n", encoding="utf-8")
+    _git(repo, "add", "pm_acceptance/active_task.json", "unrelated.txt")
+    _git(repo, "commit", "-q", "-m", "task suspension")
+    suspension_sha = _git(repo, "rev-parse", "HEAD")
+
+    member = RecoveryBundleMember(
+        "synthetic", 210, activation_sha, hashlib.sha256(active_task).hexdigest(),
+        "pm_acceptance/tasks/synthetic/test_contract.py", "a" * 64,
+        "docs/frozen_contracts/tasks/synthetic.md", "b" * 64, ("src/example.py",),
+        ("pm_acceptance/tasks/synthetic/test_contract.py::test_contract",),
+        "synthetic_contract_unavailable",
+    )
+    manifest = RecoveryBundleManifest(
+        "pm_recovery_bundle_v1",
+        "p0-recovery-walk-forward-committed-key",
+        RecoverySuspensionEvidence(
+            suspension_sha,
+            activation_sha,
+            hashlib.sha256(CANONICAL).hexdigest(),
+        ),
+        RecoveryErratumV1Evidence(
+            "1" * 40, "pm_acceptance/errata/synthetic.json", "2" * 64,
+            member.test_path, "3" * 64, "100644",
+        ),
+        (member,),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(suspension_sha, manifest) == (
+            "recovery_bundle_suspension_changed_paths_mismatch",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_history_rejects_merge_suspension(tmp_path: Path):
     import scripts.check_task_scope as check_task_scope
     from scripts.check_task_scope import (
