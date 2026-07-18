@@ -543,6 +543,33 @@ def test_recovery_history_requires_hash_pinned_v1_erratum_manifest(tmp_path: Pat
         os.chdir(old_cwd)
 
 
+def test_recovery_history_requires_hash_pinned_v1_corrected_test(tmp_path: Path):
+    from dataclasses import replace
+
+    import scripts.check_task_scope as check_task_scope
+
+    repo, _suspension_sha, erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(tmp_path)
+    )
+    base_sha = erratum_sha
+    mutated_manifest = replace(
+        manifest,
+        erratum_v1=replace(
+            manifest.erratum_v1,
+            corrected_test_sha256=hashlib.sha256(b"wrong-corrected-test").hexdigest(),
+        ),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(
+            base_sha, mutated_manifest
+        ) == ("recovery_bundle_erratum_corrected_test_sha256_mismatch",)
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_history_rejects_merge_suspension(tmp_path: Path):
     import scripts.check_task_scope as check_task_scope
     from scripts.check_task_scope import (
