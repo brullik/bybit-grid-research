@@ -570,6 +570,37 @@ def test_recovery_history_requires_hash_pinned_v1_corrected_test(tmp_path: Path)
         os.chdir(old_cwd)
 
 
+def test_recovery_history_requires_regular_mode_for_v1_corrected_test(tmp_path: Path):
+    from dataclasses import replace
+
+    import scripts.check_task_scope as check_task_scope
+
+    repo, _suspension_sha, _erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(tmp_path)
+    )
+    _git(
+        repo,
+        "update-index",
+        "--chmod=+x",
+        "pm_acceptance/tasks/task-a/test_contract.py",
+    )
+    _git(repo, "commit", "-q", "--amend", "--no-edit")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    mutated_manifest = replace(
+        manifest,
+        erratum_v1=replace(manifest.erratum_v1, commit_sha=base_sha),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(
+            base_sha, mutated_manifest
+        ) == ("recovery_bundle_erratum_corrected_test_mode_mismatch:100755:100644",)
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_history_rejects_merge_suspension(tmp_path: Path):
     import scripts.check_task_scope as check_task_scope
     from scripts.check_task_scope import (
