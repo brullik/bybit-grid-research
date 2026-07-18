@@ -259,3 +259,4 @@ def write_splits(scoring_run_id: str, profile: str = "prototype_90d") -> dict[st
         "walk_forward_fold_count": out["fold_id"].n_unique() if not out.is_empty() else 0,
         "rows": out.height,
     }
+# Mandatory RED probe for issue #156 (2/8); behavior intentionally unchanged.
