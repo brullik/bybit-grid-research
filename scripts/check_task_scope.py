@@ -1144,6 +1144,22 @@ def recovery_bundle_history_errors(
             "recovery_bundle_erratum_corrected_test_mode_mismatch:"
             f"{actual_mode}:{manifest.erratum_v1.corrected_test_mode}",
         )
+    erratum_parents = git_commit_parents(base_sha)
+    if len(erratum_parents) != 1:
+        return ("recovery_bundle_requires_one_direct_nonmerge_commit",)
+    erratum_parent = erratum_parents[0]
+    parent_task = parse_active_task_bytes(git_blob_from_ref(erratum_parent, _TASK_FILE))
+    head_task = parse_active_task_bytes(git_blob_from_ref(base_sha, _TASK_FILE))
+    erratum_changed_paths = changed_paths_from_git(erratum_parent, base_sha)
+    erratum_errors = frozen_erratum_transition_errors(
+        erratum_parent,
+        base_sha,
+        parent_task,
+        head_task,
+        erratum_changed_paths,
+    )
+    if erratum_errors:
+        return erratum_errors
     return ()
 
 
