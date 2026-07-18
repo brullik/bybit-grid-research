@@ -4,7 +4,30 @@ import json
 from pathlib import Path
 import polars as pl
 
-GRAIN_CONTRACT_VERSION = "grain_contract_v3_whole_row"
+PERSISTED_EXCLUSIVE_OUTCOME_END_WALK_FORWARD_CONTRACT = (
+    "persisted-exclusive-outcome-end-walk-forward-v1"
+)
+GRAIN_CONTRACT_VERSION = "grain_contract_v4_persisted_exclusive_outcome_end"
+OUTCOME_BOUNDARY_SEMANTICS_VERSION = "persisted-exclusive-outcome-end-v1"
+OUTCOME_SEMANTICS_VERSION = "v5_exact_outcome_window_provenance"
+OUTCOME_WINDOW_SEMANTICS_VERSION = "exact-minute-outcome-window-v1"
+ACTIONABLE_EVENT_SEMANTICS_VERSION = "range-actionable-prefix-invariance-v1"
+CANONICAL_OUTCOME_END_COLUMN = "outcome_end_exclusive_ms"
+LEGACY_OUTCOME_END_COLUMN = "outcome_end_ms"
+MINUTE_MS = 60_000
+
+PERSISTED_OUTCOME_COLUMNS = [
+    "outcome_semantics_version",
+    "outcome_window_semantics_version",
+    "actionable_event_semantics_version",
+    "decision_time_source",
+    "causal_provenance_complete_bool",
+    "decision_time_ms",
+    "entry_time_ms",
+    CANONICAL_OUTCOME_END_COLUMN,
+    "future_data_complete_bool",
+    "future_outcome_eligible_bool",
+]
 GRAIN_KEYS = {
     "event_horizon": ["range_action_event_id", "future_horizon_minutes"],
     "event_horizon_sl": ["range_action_event_id", "future_horizon_minutes", "sl_atr_buffer"],
@@ -18,10 +41,38 @@ GRAIN_KEYS = {
 }
 KEYS = GRAIN_KEYS
 REQUIRED_COLUMNS_BY_GRAIN = {
-    "event_horizon": ["range_action_event_id", "future_horizon_minutes", "symbol", "category"],
-    "event_horizon_sl": ["range_action_event_id", "future_horizon_minutes", "sl_atr_buffer", "symbol", "category"],
-    "event_horizon_grid": ["range_action_event_id", "future_horizon_minutes", "grid_cell_number", "symbol", "category"],
-    "expanded_scoring_input": ["range_action_event_id", "future_horizon_minutes", "grid_cell_number", "sl_atr_buffer", "symbol", "category"],
+    "event_horizon": [
+        "range_action_event_id",
+        "future_horizon_minutes",
+        "symbol",
+        "category",
+        *PERSISTED_OUTCOME_COLUMNS,
+    ],
+    "event_horizon_sl": [
+        "range_action_event_id",
+        "future_horizon_minutes",
+        "sl_atr_buffer",
+        "symbol",
+        "category",
+        *PERSISTED_OUTCOME_COLUMNS,
+    ],
+    "event_horizon_grid": [
+        "range_action_event_id",
+        "future_horizon_minutes",
+        "grid_cell_number",
+        "symbol",
+        "category",
+        *PERSISTED_OUTCOME_COLUMNS,
+    ],
+    "expanded_scoring_input": [
+        "range_action_event_id",
+        "future_horizon_minutes",
+        "grid_cell_number",
+        "sl_atr_buffer",
+        "symbol",
+        "category",
+        *PERSISTED_OUTCOME_COLUMNS,
+    ],
 }
 REQUIRED_KEYS = [
     *GRAIN_KEYS["expanded_scoring_input"],
@@ -29,6 +80,7 @@ REQUIRED_KEYS = [
     "outcome_match_key",
     "symbol",
     "signal_time_ms",
+    *PERSISTED_OUTCOME_COLUMNS,
 ]
 
 SL_MARKERS = (
@@ -75,7 +127,7 @@ EVENT_ALLOW_EXACT = set(GRAIN_KEYS["event_horizon"]) | {
     "funding_rate_mean",
     "mark_price",
     "mark_price_at_signal",
-    "outcome_end_ms",
+    *PERSISTED_OUTCOME_COLUMNS,
 }
 SL_ALLOW_EXACT = (
     EVENT_ALLOW_EXACT
@@ -109,6 +161,108 @@ CONTRACT_COLUMNS_BY_GRAIN = {
     "event_horizon_grid": sorted(GRID_ALLOW_EXACT),
     "expanded_scoring_input": ["*"],
 }
+
+
+def _persisted_outcome_contract_violations(df: pl.DataFrame) -> list[dict[str, object]]:
+    """Return fail-closed violations for the canonical persisted outcome window."""
+    violations: list[dict[str, object]] = []
+    if LEGACY_OUTCOME_END_COLUMN in df.columns:
+        violations.append(
+            {
+                "type": "legacy_outcome_end_column_forbidden",
+                "column": LEGACY_OUTCOME_END_COLUMN,
+            }
+        )
+    missing = [c for c in PERSISTED_OUTCOME_COLUMNS if c not in df.columns]
+    if missing:
+        violations.append({"type": "missing_persisted_outcome_columns", "columns": missing})
+        return violations
+
+    expected_versions = {
+        "outcome_semantics_version": OUTCOME_SEMANTICS_VERSION,
+        "outcome_window_semantics_version": OUTCOME_WINDOW_SEMANTICS_VERSION,
+        "actionable_event_semantics_version": ACTIONABLE_EVENT_SEMANTICS_VERSION,
+    }
+    for column, expected in expected_versions.items():
+        actual = sorted(str(v) for v in df[column].drop_nulls().unique().to_list())
+        if actual != [expected] or df[column].null_count():
+            violations.append(
+                {
+                    "type": "invalid_semantics_version",
+                    "column": column,
+                    "expected": expected,
+                    "actual": actual,
+                    "null_count": df[column].null_count(),
+                }
+            )
+
+    typed_columns = [
+        "signal_time_ms",
+        "decision_time_ms",
+        "entry_time_ms",
+        CANONICAL_OUTCOME_END_COLUMN,
+        "future_horizon_minutes",
+    ]
+    bool_columns = [
+        "causal_provenance_complete_bool",
+        "future_data_complete_bool",
+        "future_outcome_eligible_bool",
+    ]
+    if any(c not in df.columns for c in typed_columns):
+        return violations
+
+    for index, row in enumerate(df.iter_rows(named=True)):
+        for column in typed_columns:
+            if type(row[column]) is not int:  # bool and float are intentionally rejected
+                violations.append(
+                    {
+                        "type": "invalid_integer_value",
+                        "row": index,
+                        "column": column,
+                    }
+                )
+        for column in bool_columns:
+            if type(row[column]) is not bool:
+                violations.append(
+                    {
+                        "type": "invalid_boolean_value",
+                        "row": index,
+                        "column": column,
+                    }
+                )
+        if any(type(row[c]) is not int for c in typed_columns):
+            continue
+        signal = row["signal_time_ms"]
+        decision = row["decision_time_ms"]
+        entry = row["entry_time_ms"]
+        outcome_end = row[CANONICAL_OUTCOME_END_COLUMN]
+        horizon = row["future_horizon_minutes"]
+        if any(row[column] < 0 for column in typed_columns[:-1]):
+            violations.append({"type": "negative_outcome_timestamp", "row": index})
+        if horizon <= 0:
+            violations.append({"type": "non_positive_horizon", "row": index})
+        if decision != signal:
+            violations.append({"type": "decision_signal_mismatch", "row": index})
+        expected_entry = ((decision // MINUTE_MS) + 1) * MINUTE_MS
+        if entry != expected_entry:
+            violations.append({"type": "entry_not_next_minute", "row": index})
+        if outcome_end != entry + horizon * MINUTE_MS:
+            violations.append(
+                {
+                    "type": "persisted_outcome_end_mismatch",
+                    "row": index,
+                    "expected": entry + horizon * MINUTE_MS,
+                    "actual": outcome_end,
+                }
+            )
+        if row["causal_provenance_complete_bool"] is not True:
+            violations.append({"type": "incomplete_causal_provenance", "row": index})
+        if row["decision_time_source"] != "event_decision_time":
+            violations.append({"type": "invalid_decision_time_source", "row": index})
+        expected_eligible = row["future_data_complete_bool"] is True
+        if row["future_outcome_eligible_bool"] is not expected_eligible:
+            violations.append({"type": "outcome_eligibility_mismatch", "row": index})
+    return violations
 
 
 
@@ -179,6 +333,12 @@ def _source_audit(outcome_run_id: str, df: pl.DataFrame) -> dict[str, object]:
         else df.filter(pl.any_horizontal([pl.col(c).is_null() for c in REQUIRED_KEYS])).height
     )
     unique_ids = df["outcome_id"].n_unique() if "outcome_id" in df.columns else 0
+    unique_match_keys = (
+        df["outcome_match_key"].n_unique() if "outcome_match_key" in df.columns else 0
+    )
+    contract_violations = _persisted_outcome_contract_violations(df)
+    duplicate_outcome_id_count = max(df.height - unique_ids, 0)
+    duplicate_outcome_match_key_count = max(df.height - unique_match_keys, 0)
     audit = {
         "source_outcome_run_id": outcome_run_id,
         "physical_files_found": len(physical),
@@ -187,8 +347,15 @@ def _source_audit(outcome_run_id: str, df: pl.DataFrame) -> dict[str, object]:
         "rows_loaded": df.height,
         "null_key_rows": null_key_rows,
         "unique_outcome_id_count": unique_ids,
-        "duplicate_outcome_id_count": max(df.height - unique_ids, 0),
-        "source_audit_ok": bool(physical) and not missing_cols and null_key_rows == 0,
+        "duplicate_outcome_id_count": duplicate_outcome_id_count,
+        "duplicate_outcome_match_key_count": duplicate_outcome_match_key_count,
+        "persisted_outcome_contract_violations": contract_violations,
+        "source_audit_ok": bool(physical)
+        and not missing_cols
+        and null_key_rows == 0
+        and duplicate_outcome_id_count == 0
+        and duplicate_outcome_match_key_count == 0
+        and not contract_violations,
     }
     if missing_cols:
         audit["missing_required_key_columns"] = missing_cols
@@ -324,6 +491,34 @@ def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dic
     absent = [c for c in REQUIRED_KEYS if c not in df.columns]
     if missing or absent:
         raise ValueError(f"null/missing required outcome keys: null={missing}, missing={absent}")
+    source_duplicate_counts = {
+        "expanded_composite_key": duplicate_count(
+            df, GRAIN_KEYS["expanded_scoring_input"]
+        ),
+        "outcome_id": df.height - df.select("outcome_id").unique().height,
+        "outcome_match_key": df.height - df.select("outcome_match_key").unique().height,
+    }
+    if any(source_duplicate_counts.values()):
+        raise ValueError(
+            json.dumps(
+                {
+                    "grain_contract_audit_ok": False,
+                    "duplicate_source_key_counts": source_duplicate_counts,
+                },
+                sort_keys=True,
+            )
+        )
+    persisted_contract_violations = _persisted_outcome_contract_violations(df)
+    if persisted_contract_violations:
+        raise ValueError(
+            json.dumps(
+                {
+                    "grain_contract_audit_ok": False,
+                    "persisted_outcome_contract_violations": persisted_contract_violations,
+                },
+                sort_keys=True,
+            )
+        )
     forbidden = {}
     inv_counts = {}
     null_counts = {}
@@ -406,6 +601,10 @@ def build_outcome_grains(df: pl.DataFrame) -> tuple[dict[str, pl.DataFrame], dic
         "violations": [n for n, c in dupes.items() if c],
         "cartesian_completeness_ok": cart["cartesian_completeness_ok"],
         "grain_contract_version": GRAIN_CONTRACT_VERSION,
+        "outcome_boundary_semantics_version": OUTCOME_BOUNDARY_SEMANTICS_VERSION,
+        "persisted_outcome_end_required_bool": True,
+        "derived_outcome_end_count": 0,
+        "legacy_outcome_end_column_allowed_bool": False,
         "contract_columns_by_grain": CONTRACT_COLUMNS_BY_GRAIN,
         "forbidden_columns_found_by_grain": forbidden,
         "invariance_violation_count_by_grain": inv_counts,
@@ -449,6 +648,10 @@ def write_outcome_grains(outcome_run_id: str, scoring_run_id: str) -> dict[str, 
                 k: audit[k]
                 for k in [
                     "grain_contract_version",
+                    "outcome_boundary_semantics_version",
+                    "persisted_outcome_end_required_bool",
+                    "derived_outcome_end_count",
+                    "legacy_outcome_end_column_allowed_bool",
                     "contract_columns_by_grain",
                     "forbidden_columns_found_by_grain",
                     "invariance_violation_count_by_grain",
