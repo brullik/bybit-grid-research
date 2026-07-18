@@ -23,12 +23,64 @@ from scripts.check_task_scope import (
     parse_frozen_erratum_v2_manifest_bytes,
     parse_labels_json,
     parse_recovery_bundle_manifest_bytes,
+    run_exact_recovery_bundle_red,
     pr_mode_scope_errors,
     task_definition_base_path_errors,
     task_definition_head_path_errors,
     task_definition_transition_errors,
     task_scope_errors,
 )
+
+
+def _synthetic_recovery_manifest(root: Path, node_names: tuple[str, ...] = ("test_a", "test_b")):
+    from scripts.check_task_scope import RecoveryBundleManifest, RecoveryBundleMember
+
+    test_path = "pm_acceptance/tasks/synthetic/test_contract.py"
+    member = RecoveryBundleMember(
+        "synthetic", 210, "a" * 40, "b" * 64, test_path, "c" * 64,
+        "docs/frozen_contracts/tasks/synthetic.md", "d" * 64, (),
+        tuple(f"{test_path}::{name}" for name in node_names), "synthetic_contract_unavailable",
+    )
+    return RecoveryBundleManifest("synthetic", "synthetic", (member,))
+
+
+def _run_synthetic_recovery_gate(tmp_path: Path, source: str, node_names=("test_a", "test_b")) -> int:
+    root = tmp_path / "head"
+    test = root / "pm_acceptance/tasks/synthetic/test_contract.py"
+    test.parent.mkdir(parents=True)
+    test.write_text(source, encoding="utf-8")
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    return run_exact_recovery_bundle_red(root, _synthetic_recovery_manifest(root, node_names))
+
+
+def test_recovery_bundle_exact_red_gate_accepts_exact_failed_calls(tmp_path: Path):
+    source = (
+        "def test_a():\n    raise AssertionError('synthetic_contract_unavailable')\n\n"
+        "def test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n"
+    )
+    assert _run_synthetic_recovery_gate(tmp_path, source) == 0
+
+
+@pytest.mark.parametrize(
+    ("source", "nodes"),
+    (
+        ("def test_a():\n    pass\n\ndef test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a", "test_b")),
+        ("import pytest\ndef test_a():\n    pytest.skip('no')\ndef test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a", "test_b")),
+        ("import pytest\n@pytest.mark.xfail\ndef test_a():\n    raise AssertionError('synthetic_contract_unavailable')\ndef test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a", "test_b")),
+        ("import pytest\n@pytest.mark.xfail\ndef test_a():\n    pass\ndef test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a", "test_b")),
+        ("import pytest\n@pytest.fixture\ndef bad():\n    raise RuntimeError('setup')\ndef test_a(bad):\n    pass\ndef test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a", "test_b")),
+        ("import pytest\n@pytest.fixture\ndef bad():\n    yield\n    raise RuntimeError('teardown')\ndef test_a(bad):\n    raise AssertionError('synthetic_contract_unavailable')\ndef test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a", "test_b")),
+        ("raise RuntimeError('collection')\n", ("test_a", "test_b")),
+        ("def test_a():\n    raise AssertionError('wrong sentinel')\ndef test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a", "test_b")),
+        ("def test_a():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a", "test_b")),
+        ("def test_a():\n    raise AssertionError('synthetic_contract_unavailable')\ndef test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n", ("test_a",)),
+        ("", ()),
+    ),
+)
+def test_recovery_bundle_exact_red_gate_rejects_outcome_and_collection_anomalies(
+    tmp_path: Path, source: str, nodes: tuple[str, ...]
+):
+    assert _run_synthetic_recovery_gate(tmp_path, source, nodes) == 1
 
 
 def _recovery_bundle_bytes() -> bytes:
