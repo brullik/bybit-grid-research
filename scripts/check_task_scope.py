@@ -1086,6 +1086,11 @@ def recovery_bundle_history_errors(
             "recovery_bundle_suspension_task_not_inactive:"
             f"{suspension_task.task_id}",
         )
+    if manifest.erratum_v1.commit_sha != base_sha:
+        return (
+            "recovery_bundle_erratum_not_current_predecessor:"
+            f"{manifest.erratum_v1.commit_sha}:{base_sha}",
+        )
     return ()
 
 
