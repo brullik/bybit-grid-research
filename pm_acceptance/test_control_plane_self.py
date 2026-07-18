@@ -213,7 +213,22 @@ def _recovery_bundle_bytes() -> bytes:
             "test_sha256": "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513",
         },
     ]
-    obj = {"bundle_id": "p0-recovery-walk-forward-committed-key", "members": members, "schema": "pm_recovery_bundle_v1"}
+    obj = {
+        "bundle_id": "p0-recovery-walk-forward-committed-key",
+        "erratum_v1": {
+            "commit_sha": hashlib.sha1(b"future-156-v1-erratum").hexdigest(),
+            "corrected_test_mode": "100644",
+            "corrected_test_sha256": hashlib.sha256(b"future-156-corrected-test").hexdigest(),
+            "manifest_sha256": hashlib.sha256(b"future-156-v1-manifest").hexdigest(),
+        },
+        "members": members,
+        "schema": "pm_recovery_bundle_v1",
+        "suspension": {
+            "commit_sha": hashlib.sha1(b"future-157-suspension").hexdigest(),
+            "inactive_task_sha256": hashlib.sha256(b"canonical-inactive-task").hexdigest(),
+            "predecessor_commit_sha": hashlib.sha1(b"future-157-merged-implementation").hexdigest(),
+        },
+    }
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
@@ -222,6 +237,17 @@ def test_recovery_bundle_manifest_is_canonical_and_exactly_pinned():
     assert manifest.bundle_id == "p0-recovery-walk-forward-committed-key"
     assert tuple(member.issue_number for member in manifest.members) == (156, 157)
     assert tuple(len(member.expected_red_node_ids) for member in manifest.members) == (32, 20)
+    assert manifest.suspension.predecessor_commit_sha == hashlib.sha1(
+        b"future-157-merged-implementation"
+    ).hexdigest()
+    assert manifest.erratum_v1.manifest_path == (
+        "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json"
+    )
+    assert manifest.erratum_v1.corrected_test_path == (
+        "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/"
+        "test_walk_forward_exclusive_outcome_end.py"
+    )
+    assert manifest.erratum_v1.corrected_test_mode == "100644"
 
 
 def test_recovery_bundle_manifest_rejects_noncanonical_and_substituted_identity():
@@ -251,6 +277,90 @@ def test_recovery_bundle_manifest_rejects_every_real_node_sequence_mutation(muta
     raw = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     with pytest.raises(ValueError):
         parse_recovery_bundle_manifest_bytes(raw)
+
+
+@pytest.mark.parametrize(
+    ("target", "mutation"),
+    (
+        ("top", "missing"),
+        ("top", "unknown"),
+        ("suspension", "missing"),
+        ("suspension", "unknown"),
+        ("erratum_v1", "missing"),
+        ("erratum_v1", "unknown"),
+        ("suspension", "bool"),
+        ("suspension", "short_hash"),
+        ("suspension", "uppercase_hash"),
+        ("suspension", "zero_hash"),
+        ("suspension", "placeholder_hash"),
+        ("suspension", "same_commits"),
+        ("erratum_v1", "short_hash"),
+        ("erratum_v1", "uppercase_hash"),
+        ("erratum_v1", "zero_hash"),
+        ("erratum_v1", "placeholder_hash"),
+        ("erratum_v1", "wrong_mode"),
+    ),
+)
+def test_recovery_bundle_manifest_rejects_unpinned_future_evidence(
+    target: str, mutation: str
+):
+    obj = json.loads(_recovery_bundle_bytes())
+    value = obj if target == "top" else obj[target]
+    if mutation == "missing":
+        value.pop(next(iter(value)))
+    elif mutation == "unknown":
+        value["unexpected"] = "value"
+    elif mutation == "bool":
+        value["commit_sha"] = True
+    elif mutation == "short_hash":
+        value["commit_sha"] = "a" * 39
+    elif mutation == "uppercase_hash":
+        value["commit_sha"] = value["commit_sha"].upper()
+    elif mutation == "zero_hash":
+        key = "inactive_task_sha256" if target == "suspension" else "manifest_sha256"
+        value[key] = "0" * 64
+    elif mutation == "placeholder_hash":
+        key = "inactive_task_sha256" if target == "suspension" else "manifest_sha256"
+        value[key] = "a" * 64
+    elif mutation == "same_commits":
+        value["predecessor_commit_sha"] = value["commit_sha"]
+    elif mutation == "wrong_mode":
+        value["corrected_test_mode"] = "100755"
+    raw = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    with pytest.raises(ValueError, match="^invalid_recovery_bundle_"):
+        parse_recovery_bundle_manifest_bytes(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (
+        b"{\"bundle_id\":\"x\",\"bundle_id\":\"y\"}\n",
+        b"{}",
+        b"\xef\xbb\xbf{}\n",
+        b"{\"value\":1.5}\n",
+        b"{\"value\":NaN}\n",
+        b"\xff\n",
+    ),
+)
+def test_recovery_bundle_manifest_decoder_failures_are_stable(raw: bytes):
+    with pytest.raises(ValueError, match="^invalid_recovery_bundle_json$"):
+        parse_recovery_bundle_manifest_bytes(raw)
+
+
+def test_recovery_bundle_manifest_rejects_wrong_scope_order_and_member_order():
+    for mutate in (
+        lambda obj: obj["members"].reverse(),
+        lambda obj: obj["members"][0]["required_paths"].reverse(),
+        lambda obj: obj["members"][0]["required_paths"].append("src/extra.py"),
+        lambda obj: obj["members"][1]["required_paths"].__setitem__(
+            0, obj["members"][0]["required_paths"][0]
+        ),
+    ):
+        obj = json.loads(_recovery_bundle_bytes())
+        mutate(obj)
+        raw = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        with pytest.raises(ValueError, match="^recovery_bundle_identity_mismatch$"):
+            parse_recovery_bundle_manifest_bytes(raw)
 
 CANONICAL = json.dumps({
     "schema": "pm_active_task_v1",
