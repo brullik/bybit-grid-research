@@ -10,6 +10,10 @@ import pytest
 
 from scripts.check_scoring_review_pack import REQUIRED, check_zip
 
+BOUNDARY_VERSION = "persisted-exclusive-outcome-end-v1"
+GRAIN_VERSION = "grain_contract_v4_persisted_exclusive_outcome_end"
+PACK_VERSION = "scoring_review_pack_v5_persisted_outcome_boundary"
+
 
 def _write_member(root: Path, name: str, payload: object) -> None:
     path = root / name
@@ -19,6 +23,118 @@ def _write_member(root: Path, name: str, payload: object) -> None:
         path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     else:
         path.write_text(str(payload), encoding="utf-8")
+
+
+def _walk_forward_artifacts() -> dict[str, object]:
+    day = 86_400_000
+    bounds = {
+        "train_start_ms": 0,
+        "train_end_ms": 10 * day,
+        "validation_start_ms": 12 * day,
+        "validation_end_ms": 22 * day,
+        "test_start_ms": 24 * day,
+        "test_end_ms": 34 * day,
+        "purge_minutes": 2880,
+        "embargo_minutes": 2880,
+    }
+    ledger = []
+    for index, (role, signal) in enumerate(
+        [("train", 0), ("validation", 13 * day), ("test", 25 * day)]
+    ):
+        entry = ((signal // 60_000) + 1) * 60_000
+        ledger.append(
+            {
+                "fold_id": "wf_000",
+                "range_action_event_id": f"e{index}",
+                "range_regime_id": f"r{index}",
+                "role": role,
+                "exclusion_or_assignment_reason": f"{role}_assigned",
+                "signal_time_ms": signal,
+                "decision_time_ms": signal,
+                "entry_time_ms": entry,
+                "future_horizon_minutes": 2880,
+                "max_outcome_horizon_minutes": 2880,
+                "outcome_end_exclusive_ms": entry + 2880 * 60_000,
+                "future_data_complete_bool": True,
+                "future_outcome_eligible_bool": True,
+                "outcome_semantics_version": "v5_exact_outcome_window_provenance",
+                "outcome_window_semantics_version": "exact-minute-outcome-window-v1",
+                "actionable_event_semantics_version": (
+                    "range-actionable-prefix-invariance-v1"
+                ),
+                "decision_time_source": "event_decision_time",
+                "causal_provenance_complete_bool": True,
+                "symbol": "BTCUSDT",
+                **bounds,
+                "outcome_boundary_semantics_version": BOUNDARY_VERSION,
+                "persisted_outcome_end_required_bool": True,
+                "derived_outcome_end_count": 0,
+                "legacy_outcome_end_column_allowed_bool": False,
+            }
+        )
+    split_excluded = {"exclusion_or_assignment_reason", "max_outcome_horizon_minutes"}
+    splits = [{k: v for k, v in row.items() if k not in split_excluded} for row in ledger]
+    reason_summary = [
+        {
+            "fold_id": "wf_000",
+            "exclusion_or_assignment_reason": reason,
+            "event_count": sum(
+                row["exclusion_or_assignment_reason"] == reason for row in ledger
+            ),
+            "outcome_boundary_semantics_version": BOUNDARY_VERSION,
+        }
+        for reason in [
+            "missing_max_horizon",
+            "ineligible_max_horizon",
+            "outside_fold_window",
+            "purge_gap",
+            "embargo_gap",
+            "train_horizon_boundary",
+            "validation_horizon_boundary",
+            "test_horizon_boundary",
+            "cross_role_regime_excluded",
+            "train_assigned",
+            "validation_assigned",
+            "test_assigned",
+            "unassigned",
+        ]
+    ]
+    fold_summary = {
+        "fold_id": ["wf_000"],
+        "coverage_reconciliation_ok": [True],
+        "coverage_reconciliation_delta": [0],
+        "unassigned_event_count": [0],
+        "train_events": [1],
+        "validation_events": [1],
+        "test_events": [1],
+        "actual_train_days": [10],
+        "configured_train_days": [10],
+        "purge_gap_minutes": [2880],
+        "embargo_gap_minutes": [2880],
+        "source_event_count": [3],
+        "missing_max_horizon_count": [0],
+        "ineligible_max_horizon_count": [0],
+        "outside_fold_window_count": [0],
+        "purge_gap_event_count": [0],
+        "embargo_gap_event_count": [0],
+        "cross_role_regime_excluded_event_count": [0],
+        "train_horizon_boundary_excluded_count": [0],
+        "validation_horizon_boundary_excluded_count": [0],
+        "test_horizon_boundary_excluded_count": [0],
+        "sufficient_for_parameter_selection_bool": [False],
+        "sufficient_for_state_machine_engineering_bool": [True],
+        "outcome_boundary_semantics_version": [BOUNDARY_VERSION],
+        "persisted_outcome_end_required_bool": [True],
+        "derived_outcome_end_count": [0],
+        "legacy_outcome_end_column_allowed_bool": [False],
+        **{key: [value] for key, value in bounds.items()},
+    }
+    return {
+        "walk_forward_event_eligibility.parquet": ledger,
+        "walk_forward_splits.parquet": splits,
+        "walk_forward_exclusion_reason_summary.parquet": reason_summary,
+        "walk_forward_fold_summary.parquet": fold_summary,
+    }
 
 
 def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
@@ -56,7 +172,11 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
         "outcome_grain_contract_audit.json": {
             "grain_contract_audit_ok": True,
             "synthetic_row_risk_detected_bool": False,
-            "grain_contract_version": "grain_contract_v3_whole_row",
+            "grain_contract_version": GRAIN_VERSION,
+            "outcome_boundary_semantics_version": BOUNDARY_VERSION,
+            "persisted_outcome_end_required_bool": True,
+            "derived_outcome_end_count": 0,
+            "legacy_outcome_end_column_allowed_bool": False,
             "category_present_by_grain": {},
             "category_values_by_grain": {},
             "null_required_column_counts_by_grain": {},
@@ -71,9 +191,31 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
             "walk_forward_coverage_audit_ok": True,
             "coverage_reconciliation_ok": True,
             "sufficient_for_parameter_selection_bool": False,
+            "risk_budget_proven_bool": False,
+            "live_authorized_bool": False,
+            "outcome_boundary_semantics_version": BOUNDARY_VERSION,
+            "persisted_outcome_end_required_bool": True,
+            "derived_outcome_end_count": 0,
+            "legacy_outcome_end_column_allowed_bool": False,
+            "full_disposition_ledger_bool": True,
+            "disposition_ledger_reconciliation_ok": True,
+            "disposition_ledger_row_count": 3,
+            "disposition_ledger_expected_row_count": 3,
         },
-        "walk_forward_leakage_audit_summary.json": {"leakage_audit_ok": True},
-        "walk_forward_temporal_leakage_audit.json": {"temporal_leakage_audit_ok": True},
+        "walk_forward_leakage_audit_summary.json": {
+            "leakage_audit_ok": True,
+            "outcome_boundary_semantics_version": BOUNDARY_VERSION,
+            "persisted_outcome_end_required_bool": True,
+            "derived_outcome_end_count": 0,
+            "legacy_outcome_end_column_allowed_bool": False,
+        },
+        "walk_forward_temporal_leakage_audit.json": {
+            "temporal_leakage_audit_ok": True,
+            "outcome_boundary_semantics_version": BOUNDARY_VERSION,
+            "persisted_outcome_end_required_bool": True,
+            "derived_outcome_end_count": 0,
+            "legacy_outcome_end_column_allowed_bool": False,
+        },
         "outcome_category_normalization_audit.json": {
             "category_normalization_ok": True,
             "rows_before": 2,
@@ -117,21 +259,7 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
         "cost_scenario_summary.parquet": {"x": [1]},
         "score_component_summary.parquet": {"x": [1]},
         "outcome_scoring_summary.parquet": {"x": [1]},
-        "walk_forward_exclusion_reason_summary.parquet": {"x": [1]},
-        "walk_forward_fold_summary.parquet": {
-            "coverage_reconciliation_ok": [True],
-            "coverage_reconciliation_delta": [0],
-            "unassigned_event_count": [0],
-            "train_events": [1],
-            "validation_events": [1],
-            "test_events": [1],
-            "actual_train_days": [10],
-            "configured_train_days": [10],
-            "purge_gap_minutes": [2880],
-            "embargo_gap_minutes": [2880],
-            "sufficient_for_parameter_selection_bool": [False],
-            "sufficient_for_state_machine_engineering_bool": [True],
-        },
+        **_walk_forward_artifacts(),
     }
     for name in REQUIRED - {"review_pack_manifest.json"}:
         if name in jsons:
@@ -145,7 +273,7 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
         for n in REQUIRED - {"review_pack_manifest.json"}
     }
     manifest = {
-        "review_pack_schema_version": "scoring_review_pack_v4_audit_complete",
+        "review_pack_schema_version": PACK_VERSION,
         "manifest_hash_policy": "self_excluded_v1",
         "review_phase": "state_machine_engineering_ready",
         "parameter_selection_authorized_bool": False,
@@ -154,7 +282,8 @@ def _valid_pack(tmp_path: Path, run_id: str = "run_x") -> Path:
         "source_outcome_run_id": "outcome_x",
         "fee_snapshot_id_resolved": "snap",
         "cost_formula_version": "cost_formula_v2_asymmetric_slippage",
-        "grain_contract_version": "grain_contract_v3_whole_row",
+        "grain_contract_version": GRAIN_VERSION,
+        "outcome_boundary_semantics_version": BOUNDARY_VERSION,
         "canonical_score_version": "v3",
         "risk_budget_proven_bool": False,
         "members": sorted(REQUIRED),
@@ -187,6 +316,11 @@ def _mutate_manifest(zpath: Path, tmp_path: Path, field: str, value: object) -> 
         ("risk_budget_proven_bool", True, "manifest_risk_budget_proven_bool"),
         ("canonical_score_version", "v999", "manifest_canonical_score_version"),
         ("grain_contract_version", "wrong", "manifest_grain_contract_version"),
+        (
+            "outcome_boundary_semantics_version",
+            "legacy-derived-signal-end-v0",
+            "manifest_outcome_boundary_semantics_version",
+        ),
         ("source_outcome_run_id", "other", "manifest_source_outcome_run_id"),
         ("fee_snapshot_id_resolved", "other", "manifest_fee_snapshot_id_resolved"),
         ("cost_formula_version", "other", "manifest_cost_formula_version"),
@@ -211,7 +345,7 @@ def test_checker_requires_and_validates_new_audits_and_manifest_hashes(tmp_path:
     zpath = _valid_pack(tmp_path)
     res = check_zip(str(zpath), "run_x")
     assert res["review_pack_ok"] is True
-    assert len(res["members"]) == 29
+    assert len(res["members"]) == 31
 
 
 def test_checker_detects_tampered_required_member_by_hash(tmp_path: Path):
