@@ -332,3 +332,4 @@ def test_checker_missing_zip_returns_json_without_traceback(tmp_path: Path):
         "scoring_run_id": "run_x",
     }
     assert "Traceback" not in res.stderr
+# Mandatory RED probe for issue #156 (6/8); behavior intentionally unchanged.
