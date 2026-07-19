@@ -316,6 +316,41 @@ jobs:
           cp base/scripts/check_task_scope.py "$RUNNER_TEMP/scripts/check_task_scope.py"
           cp base/.github/workflows/pm-acceptance.yml "$RUNNER_TEMP/.github/workflows/pm-acceptance.yml"
           printf '[pytest]\n' > "$RUNNER_TEMP/pytest.ini"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"])
+          head = workspace / "head"
+          base = workspace / "base"
+          frozen = Path(os.environ["RUNNER_TEMP"]) / "frozen_execution"
+          if frozen.exists() or frozen.is_symlink():
+              raise SystemExit("frozen_execution_already_exists")
+          frozen.mkdir()
+          for source in head.iterdir():
+              if source.name == "pm_acceptance":
+                  continue
+              destination = frozen / source.name
+              if source.is_dir():
+                  shutil.copytree(source, destination)
+              elif source.is_file():
+                  shutil.copy2(source, destination)
+              else:
+                  raise SystemExit(f"frozen_execution_unsupported_entry:{source.name}")
+          shutil.copytree(base / "pm_acceptance", frozen / "pm_acceptance")
+          shutil.copytree(base / "docs/frozen_contracts", frozen / "frozen_contracts")
+          for checker in ("check_protected_paths.py", "check_task_scope.py"):
+              shutil.copy2(base / "scripts" / checker, frozen / "scripts" / checker)
+          frozen_workflow = frozen / ".github/workflows/pm-acceptance.yml"
+          frozen_workflow.unlink(missing_ok=True)
+          frozen_workflow.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(base / ".github/workflows/pm-acceptance.yml", frozen_workflow)
+          (frozen / "pytest.ini").write_text(
+              "[pytest]\npythonpath = src .\n",
+              encoding="utf-8",
+          )
+          PY
       - name: Run base isolated acceptance harness
         if: needs.protected-paths.outputs.pr-mode == 'implementation'
         working-directory: ${{ runner.temp }}
@@ -329,12 +364,12 @@ jobs:
           if [ "$TASK_ID" = "p0-recovery-walk-forward-committed-key" ] && \
              case "$HEAD_REF" in probe/*) true;; *) false;; esac; then
             python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
-              --exact-recovery-root "$RUNNER_TEMP" \
+              --exact-recovery-root "$RUNNER_TEMP/frozen_execution" \
               --recovery-manifest \
-                "$RUNNER_TEMP/pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+                "$RUNNER_TEMP/frozen_execution/pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
           else
             python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
-              --exact-acceptance-root "$RUNNER_TEMP"
+              --exact-acceptance-root "$RUNNER_TEMP/frozen_execution"
           fi
       - name: Run base control-plane self-tests for PM-owned PRs
         if: needs.protected-paths.outputs.pr-mode != 'implementation'
@@ -355,7 +390,7 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
           python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
-            --exact-acceptance-root "$RUNNER_TEMP"
+            --exact-acceptance-root "$RUNNER_TEMP/frozen_execution"
       - name: Stage head control-plane self-tests
         if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
         env:
@@ -1130,6 +1165,13 @@ jobs:
               )
           )
           PY
+      - name: Stage disposable ordinary execution tree
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          test ! -e "$RUNNER_TEMP/ordinary_execution"
+          mkdir -p "$RUNNER_TEMP/ordinary_execution"
+          cp -R head/. "$RUNNER_TEMP/ordinary_execution/"
       - name: Run supplemental PR checks
         working-directory: head
         env:
@@ -1146,7 +1188,7 @@ jobs:
           python scripts/check_no_live_execution.py
           python -m compileall -q src tests scripts
           python "$RUNNER_TEMP/scripts/check_task_scope.py" \
-            --exact-ordinary-root "${{ github.workspace }}/head"
+            --exact-ordinary-root "$RUNNER_TEMP/ordinary_execution"
           ruff check .
           git --no-replace-objects -C ../head_checkout diff --check "$BASE_SHA"..."$HEAD_SHA"
       - name: Verify immutable Git-object snapshots unchanged
@@ -1405,10 +1447,10 @@ jobs:
               "acceptance": os.environ["ACCEPTANCE_RESULT"],
           }
           upstream_success = all(result == "success" for result in results.values())
-          ready = os.environ["PR_DRAFT"] == "false"
+          ready = live_identity["draft"] == "false"
           owner_authored = os.environ["PR_AUTHOR"] == "brullik"
           non_probe = not os.environ["HEAD_REF"].startswith("probe/")
-          successful = upstream_success and owner_authored and non_probe
+          successful = upstream_success and ready and owner_authored and non_probe
           if successful:
               state = "success"
           elif upstream_success or any(result == "failure" for result in results.values()):

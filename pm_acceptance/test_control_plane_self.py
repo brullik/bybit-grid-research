@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -1590,10 +1591,11 @@ def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
     assert "statuses: write" not in acceptance
     assert "needs: [status-pending, protected-paths, acceptance]" in final
     assert 'upstream_success = all(result == "success" for result in results.values())' in final
-    assert 'ready = os.environ["PR_DRAFT"] == "false"' in final
+    assert 'ready = live_identity["draft"] == "false"' in final
     assert 'owner_authored = os.environ["PR_AUTHOR"] == "brullik"' in final
     assert 'non_probe = not os.environ["HEAD_REF"].startswith("probe/")' in final
-    assert "successful = upstream_success and owner_authored and non_probe" in final
+    assert "successful = upstream_success and ready and owner_authored and non_probe" in final
+    assert "successful = upstream_success and owner_authored and non_probe" not in final
     assert 'elif upstream_success or any(result == "failure" for result in results.values())' in final
     assert 'state = "error"' in final
     assert 'summary[:140]' in final
@@ -1660,6 +1662,143 @@ def test_workflow_rebuilds_exact_git_object_snapshots_only_after_install():
     assert '"show"' in acceptance
     assert "snapshot_destination_already_exists" in acceptance
     assert "snapshot_source_changed_after_install" in acceptance
+
+
+def test_workflow_frozen_execution_tree_uses_head_code_and_base_acceptance(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    acceptance = workflow.split("\n  acceptance:\n", 1)[1].split("\n  status-final:\n", 1)[0]
+    stage = acceptance.split("      - name: Stage base-controlled acceptance harness\n", 1)[1].split(
+        "      - name: Run base isolated acceptance harness\n",
+        1,
+    )[0]
+    execute = acceptance.split("      - name: Run base isolated acceptance harness\n", 1)[1].split(
+        "      - name: Run base control-plane self-tests for PM-owned PRs\n",
+        1,
+    )[0]
+
+    assert 'Path(os.environ["RUNNER_TEMP"]) / "frozen_execution"' in stage
+    assert "for source in head.iterdir():" in stage
+    assert 'if source.name == "pm_acceptance":' in stage
+    assert "shutil.copytree(source, destination)" in stage
+    assert 'shutil.copytree(base / "pm_acceptance", frozen / "pm_acceptance")' in stage
+    assert 'for checker in ("check_protected_paths.py", "check_task_scope.py"):' in stage
+    assert 'base / ".github/workflows/pm-acceptance.yml"' in stage
+    assert '--exact-acceptance-root "$RUNNER_TEMP/frozen_execution"' in execute
+
+    stage_source = textwrap.dedent(
+        stage.split("          python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+    )
+    head = tmp_path / "head"
+    base = tmp_path / "base"
+    runner_temp = tmp_path / "runner"
+    runner_temp.mkdir()
+    package = head / "src/bybit_grid/research"
+    scripts = head / "scripts"
+    tests = head / "tests"
+    head_acceptance = head / "pm_acceptance"
+    package.mkdir(parents=True)
+    scripts.mkdir()
+    tests.mkdir()
+    head_acceptance.mkdir()
+    (package.parent / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "anchor.py").write_text("VALUE = 1\n", encoding="utf-8")
+    for dependency in ("audit_outcome_semantics.py", "build_range_candidates.py"):
+        (scripts / dependency).write_text("VALUE = 1\n", encoding="utf-8")
+    for checker in ("check_protected_paths.py", "check_task_scope.py"):
+        (scripts / checker).write_text("HEAD_CONTROL = True\n", encoding="utf-8")
+    (tests / "test_existing.py").write_text("def test_existing():\n    assert True\n", encoding="utf-8")
+    (head_acceptance / "test_untrusted.py").write_text(
+        "def test_untrusted():\n    assert False\n",
+        encoding="utf-8",
+    )
+    (head / ".github/workflows").mkdir(parents=True)
+    (head / ".github/workflows/pm-acceptance.yml").write_text("head: true\n", encoding="utf-8")
+
+    acceptance_root = base / "pm_acceptance"
+    acceptance_root.mkdir(parents=True)
+    (acceptance_root / "test_script_topology.py").write_text(
+        "import importlib.util\n"
+        "from pathlib import Path\n"
+        "import bybit_grid.research.anchor as anchor\n\n"
+        "def test_script_topology():\n"
+        "    root = Path(anchor.__file__).resolve().parents[3]\n"
+        "    for name in ('audit_outcome_semantics.py', 'build_range_candidates.py'):\n"
+        "        path = root / 'scripts' / name\n"
+        "        spec = importlib.util.spec_from_file_location(name, path)\n"
+        "        assert spec is not None and spec.loader is not None\n"
+        "        module = importlib.util.module_from_spec(spec)\n"
+        "        spec.loader.exec_module(module)\n",
+        encoding="utf-8",
+    )
+    (base / "docs/frozen_contracts").mkdir(parents=True)
+    (base / "docs/frozen_contracts/contract.md").write_text("base\n", encoding="utf-8")
+    (base / "scripts").mkdir()
+    for checker in ("check_protected_paths.py", "check_task_scope.py"):
+        (base / "scripts" / checker).write_text("BASE_CONTROL = True\n", encoding="utf-8")
+    (base / ".github/workflows").mkdir(parents=True)
+    (base / ".github/workflows/pm-acceptance.yml").write_text("base: true\n", encoding="utf-8")
+
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
+    exec(compile(stage_source, "pm-acceptance-frozen-stage", "exec"), {})
+    frozen = runner_temp / "frozen_execution"
+    assert not (frozen / "pm_acceptance/test_untrusted.py").exists()
+    assert (frozen / "scripts/check_task_scope.py").read_text() == "BASE_CONTROL = True\n"
+    assert (frozen / ".github/workflows/pm-acceptance.yml").read_text() == "base: true\n"
+    assert run_exact_acceptance_tests(frozen) == 0
+    assert '"collected_count":1' in capsys.readouterr().out
+
+
+def test_workflow_runs_artifact_writing_ordinary_tests_off_snapshot(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    acceptance = workflow.split("\n  acceptance:\n", 1)[1].split("\n  status-final:\n", 1)[0]
+    assert "- name: Stage disposable ordinary execution tree" in acceptance
+    assert 'cp -R head/. "$RUNNER_TEMP/ordinary_execution/"' in acceptance
+    assert '--exact-ordinary-root "$RUNNER_TEMP/ordinary_execution"' in acceptance
+    assert '--exact-ordinary-root "${{ github.workspace }}/head"' not in acceptance
+
+    source = tmp_path / "head"
+    tests = source / "tests"
+    tests.mkdir(parents=True)
+    (source / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
+    artifact_paths = tuple(
+        [f"data/processed/generated-{index}.json" for index in range(8)]
+        + [f"reports/generated-{index}.md" for index in range(5)]
+    )
+    (tests / "test_generated_outputs.py").write_text(
+        "from pathlib import Path\n\n"
+        f"ARTIFACTS = {artifact_paths!r}\n\n"
+        "def test_generates_real_suite_output_shapes():\n"
+        "    for name in ARTIFACTS:\n"
+        "        path = Path(name)\n"
+        "        path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "        path.write_text('generated', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    def inventory(root: Path) -> dict[str, str]:
+        return {
+            path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    pristine = inventory(source)
+    execution = tmp_path / "ordinary_execution"
+    shutil.copytree(source, execution)
+    assert run_exact_ordinary_tests(execution) == 0
+    assert '"collected_count":1' in capsys.readouterr().out
+    assert inventory(source) == pristine
+    assert all((execution / path).is_file() for path in artifact_paths)
+    assert all(not (source / path).exists() for path in artifact_paths)
 
 
 def test_workflow_finalizer_rechecks_live_main_and_paginates_review_threads():
@@ -1942,9 +2081,13 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
     }
     live_head_sha = overrides.pop("MOCK_LIVE_HEAD_SHA", environment["HEAD_SHA"])
     live_main_sha = overrides.pop("MOCK_LIVE_MAIN_SHA", environment["EXPECTED_BASE_SHA"])
+    mock_live_draft = overrides.pop("MOCK_LIVE_DRAFT", None)
     unresolved = overrides.pop("MOCK_UNRESOLVED", "false") == "true"
     paginated = overrides.pop("MOCK_PAGINATED", "false") == "true"
     environment.update(overrides)
+    live_draft = (
+        environment["PR_DRAFT"] if mock_live_draft is None else mock_live_draft
+    ) == "true"
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
@@ -1975,7 +2118,7 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
                     "repo": {"full_name": environment["PR_BASE_REPOSITORY"]},
                     "sha": environment["EXPECTED_BASE_SHA"],
                 },
-                "draft": environment["PR_DRAFT"] == "true",
+                "draft": live_draft,
                 "head": {
                     "ref": environment["HEAD_REF"],
                     "repo": {"full_name": environment["PR_HEAD_REPOSITORY"]},
@@ -2028,7 +2171,7 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
     return exit_reason, captured
 
 
-def test_final_status_script_succeeds_for_owner_non_probe_and_draft_can_progress(monkeypatch):
+def test_final_status_script_succeeds_only_for_fresh_ready_owner_non_probe(monkeypatch):
     exit_reason, payload = _execute_final_status_script(monkeypatch)
     assert exit_reason is None
     assert payload["state"] == "success"
@@ -2040,9 +2183,17 @@ def test_final_status_script_succeeds_for_owner_non_probe_and_draft_can_progress
     assert payload["graph_calls"] == "2"
 
     exit_reason, payload = _execute_final_status_script(monkeypatch, PR_DRAFT="true")
-    assert exit_reason is None
-    assert payload["state"] == "success"
+    assert exit_reason == "pm_acceptance_failed"
+    assert payload["state"] == "failure"
     assert "ready=false" in payload["description"]
+
+    exit_reason, payload = _execute_final_status_script(
+        monkeypatch,
+        PR_DRAFT="true",
+        MOCK_LIVE_DRAFT="false",
+    )
+    assert exit_reason == "live_pull_request_identity_mismatch"
+    assert "state" not in payload
 
     for ineligible in (
         {"PR_AUTHOR": "someone-else"},
