@@ -1983,6 +1983,155 @@ def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
     assert "statuses: write" not in acceptance
 
 
+def test_workflow_validates_current_trusted_pr_identity_before_head_fetch(monkeypatch):
+    import urllib.request
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    protected = workflow.split("\n  protected-paths:\n", 1)[1].split("\n  acceptance:\n", 1)[0]
+    checkout_at = protected.index("      - uses: actions/checkout@v4\n")
+    step_marker = "      - name: Validate current trusted PR identity before head fetch\n"
+    preflight_at = protected.index(step_marker)
+    fetch_at = protected.index("      - name: Fetch PR head for diff only\n")
+    assert checkout_at < preflight_at < fetch_at
+
+    step = protected[preflight_at:].split("\n      - name: ", 1)[0]
+    assert "GH_TOKEN: ${{ github.token }}" in step
+    assert "python - <<'PY'\n" in step
+    source = step.split("python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+    source = textwrap.dedent(source)
+    assert "subprocess" not in source
+
+    owner = "brullik"
+    repository = "brullik/bybit-grid-research"
+    head_sha = "1" * 40
+    base_sha = "2" * 40
+    ordinary_labels = ["pm-control-plane"]
+    event = {
+        "GITHUB_EVENT_NAME": "pull_request_target",
+        "EVENT_ACTION": "synchronize",
+        "EVENT_SENDER": owner,
+        "EVENT_PR_AUTHOR": owner,
+        "EVENT_REPOSITORY": repository,
+        "EVENT_BASE_REPOSITORY": repository,
+        "EVENT_HEAD_REPOSITORY": repository,
+        "EVENT_BASE_REF": "main",
+        "EVENT_PR_NUMBER": "210",
+        "EVENT_HEAD_SHA": head_sha,
+        "EVENT_BASE_SHA": base_sha,
+        "EVENT_LABELS_JSON": json.dumps(ordinary_labels),
+        "EVENT_DRAFT": "false",
+        "GH_TOKEN": "test-token",
+        "API_URL": "https://api.github.test",
+    }
+    live_pr = {
+        "number": 210,
+        "state": "open",
+        "draft": False,
+        "user": {"login": owner},
+        "head": {"sha": head_sha, "repo": {"full_name": repository}},
+        "base": {
+            "sha": base_sha,
+            "ref": "main",
+            "repo": {"full_name": repository},
+        },
+        "labels": [{"name": label} for label in ordinary_labels],
+    }
+    live_main = {"ref": "refs/heads/main", "object": {"sha": base_sha, "type": "commit"}}
+
+    class Response:
+        status = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def execute(*, event_changes=None, pr_changes=None, main_changes=None):
+        current_event = dict(event)
+        current_event.update(event_changes or {})
+        current_pr = json.loads(json.dumps(live_pr))
+        current_pr.update(pr_changes or {})
+        current_main = json.loads(json.dumps(live_main))
+        current_main.update(main_changes or {})
+        requests = []
+
+        def urlopen(request, timeout):
+            requests.append(request)
+            assert timeout == 30
+            assert isinstance(request, urllib.request.Request)
+            assert request.get_method() == "GET"
+            assert request.data is None
+            assert request.headers["Authorization"] == "Bearer test-token"
+            if request.full_url in {
+                f"https://api.github.test/repos/{repository}/pulls/210",
+                f"https://api.github.test/repos/{repository}/pulls/211",
+            }:
+                return Response(current_pr)
+            if request.full_url == f"https://api.github.test/repos/{repository}/git/ref/heads/main":
+                return Response(current_main)
+            raise AssertionError(f"unexpected_request:{request.full_url}")
+
+        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+        with monkeypatch.context() as context:
+            for key, value in current_event.items():
+                context.setenv(key, value)
+            exec(compile(source, "<trusted-live-identity-preflight>", "exec"), {"__name__": "__main__"})
+        assert [request.get_method() for request in requests] == ["GET", "GET"]
+
+    execute()
+
+    cases = (
+        ({"GITHUB_EVENT_NAME": "pull_request"}, None, None, "invalid_event_name"),
+        ({"EVENT_ACTION": "closed"}, None, None, "invalid_event_action"),
+        ({"EVENT_SENDER": "mallory"}, None, None, "invalid_event_sender"),
+        ({"EVENT_PR_AUTHOR": "mallory"}, None, None, "invalid_event_pr_author"),
+        ({"EVENT_REPOSITORY": "mallory/fork"}, None, None, "invalid_event_repository"),
+        ({"EVENT_BASE_REPOSITORY": "mallory/fork"}, None, None, "invalid_event_base_repository"),
+        ({"EVENT_HEAD_REPOSITORY": "mallory/fork"}, None, None, "invalid_event_head_repository"),
+        ({"EVENT_BASE_REF": "release"}, None, None, "invalid_event_base_ref"),
+        ({"EVENT_PR_NUMBER": "210x"}, None, None, "invalid_pr_number"),
+        ({"EVENT_PR_NUMBER": "211"}, None, None, "pr_number_mismatch"),
+        ({"EVENT_HEAD_SHA": "3" * 40}, None, None, "stale_event_head_sha"),
+        ({"EVENT_BASE_SHA": "3" * 40}, None, None, "stale_event_base_sha"),
+        (None, None, {"object": {"sha": "3" * 40, "type": "commit"}}, "base_not_current_main"),
+        (None, {"state": "closed"}, None, "live_pr_not_open"),
+        ({"EVENT_LABELS_JSON": '["implementation"]'}, None, None, "live_label_drift"),
+        (
+            {"EVENT_LABELS_JSON": '["pm-recovery-bundle", "extra"]', "EVENT_DRAFT": "true"},
+            {"draft": True, "labels": [{"name": "pm-recovery-bundle"}, {"name": "extra"}]},
+            None,
+            "invalid_recovery_labels",
+        ),
+        (
+            {"EVENT_LABELS_JSON": '["pm-recovery-bundle"]', "EVENT_DRAFT": "true"},
+            {"draft": True, "labels": []},
+            None,
+            "invalid_recovery_labels",
+        ),
+        (
+            {"EVENT_LABELS_JSON": '["pm-recovery-bundle"]'},
+            {"labels": [{"name": "pm-recovery-bundle"}]},
+            None,
+            "recovery_pr_not_draft",
+        ),
+    )
+    for event_changes, pr_changes, main_changes, reason in cases:
+        with pytest.raises(SystemExit) as raised:
+            execute(
+                event_changes=event_changes,
+                pr_changes=pr_changes,
+                main_changes=main_changes,
+            )
+        assert str(raised.value) == reason
+
+
 def _run_exact_control_plane_gate(
     tmp_path: Path,
     *,
