@@ -59,7 +59,11 @@ def _run_synthetic_recovery_gate(tmp_path: Path, source: str, node_names=("test_
     return run_exact_recovery_bundle_red(root, _synthetic_recovery_manifest(root, node_names))
 
 
-def _build_recovery_bundle_erratum_predecessor_fixture(tmp_path: Path):
+def _build_recovery_bundle_erratum_predecessor_fixture(
+    tmp_path: Path,
+    *,
+    extra_activation_path: bool = False,
+):
     from scripts.check_task_scope import (
         RecoveryBundleManifest,
         RecoveryBundleMember,
@@ -68,7 +72,10 @@ def _build_recovery_bundle_erratum_predecessor_fixture(tmp_path: Path):
     )
 
     repo, suspension_sha, erratum_sha, task, _base_test, _head_test = (
-        _build_frozen_erratum_repo(tmp_path)
+        _build_frozen_erratum_repo(
+            tmp_path,
+            extra_activation_path=extra_activation_path,
+        )
     )
     activation_sha = _git(repo, "rev-parse", f"{suspension_sha}^")
     manifest_path = "pm_acceptance/errata/task-a.json"
@@ -511,6 +518,26 @@ def test_recovery_history_requires_v1_erratum_as_current_predecessor(tmp_path: P
         os.chdir(repo)
         assert check_task_scope.recovery_bundle_history_errors(base_sha, manifest) == (
             f"recovery_bundle_erratum_not_current_predecessor:{erratum_sha}:{base_sha}",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_recovery_history_rejects_erratum_member_activation_extra_path(tmp_path: Path):
+    import scripts.check_task_scope as check_task_scope
+
+    repo, _suspension_sha, erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(
+            tmp_path,
+            extra_activation_path=True,
+        )
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(erratum_sha, manifest) == (
+            "recovery_bundle_activation_changed_paths_mismatch:task-a",
         )
     finally:
         os.chdir(old_cwd)
@@ -2405,6 +2432,7 @@ def _build_frozen_erratum_repo(
     base_test: bytes | None = None,
     head_test: bytes | None = None,
     manifest_transform=None,
+    extra_activation_path: bool = False,
 ) -> tuple[Path, str, str, ActiveTask, bytes, bytes]:
     repo = tmp_path / "erratum-repo"
     test_path = repo / "pm_acceptance/tasks/task-a/test_contract.py"
@@ -2421,17 +2449,24 @@ def _build_frozen_erratum_repo(
         )
     if head_test is None:
         head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid-zip"')
-    test_path.write_bytes(base_test)
-    contract_path.write_text("# Frozen task\n")
     active_path.parent.mkdir(parents=True, exist_ok=True)
     task = _active_task()
-    active_path.write_bytes(_task_bytes(task))
+    active_path.write_bytes(CANONICAL)
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "pm@example.test")
     _git(repo, "config", "user.name", "PM")
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "canonical inactive root")
+
+    active_path.write_bytes(_task_bytes(task))
+    test_path.write_bytes(base_test)
+    contract_path.write_text("# Frozen task\n")
+    if extra_activation_path:
+        (repo / "unrelated.txt").write_text("unrelated activation path\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "historical active task")
     historical_active = _git(repo, "rev-parse", "HEAD")
+
     active_path.write_bytes(CANONICAL)
     _git(repo, "add", "pm_acceptance/active_task.json")
     _git(repo, "commit", "-q", "-m", "inactive base with frozen task")
