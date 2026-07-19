@@ -967,6 +967,25 @@ def test_recovery_bundle_exact_red_gate_accepts_exact_failed_calls(tmp_path: Pat
     assert _run_synthetic_recovery_gate(tmp_path, source) == 0
 
 
+def test_recovery_bundle_exact_red_gate_accepts_tracked_pyproject_configuration(
+    tmp_path: Path,
+):
+    root = tmp_path / "head"
+    test = root / "pm_acceptance/tasks/synthetic/test_contract.py"
+    test.parent.mkdir(parents=True)
+    test.write_text(
+        "def test_a():\n    raise AssertionError('synthetic_contract_unavailable')\n\n"
+        "def test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n",
+        encoding="utf-8",
+    )
+    (root / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\naddopts = []\n",
+        encoding="utf-8",
+    )
+
+    assert run_exact_recovery_bundle_red(root, _synthetic_recovery_manifest(root)) == 0
+
+
 def test_recovery_bundle_exact_red_gate_rechecks_pinned_files_after_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1019,10 +1038,10 @@ def test_recovery_bundle_commit_runner_stages_only_immutable_git_blobs(
     )
     committed = {
         manifest_path: b"committed manifest\n",
-        "pytest.ini": b"[pytest]\n",
+        "pyproject.toml": b"[tool.pytest.ini_options]\naddopts = []\n",
         manifest.members[0].test_path: b"committed frozen tests\n",
     }
-    (source_root / "pytest.ini").write_text("mutated checkout\n", encoding="utf-8")
+    (source_root / "pyproject.toml").write_text("mutated checkout\n", encoding="utf-8")
 
     def fake_git_blob(ref, path, *, cwd=None):
         assert ref == "a" * 40

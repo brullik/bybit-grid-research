@@ -1824,12 +1824,15 @@ def run_exact_recovery_bundle_red(
         for node_id in member.expected_red_node_ids
     }
     test_paths = [root / member.test_path for member in manifest.members]
+    config_names = ("pytest.ini", "pyproject.toml")
+    config_paths = [root / name for name in config_names if (root / name).is_file()]
 
     def pinned_files_match() -> bool:
         if pinned_files is None:
             return True
-        required = {"pytest.ini", *(member.test_path for member in manifest.members)}
-        if not required.issubset(pinned_files):
+        required = {member.test_path for member in manifest.members}
+        pinned_configs = [name for name in config_names if name in pinned_files]
+        if not required.issubset(pinned_files) or len(pinned_configs) != 1:
             return False
         for relative_path, expected_bytes in pinned_files.items():
             if _path_error(relative_path) is not None or type(expected_bytes) is not bytes:
@@ -1844,7 +1847,7 @@ def run_exact_recovery_bundle_red(
 
     if (
         not root.is_dir()
-        or not (root / "pytest.ini").is_file()
+        or len(config_paths) != 1
         or not expected
         or len(expected) != sum(len(member.expected_red_node_ids) for member in manifest.members)
         or any(not path.is_file() for path in test_paths)
@@ -1886,7 +1889,10 @@ class ExactRecoveryRed:
 expected = json.loads(os.environ["RECOVERY_EXPECTED"])
 plugin = ExactRecoveryRed()
 exit_code = pytest.main(
-    [*json.loads(os.environ["RECOVERY_TEST_PATHS"]), "-q", "--noconftest", "-o", "addopts="],
+    [
+        *json.loads(os.environ["RECOVERY_TEST_PATHS"]),
+        "-q", "--noconftest", "-c", os.environ["RECOVERY_CONFIG"], "-o", "addopts=",
+    ],
     plugins=[plugin],
 )
 Path(os.environ["RECOVERY_RESULT"]).write_text(json.dumps({
@@ -1900,6 +1906,7 @@ Path(os.environ["RECOVERY_RESULT"]).write_text(json.dumps({
     environment.update({
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "RECOVERY_EXPECTED": json.dumps(expected, sort_keys=True, separators=(",", ":")),
+        "RECOVERY_CONFIG": str(config_paths[0]),
         "RECOVERY_RESULT": str(result_path),
         "RECOVERY_TEST_PATHS": json.dumps([str(path) for path in test_paths]),
     })
@@ -1976,7 +1983,9 @@ def run_committed_exact_recovery_bundle_red(
         manifest_bytes = git_blob_from_ref(source_sha, manifest_path, cwd=source_root)
         manifest = parse_recovery_bundle_manifest_bytes(manifest_bytes)
         committed_files = {
-            "pytest.ini": git_blob_from_ref(source_sha, "pytest.ini", cwd=source_root),
+            "pyproject.toml": git_blob_from_ref(
+                source_sha, "pyproject.toml", cwd=source_root,
+            ),
             manifest_path: manifest_bytes,
         }
         committed_files.update({
