@@ -1169,6 +1169,17 @@ def recovery_bundle_history_errors(
             "recovery_bundle_current_member_replayed:"
             f"{current_member.task_id}",
         )
+    for required_path in current_member.required_paths:
+        required_path_commits = git_first_parent_path_commits(
+            current_member.activation_commit_sha,
+            manifest.suspension.commit_sha,
+            required_path,
+        )
+        if required_path_commits:
+            return (
+                "recovery_bundle_current_member_required_path_changed:"
+                f"{current_member.task_id}:{required_path}",
+            )
     changed_paths = git_commit_changed_paths(manifest.suspension.commit_sha)
     if changed_paths != (_TASK_FILE,) and set(changed_paths) != {_TASK_FILE}:
         return ("recovery_bundle_suspension_changed_paths_mismatch",)
