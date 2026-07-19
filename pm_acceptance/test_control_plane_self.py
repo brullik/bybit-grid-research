@@ -568,6 +568,69 @@ def test_recovery_history_requires_suspension_of_current_member(tmp_path: Path):
         os.chdir(old_cwd)
 
 
+def test_recovery_history_rejects_current_member_replay(tmp_path: Path):
+    from dataclasses import replace
+
+    import scripts.check_task_scope as check_task_scope
+
+    repo, _suspension_sha, erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(tmp_path)
+    )
+    activation_sha = manifest.members[-1].activation_commit_sha
+    active_path = repo / "pm_acceptance/active_task.json"
+    pinned_active_task = subprocess.run(
+        ["git", "show", f"{activation_sha}:pm_acceptance/active_task.json"],
+        cwd=repo,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout
+
+    _git(repo, "checkout", "-q", activation_sha)
+    active_path.write_bytes(CANONICAL)
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "complete current member")
+    active_path.write_bytes(pinned_active_task)
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "reactivate current member")
+    replay_sha = _git(repo, "rev-parse", "HEAD")
+    active_path.write_bytes(CANONICAL)
+    _git(repo, "add", "pm_acceptance/active_task.json")
+    _git(repo, "commit", "-q", "-m", "suspend replayed current member")
+    rebuilt_suspension_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "cherry-pick", erratum_sha)
+    rebuilt_erratum_sha = _git(repo, "rev-parse", "HEAD")
+
+    rebuilt_manifest = replace(
+        manifest,
+        suspension=replace(
+            manifest.suspension,
+            commit_sha=rebuilt_suspension_sha,
+            predecessor_commit_sha=replay_sha,
+            inactive_task_sha256=hashlib.sha256(CANONICAL).hexdigest(),
+        ),
+        erratum_v1=replace(
+            manifest.erratum_v1,
+            commit_sha=rebuilt_erratum_sha,
+            manifest_sha256=hashlib.sha256(
+                (repo / manifest.erratum_v1.manifest_path).read_bytes()
+            ).hexdigest(),
+            corrected_test_sha256=hashlib.sha256(
+                (repo / manifest.erratum_v1.corrected_test_path).read_bytes()
+            ).hexdigest(),
+        ),
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(
+            rebuilt_erratum_sha, rebuilt_manifest
+        ) == ("recovery_bundle_current_member_replayed:task-a",)
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recovery_history_requires_erratum_directly_after_suspension(tmp_path: Path):
     from dataclasses import replace
 
