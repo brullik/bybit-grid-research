@@ -1280,6 +1280,8 @@ def recovery_bundle_transition_errors(
     if (head_task.task_id != _RECOVERY_ID or head_task.allowed_paths != expected_scope
             or head_task.required_paths != expected_scope):
         errors.append("recovery_bundle_active_scope_mismatch")
+    if head_task.forbidden_paths != base_task.forbidden_paths:
+        errors.append("recovery_bundle_active_forbidden_paths_mismatch")
     if git_object_exists(base_sha, manifest_path):
         errors.append("recovery_bundle_replay")
     try:
