@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -1598,7 +1600,20 @@ def test_mode_acceptance_plan_selection():
         "base-control-plane-self-tests",
         "head-control-plane-self-tests",
     )
-    assert acceptance_plan_for_mode("pm-task-definition") == ("base-control-plane-self-tests", "head-task-definition-collect-only")
+    assert acceptance_plan_for_mode(
+        "pm-task-definition",
+        task_id="task-a",
+    ) == (
+        "base-control-plane-self-tests",
+        "base-frozen-exact-plain-green",
+        "head-task-definition-collect-only",
+    )
+    assert acceptance_plan_for_mode(
+        "pm-task-definition",
+        task_id="NO_ACTIVE_IMPLEMENTATION",
+    ) == ("base-control-plane-self-tests",)
+    with pytest.raises(ValueError, match="^task_id_required_for_pm_task_definition$"):
+        acceptance_plan_for_mode("pm-task-definition")
     assert acceptance_plan_for_mode("pm-frozen-erratum") == (
         "base-control-plane-self-tests",
         "head-frozen-erratum-exact-red",
@@ -1989,6 +2004,1090 @@ def test_workflow_control_plane_mode_checks_base_and_head_without_running_frozen
     assert 'if [ "$PR_MODE" = "implementation" ]; then' in supplemental
     assert "python -m pytest tests -q" in supplemental
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'" in supplemental
+
+
+def _minimal_child_environment(sandbox: Path, **updates: str) -> dict[str, str]:
+    allowed_updates = {
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_TERMINAL_PROMPT",
+        "PYTHONPATH",
+        "PYTEST_ADDOPTS",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+        "PYTEST_PLUGINS",
+        "RUNNER_TEMP",
+    }
+    assert set(updates) <= allowed_updates
+    environment = {
+        "HOME": str(sandbox),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": os.environ.get("PATH", os.defpath),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TMPDIR": str(sandbox),
+    }
+    environment.update(updates)
+    return environment
+
+
+_PM_WORKFLOW_SHA256 = "826f51b712cc318237749b0aa6097cd4f5d6c084a2bc355894afb4a602583438"
+_ACCEPTANCE_JOB_SHA256 = "aa0b95de6444203b49a87ec1460b4eb32d00ddc5bf1e72bef40248d4d6f3ffbe"
+
+
+def _pm_workflow_bytes() -> bytes:
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml"
+    ).read_bytes()
+    assert hashlib.sha256(workflow).hexdigest() == _PM_WORKFLOW_SHA256
+    return workflow
+
+
+def _acceptance_workflow_block() -> bytes:
+    workflow = _pm_workflow_bytes()
+    start_marker = b"  acceptance:\n"
+    end_marker = b"  status-final:\n"
+    assert workflow.count(start_marker) == 1
+    assert workflow.count(end_marker) == 1
+    start = workflow.index(start_marker)
+    end = workflow.index(end_marker, start)
+    block = workflow[start:end]
+    assert hashlib.sha256(block).hexdigest() == _ACCEPTANCE_JOB_SHA256
+    return block
+
+
+def _step_scalar(lines: list[str], key: str) -> str | None:
+    prefix = f"        {key}:"
+    matches = [line[len(prefix):].strip() for line in lines if line.startswith(prefix)]
+    assert len(matches) <= 1
+    return matches[0] if matches else None
+
+
+def _step_map(lines: list[str], key: str) -> dict[str, str] | None:
+    marker = f"        {key}:"
+    if marker not in lines:
+        return None
+    start = lines.index(marker) + 1
+    result: dict[str, str] = {}
+    for line in lines[start:]:
+        if not line.startswith("          ") or line.startswith("            "):
+            break
+        name, separator, value = line.strip().partition(":")
+        assert separator and name and name not in result
+        result[name] = value.strip().strip("'")
+    assert result
+    return result
+
+
+def _step_run(lines: list[str]) -> str | None:
+    inline = _step_scalar(lines, "run")
+    if inline is not None and inline != "|":
+        return inline + "\n"
+    if "        run: |" not in lines:
+        return None
+    start = lines.index("        run: |") + 1
+    body: list[str] = []
+    for line in lines[start:]:
+        if line and not line.startswith("          "):
+            assert line.startswith("      # ")
+            break
+        body.append(line[10:] if line else "")
+    return "\n".join(body) + "\n"
+
+
+def _acceptance_workflow_steps() -> list[dict[str, Any]]:
+    text = _acceptance_workflow_block().decode("utf-8")
+    prefix, marker, step_text = text.partition("    steps:\n")
+    assert marker and prefix.count("    steps:\n") == 0
+    chunks = re.split(r"(?=^      - )", step_text, flags=re.MULTILINE)
+    assert chunks[0] == ""
+    steps: list[dict[str, Any]] = []
+    for chunk in chunks[1:]:
+        lines = chunk.rstrip("\n").splitlines()
+        first = lines[0][8:]
+        key, separator, value = first.partition(":")
+        assert separator and key in {"name", "uses"}
+        step: dict[str, Any] = {key: value.strip()}
+        for scalar in ("name", "uses", "if", "working-directory", "id", "shell"):
+            parsed = _step_scalar(lines[1:], scalar)
+            if parsed is not None:
+                assert scalar not in step
+                step[scalar] = parsed
+        for mapping in ("with", "env"):
+            parsed_map = _step_map(lines, mapping)
+            if parsed_map is not None:
+                step[mapping] = parsed_map
+        run = _step_run(lines)
+        if run is not None:
+            step["run"] = run
+        steps.append(step)
+    return steps
+
+
+def _acceptance_workflow_job() -> dict[str, Any]:
+    expected_header = (
+        b"  acceptance:\n"
+        b"    name: acceptance (${{ matrix.python-version }})\n"
+        b"    needs: protected-paths\n"
+        b"    runs-on: ubuntu-latest\n"
+        b"    permissions:\n"
+        b"      contents: read\n"
+        b"      pull-requests: read\n"
+        b"    strategy:\n"
+        b"      fail-fast: false\n"
+        b"      matrix:\n"
+        b"        python-version: ['3.12', '3.14']\n"
+        b"    steps:\n"
+    )
+    header, marker, _steps = _acceptance_workflow_block().partition(b"    steps:\n")
+    assert marker == b"    steps:\n"
+    assert header + marker == expected_header
+    return {
+        "name": "acceptance (${{ matrix.python-version }})",
+        "needs": "protected-paths",
+        "runs-on": "ubuntu-latest",
+        "permissions": {"contents": "read", "pull-requests": "read"},
+        "strategy": {
+            "fail-fast": False,
+            "matrix": {"python-version": ["3.12", "3.14"]},
+        },
+        "steps": _acceptance_workflow_steps(),
+    }
+
+
+def _unique_named_step(
+    steps: list[dict[str, Any]],
+    name: str,
+) -> tuple[int, dict[str, Any]]:
+    matches = [(index, step) for index, step in enumerate(steps) if step.get("name") == name]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _shell_commands(source: str) -> tuple[tuple[str, ...], ...]:
+    commands: list[tuple[str, ...]] = []
+    pending = ""
+    for physical_line in source.splitlines():
+        line = physical_line.strip()
+        if not line:
+            continue
+        continued = line.endswith("\\")
+        fragment = line[:-1].rstrip() if continued else line
+        pending = f"{pending} {fragment}".strip()
+        if not continued:
+            commands.append(tuple(shlex.split(pending)))
+            pending = ""
+    assert pending == ""
+    return tuple(commands)
+
+
+def _assert_step_cannot_mask_failure(step: dict[str, Any]) -> None:
+    assert "continue-on-error" not in step
+    assert "shell" not in step
+    run = step.get("run")
+    if run is None:
+        return
+    assert type(run) is str
+    assert "||" not in run
+    assert re.search(r"(?:^|\n)\s*set\s+\+e(?:\s|$)", run) is None
+
+
+def test_task_definition_workflow_parses_exact_open_gate_and_complete_restage():
+    acceptance = _acceptance_workflow_job()
+    assert set(acceptance) == {
+        "name", "needs", "permissions", "runs-on", "steps", "strategy",
+    }
+    assert acceptance["name"] == "acceptance (${{ matrix.python-version }})"
+    assert acceptance["needs"] == "protected-paths"
+    assert acceptance["runs-on"] == "ubuntu-latest"
+    assert acceptance["permissions"] == {
+        "contents": "read",
+        "pull-requests": "read",
+    }
+    assert acceptance["strategy"] == {
+        "fail-fast": False,
+        "matrix": {"python-version": ["3.12", "3.14"]},
+    }
+    assert "continue-on-error" not in acceptance
+
+    steps = _acceptance_workflow_steps()
+    expected_inventory = (
+        ("Checkout base control plane", "actions/checkout@v4"),
+        ("Checkout PR head production code", "actions/checkout@v4"),
+        (None, "actions/setup-python@v5"),
+        ("Install PR package", None),
+        ("Stage base-controlled acceptance harness", None),
+        ("Run base isolated acceptance harness", None),
+        ("Run base control-plane self-tests for PM-owned PRs", None),
+        ("Stage head control-plane self-tests", None),
+        ("Run head control-plane self-tests", None),
+        ("Validate PR head workflow YAML syntax", None),
+        ("Require complete base acceptance tree plain green before opening task", None),
+        ("Stage head task-definition acceptance tree", None),
+        ("Compile and collect head task-definition acceptance tests", None),
+        ("Stage SHA-pinned head frozen erratum", None),
+        ("Run corrected head erratum and verify exact RED manifest", None),
+        ("Run v2 corrected head under normal isolated import order", None),
+        ("Run combined recovery bundle Draft RED", None),
+        ("Run supplemental PR checks", None),
+    )
+    assert tuple((step.get("name"), step.get("uses")) for step in steps) == expected_inventory
+    assert all("name" in step for step in steps if "run" in step)
+    assert all(("run" in step) != ("uses" in step) for step in steps)
+    assert steps[0] == {
+        "name": "Checkout base control plane",
+        "uses": "actions/checkout@v4",
+        "with": {
+            "ref": "${{ github.event.pull_request.base.sha }}",
+            "path": "base",
+            "persist-credentials": "false",
+            "fetch-depth": "0",
+        },
+    }
+    assert steps[1] == {
+        "name": "Checkout PR head production code",
+        "uses": "actions/checkout@v4",
+        "with": {
+            "ref": "${{ github.event.pull_request.head.sha }}",
+            "path": "head",
+            "persist-credentials": "false",
+            "fetch-depth": "0",
+        },
+    }
+    assert steps[2] == {
+        "uses": "actions/setup-python@v5",
+        "with": {"python-version": "${{ matrix.python-version }}"},
+    }
+    expected_open_condition = (
+        "needs.protected-paths.outputs.pr-mode == 'pm-task-definition' && "
+        "needs.protected-paths.outputs.task-id != 'NO_ACTIVE_IMPLEMENTATION'"
+    )
+    install_index, install = _unique_named_step(steps, "Install PR package")
+    stage_index, stage = _unique_named_step(steps, "Stage base-controlled acceptance harness")
+    gate_index, gate = _unique_named_step(
+        steps,
+        "Require complete base acceptance tree plain green before opening task",
+    )
+    head_stage_index, head_stage = _unique_named_step(
+        steps,
+        "Stage head task-definition acceptance tree",
+    )
+    collect_index, collect = _unique_named_step(
+        steps,
+        "Compile and collect head task-definition acceptance tests",
+    )
+
+    assert install_index < stage_index < gate_index < head_stage_index < collect_index
+    assert stage_index == install_index + 1
+    assert head_stage_index == gate_index + 1
+    for intervening in steps[stage_index + 1:gate_index]:
+        if not _workflow_condition_matches(
+            intervening.get("if"),
+            {
+                "needs.protected-paths.outputs.pr-mode": "pm-task-definition",
+                "needs.protected-paths.outputs.task-id": "synthetic-open-task",
+                "steps.erratum-stage.outputs.erratum_version": "",
+            },
+        ):
+            continue
+        source = intervening.get("run", "")
+        assert type(source) is str
+        assert re.search(r"(?:^|\n)\s*(?:cp|install|mkdir|mv|rm|rsync)\b", source) is None
+    assert set(install) == {"name", "run", "working-directory"}
+    assert install["working-directory"] == "head"
+    assert _shell_commands(install["run"]) == (
+        ("python", "-m", "pip", "install", "--upgrade", "pip"),
+        ("python", "-m", "pip", "install", "-e", ".[dev]"),
+    )
+
+    assert set(stage) == {"env", "name", "run"}
+    assert stage["env"] == {"RUNNER_TEMP": "${{ runner.temp }}"}
+    assert _shell_commands(stage["run"]) == (
+        (
+            "rm",
+            "-rf",
+            "$RUNNER_TEMP/pm_acceptance",
+            "$RUNNER_TEMP/scripts",
+            "$RUNNER_TEMP/frozen_contracts",
+            "$RUNNER_TEMP/.github",
+        ),
+        ("cp", "-R", "base/pm_acceptance", "$RUNNER_TEMP/pm_acceptance"),
+        ("cp", "-R", "base/docs/frozen_contracts", "$RUNNER_TEMP/frozen_contracts"),
+        ("mkdir", "-p", "$RUNNER_TEMP/scripts"),
+        ("mkdir", "-p", "$RUNNER_TEMP/.github/workflows"),
+        ("printf", "", ">", "$RUNNER_TEMP/scripts/__init__.py"),
+        (
+            "cp",
+            "base/scripts/check_protected_paths.py",
+            "$RUNNER_TEMP/scripts/check_protected_paths.py",
+        ),
+        (
+            "cp",
+            "base/scripts/check_task_scope.py",
+            "$RUNNER_TEMP/scripts/check_task_scope.py",
+        ),
+        (
+            "cp",
+            "base/.github/workflows/pm-acceptance.yml",
+            "$RUNNER_TEMP/.github/workflows/pm-acceptance.yml",
+        ),
+        ("printf", "[pytest]\\n", ">", "$RUNNER_TEMP/pytest.ini"),
+    )
+
+    assert set(gate) == {"env", "if", "name", "run", "working-directory"}
+    assert gate["if"] == expected_open_condition
+    assert gate["working-directory"] == "${{ runner.temp }}"
+    assert gate["env"] == {
+        "PYTHONPATH": "${{ runner.temp }}:${{ github.workspace }}/base",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "RUNNER_TEMP": "${{ runner.temp }}",
+    }
+    assert _shell_commands(gate["run"]) == (
+        (
+            "python",
+            "${{ github.workspace }}/base/scripts/check_task_scope.py",
+            "--exact-base-frozen-root",
+            "$RUNNER_TEMP",
+        ),
+    )
+
+    assert set(head_stage) == {"env", "if", "name", "run"}
+    assert head_stage["if"] == expected_open_condition
+    assert head_stage["env"] == {
+        "RUNNER_TEMP": "${{ runner.temp }}",
+        "TASK_ID": "${{ needs.protected-paths.outputs.task-id }}",
+    }
+    assert _shell_commands(head_stage["run"]) == (
+        ("rm", "-rf", "$RUNNER_TEMP/head_task_definition"),
+        ("mkdir", "-p", "$RUNNER_TEMP/head_task_definition/pm_acceptance/tasks"),
+        (
+            "cp",
+            "-R",
+            "head/pm_acceptance/tasks/$TASK_ID",
+            "$RUNNER_TEMP/head_task_definition/pm_acceptance/tasks/$TASK_ID",
+        ),
+        ("printf", "[pytest]\\n", ">", "$RUNNER_TEMP/head_task_definition/pytest.ini"),
+    )
+
+    assert set(collect) == {"env", "if", "name", "run"}
+    assert collect["if"] == expected_open_condition
+    assert collect["env"] == {
+        "HEAD_ACCEPTANCE_TEMP": "${{ runner.temp }}/head_task_definition",
+        "PYTHONPATH": "${{ runner.temp }}/head_task_definition",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "TASK_ID": "${{ needs.protected-paths.outputs.task-id }}",
+    }
+    assert _shell_commands(collect["run"]) == (
+        ("task_path=$HEAD_ACCEPTANCE_TEMP/pm_acceptance/tasks/$TASK_ID",),
+        ("python", "-m", "compileall", "-q", "$task_path"),
+        (
+            "python",
+            "-m",
+            "pytest",
+            "$task_path",
+            "--collect-only",
+            "-q",
+            "-c",
+            "$HEAD_ACCEPTANCE_TEMP/pytest.ini",
+            "--confcutdir=$task_path",
+        ),
+    )
+
+    for step in steps:
+        _assert_step_cannot_mask_failure(step)
+
+
+def _tree_file_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _run_base_frozen_checker(
+    root: Path,
+    *,
+    checker: Path | None = None,
+    pytest_environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    if checker is None:
+        checker = Path(__file__).resolve().parents[1] / "scripts/check_task_scope.py"
+    poison = {} if pytest_environment is None else pytest_environment
+    assert set(poison) <= {"PYTEST_ADDOPTS", "PYTEST_PLUGINS"}
+    environment = _minimal_child_environment(
+        root,
+        PYTHONPATH=str(root),
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+        RUNNER_TEMP=str(root),
+        **poison,
+    )
+    return subprocess.run(
+        [sys.executable, str(checker), "--exact-base-frozen-root", str(root)],
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=20,
+    )
+
+
+def _run_synthetic_base_frozen_checker(
+    tmp_path: Path,
+    name: str,
+    files: dict[str, str],
+    *,
+    pytest_environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    root = tmp_path / name
+    root.mkdir()
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    for relative_path, source in files.items():
+        destination = root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(source, encoding="utf-8")
+    return _run_base_frozen_checker(root, pytest_environment=pytest_environment)
+
+
+def _assert_exact_plain_profile(
+    result: subprocess.CompletedProcess[str],
+    *,
+    collected_count: int,
+    passed_count: int,
+    errors: tuple[str, ...],
+) -> None:
+    assert type(collected_count) is int and collected_count >= 0
+    assert type(passed_count) is int and 0 <= passed_count <= collected_count
+    assert errors == tuple(sorted(set(errors)))
+    expected = {
+        "collected_count": collected_count,
+        "errors": list(errors),
+        "ok": not errors,
+        "passed_count": passed_count,
+    }
+    assert result.returncode == (1 if errors else 0)
+    assert result.stderr == ""
+    assert result.stdout == json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n"
+    payload = json.loads(result.stdout)
+    assert type(payload) is dict
+    assert set(payload) == {"collected_count", "errors", "ok", "passed_count"}
+    assert type(payload["collected_count"]) is int
+    assert type(payload["passed_count"]) is int
+    assert type(payload["errors"]) is list
+    assert all(type(error) is str and error for error in payload["errors"])
+    assert type(payload["ok"]) is bool
+    assert payload == expected
+
+
+def test_base_restage_cleans_and_copies_complete_tree_before_gate(tmp_path: Path):
+    repository = Path(__file__).resolve().parents[1]
+    steps = _acceptance_workflow_steps()
+    _stage_index, stage = _unique_named_step(steps, "Stage base-controlled acceptance harness")
+    workspace = tmp_path / "workspace"
+    runner_temp = tmp_path / "runner-temp"
+    source_acceptance = workspace / "base/pm_acceptance"
+    source_acceptance.mkdir(parents=True)
+    source_files = {
+        "conftest.py": (
+            "import pytest\n\n"
+            "@pytest.fixture\n"
+            "def copied_tree_fixture():\n"
+            "    return {'top-level', 'arbitrary-alpha', 'arbitrary-omega'}\n"
+        ),
+        "test_top_level.py": (
+            "def test_top_level_uses_copied_conftest(copied_tree_fixture):\n"
+            "    assert 'top-level' in copied_tree_fixture\n"
+        ),
+        "tasks/arbitrary-alpha/test_alpha.py": (
+            "def test_first_arbitrary_task(copied_tree_fixture):\n"
+            "    assert 'arbitrary-alpha' in copied_tree_fixture\n"
+        ),
+        "tasks/arbitrary-omega/test_complete_tree_sentinel.py": (
+            "def test_complete_tree_failing_sentinel(copied_tree_fixture):\n"
+            "    assert 'complete-tree-sentinel-must-fail' in copied_tree_fixture\n"
+        ),
+        "helpers/nested/base-owned-marker.txt": "copied with the complete tree\n",
+    }
+    for relative_path, source in source_files.items():
+        destination = source_acceptance / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(source, encoding="utf-8")
+
+    (workspace / "base/docs/frozen_contracts").mkdir(parents=True)
+    (workspace / "base/docs/frozen_contracts/control.md").write_text(
+        "trusted base contract\n",
+        encoding="utf-8",
+    )
+    (workspace / "base/scripts").mkdir(parents=True)
+    for script_name in ("check_protected_paths.py", "check_task_scope.py"):
+        (workspace / "base/scripts" / script_name).write_bytes(
+            (repository / "scripts" / script_name).read_bytes()
+        )
+    (workspace / "base/.github/workflows").mkdir(parents=True)
+    (workspace / "base/.github/workflows/pm-acceptance.yml").write_bytes(
+        (repository / ".github/workflows/pm-acceptance.yml").read_bytes()
+    )
+
+    stale_test = runner_temp / "pm_acceptance/tasks/stale/test_stale.py"
+    stale_test.parent.mkdir(parents=True)
+    stale_test.write_text(
+        "def test_stale_tree_was_not_cleaned():\n    assert False\n",
+        encoding="utf-8",
+    )
+    (runner_temp / "scripts").mkdir()
+    (runner_temp / "scripts/stale.py").write_text("stale = True\n", encoding="utf-8")
+
+    staged = subprocess.run(
+        ["/bin/bash", "-euo", "pipefail", "-c", stage["run"]],
+        cwd=workspace,
+        env=_minimal_child_environment(runner_temp, RUNNER_TEMP=str(runner_temp)),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=10,
+    )
+    assert (staged.returncode, staged.stdout, staged.stderr) == (0, "", "")
+    assert _tree_file_bytes(runner_temp / "pm_acceptance") == _tree_file_bytes(
+        source_acceptance
+    )
+    assert not stale_test.exists()
+    assert not (runner_temp / "scripts/stale.py").exists()
+
+    result = _run_base_frozen_checker(
+        runner_temp,
+        checker=workspace / "base/scripts/check_task_scope.py",
+    )
+    _assert_exact_plain_profile(
+        result,
+        collected_count=3,
+        passed_count=2,
+        errors=(
+            "call-failed:pm_acceptance/tasks/arbitrary-omega/"
+            "test_complete_tree_sentinel.py::test_complete_tree_failing_sentinel",
+            "plain-pass-set-mismatch",
+            "unexpected-pytest-exit:1",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "test_source", "conftest_source", "collected_count", "passed_count", "errors"),
+    (
+        (
+            "skip",
+            "import pytest\n\ndef test_skipped():\n    pytest.skip('synthetic skip')\n",
+            None,
+            1,
+            0,
+            (
+                "call-skipped:pm_acceptance/test_skip.py::test_skipped",
+                "plain-pass-set-mismatch",
+            ),
+        ),
+        (
+            "xfail",
+            (
+                "import pytest\n\n"
+                "@pytest.mark.xfail(reason='synthetic xfail', strict=True)\n"
+                "def test_xfailed():\n"
+                "    assert False\n"
+            ),
+            None,
+            1,
+            0,
+            (
+                "call-skipped:pm_acceptance/test_xfail.py::test_xfailed",
+                "plain-pass-set-mismatch",
+                "xfail-or-xpass:pm_acceptance/test_xfail.py::test_xfailed:call",
+            ),
+        ),
+        (
+            "xpass",
+            (
+                "import pytest\n\n"
+                "@pytest.mark.xfail(reason='synthetic xpass', strict=False)\n"
+                "def test_xpassed():\n"
+                "    assert True\n"
+            ),
+            None,
+            1,
+            1,
+            ("xfail-or-xpass:pm_acceptance/test_xpass.py::test_xpassed:call",),
+        ),
+        (
+            "setup-error",
+            (
+                "import pytest\n\n"
+                "@pytest.fixture\n"
+                "def broken_setup():\n"
+                "    raise RuntimeError('synthetic setup error')\n\n"
+                "def test_setup_error(broken_setup):\n"
+                "    assert True\n"
+            ),
+            None,
+            1,
+            0,
+            (
+                "missing-call:pm_acceptance/test_setup_error.py::test_setup_error",
+                "non-call-setup-failed:pm_acceptance/test_setup_error.py::test_setup_error",
+                "plain-pass-set-mismatch",
+                "unexpected-pytest-exit:1",
+            ),
+        ),
+        (
+            "teardown-error",
+            (
+                "import pytest\n\n"
+                "@pytest.fixture\n"
+                "def broken_teardown():\n"
+                "    yield\n"
+                "    raise RuntimeError('synthetic teardown error')\n\n"
+                "def test_teardown_error(broken_teardown):\n"
+                "    assert True\n"
+            ),
+            None,
+            1,
+            1,
+            (
+                "non-call-teardown-failed:pm_acceptance/"
+                "test_teardown_error.py::test_teardown_error",
+                "unexpected-pytest-exit:1",
+            ),
+        ),
+        (
+            "collection-failure",
+            "raise RuntimeError('synthetic collection failure')\n",
+            None,
+            0,
+            0,
+            (
+                "collect-failed:pm_acceptance/test_collection_failure.py",
+                "empty-collection",
+                "unexpected-pytest-exit:2",
+            ),
+        ),
+        (
+            "collection-skip",
+            (
+                "import pytest\n\n"
+                "pytest.skip('synthetic module collection skip', allow_module_level=True)\n"
+            ),
+            None,
+            1,
+            1,
+            ("collect-skipped:pm_acceptance/test_collection_skip.py",),
+        ),
+        (
+            "teardown-skip",
+            (
+                "import pytest\n\n"
+                "@pytest.fixture\n"
+                "def skipped_teardown():\n"
+                "    yield\n"
+                "    pytest.skip('synthetic teardown skip')\n\n"
+                "def test_call_passes_before_teardown_skip(skipped_teardown):\n"
+                "    assert 6 * 7 == 42\n"
+            ),
+            None,
+            2,
+            2,
+            (
+                "non-call-teardown-skipped:pm_acceptance/test_teardown_skip.py::"
+                "test_call_passes_before_teardown_skip",
+            ),
+        ),
+        (
+            "deselection",
+            (
+                "def test_retained():\n"
+                "    assert True\n\n"
+                "def test_deselected():\n"
+                "    assert False\n"
+            ),
+            (
+                "def pytest_collection_modifyitems(config, items):\n"
+                "    deselected = items[1:]\n"
+                "    items[:] = items[:1]\n"
+                "    config.hook.pytest_deselected(items=deselected)\n"
+            ),
+            1,
+            1,
+            ("deselected:pm_acceptance/test_deselection.py::test_deselected",),
+        ),
+    ),
+    ids=(
+        "skip", "xfail", "xpass", "setup-error", "teardown-error", "collection-error",
+        "collection-skip", "teardown-skip", "deselect",
+    ),
+)
+def test_exact_base_frozen_gate_rejects_non_plain_pytest_outcomes(
+    tmp_path: Path,
+    name: str,
+    test_source: str,
+    conftest_source: str | None,
+    collected_count: int,
+    passed_count: int,
+    errors: tuple[str, ...],
+):
+    files = {f"pm_acceptance/test_{name.replace('-', '_')}.py": test_source}
+    if name in {"collection-skip", "teardown-skip"}:
+        files["pm_acceptance/test_plain_companion.py"] = (
+            "def test_plain_companion_passes():\n    assert (2, 3, 5) == (2, 3, 5)\n"
+        )
+    if conftest_source is not None:
+        files["pm_acceptance/conftest.py"] = conftest_source
+    result = _run_synthetic_base_frozen_checker(tmp_path, name, files)
+    _assert_exact_plain_profile(
+        result,
+        collected_count=collected_count,
+        passed_count=passed_count,
+        errors=errors,
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "test_source", "conftest_source", "collected_count", "passed_count", "errors"),
+    (
+        (
+            "duplicate-call",
+            "def test_plain_pass():\n    assert True\n",
+            (
+                "CONFIG = None\n"
+                "EMITTED = False\n\n"
+                "def pytest_configure(config):\n"
+                "    global CONFIG\n"
+                "    CONFIG = config\n\n"
+                "def pytest_runtest_logreport(report):\n"
+                "    global EMITTED\n"
+                "    if report.when == 'call' and not EMITTED:\n"
+                "        EMITTED = True\n"
+                "        CONFIG.hook.pytest_runtest_logreport(report=report)\n"
+            ),
+            1,
+            1,
+            ("duplicate-call:pm_acceptance/test_duplicate_call.py::test_plain_pass",),
+        ),
+        (
+            "missing-call",
+            "def test_missing_call():\n    assert True\n",
+            "def pytest_runtest_protocol(item, nextitem):\n    return True\n",
+            1,
+            0,
+            (
+                "missing-call:pm_acceptance/test_missing_call.py::test_missing_call",
+                "plain-pass-set-mismatch",
+            ),
+        ),
+        (
+            "duplicate-node-id",
+            (
+                "def test_first():\n"
+                "    assert True\n\n"
+                "def test_second():\n"
+                "    assert True\n"
+            ),
+            (
+                "def pytest_collection_modifyitems(items):\n"
+                "    items[1]._nodeid = items[0].nodeid\n"
+            ),
+            0,
+            0,
+            ("invalid_base_frozen_collected",),
+        ),
+    ),
+    ids=("duplicate-call", "missing-call", "duplicate-node-id"),
+)
+def test_exact_base_frozen_gate_rejects_call_accounting_anomalies(
+    tmp_path: Path,
+    name: str,
+    test_source: str,
+    conftest_source: str,
+    collected_count: int,
+    passed_count: int,
+    errors: tuple[str, ...],
+):
+    result = _run_synthetic_base_frozen_checker(
+        tmp_path,
+        name,
+        {
+            f"pm_acceptance/test_{name.replace('-', '_')}.py": test_source,
+            "pm_acceptance/conftest.py": conftest_source,
+        },
+    )
+    _assert_exact_plain_profile(
+        result,
+        collected_count=collected_count,
+        passed_count=passed_count,
+        errors=errors,
+    )
+
+
+def test_exact_base_frozen_gate_accepts_every_parametrized_node_once(tmp_path: Path):
+    result = _run_synthetic_base_frozen_checker(
+        tmp_path,
+        "parametrized-green",
+        {
+            "pm_acceptance/test_parametrized.py": (
+                "import pytest\n\n"
+                "@pytest.mark.parametrize('value', ['alpha', 'beta', 'gamma'])\n"
+                "def test_each_parameter(value):\n"
+                "    assert value in {'alpha', 'beta', 'gamma'}\n"
+            )
+        },
+    )
+    _assert_exact_plain_profile(result, collected_count=3, passed_count=3, errors=())
+
+
+def test_exact_base_frozen_gate_rejects_incomplete_harness_with_exact_schema(tmp_path: Path):
+    root = tmp_path / "incomplete"
+    root.mkdir()
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    result = _run_base_frozen_checker(root)
+    _assert_exact_plain_profile(
+        result,
+        collected_count=0,
+        passed_count=0,
+        errors=("base_frozen_test_harness_incomplete",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("tree_outcome", "poison_name", "pytest_environment"),
+    (
+        ("green", "none", {}),
+        ("green", "addopts", {"PYTEST_ADDOPTS": "--ignore=pm_acceptance/tasks/poison-target"}),
+        ("green", "plugins", {"PYTEST_PLUGINS": "poison_plugin"}),
+        ("failing", "none", {}),
+        (
+            "failing",
+            "addopts",
+            {"PYTEST_ADDOPTS": "--ignore=pm_acceptance/tasks/poison-target"},
+        ),
+        ("failing", "plugins", {"PYTEST_PLUGINS": "poison_plugin"}),
+    ),
+    ids=(
+        "green-baseline",
+        "green-addopts",
+        "green-plugins",
+        "failing-baseline",
+        "failing-addopts",
+        "failing-plugins",
+    ),
+)
+def test_exact_base_frozen_gate_preserves_exact_profile_under_pytest_poison(
+    tmp_path: Path,
+    tree_outcome: str,
+    poison_name: str,
+    pytest_environment: dict[str, str],
+):
+    failing = tree_outcome == "failing"
+    result = _run_synthetic_base_frozen_checker(
+        tmp_path,
+        f"poison-{tree_outcome}-{poison_name}",
+        {
+            "pm_acceptance/test_control.py": (
+                "def test_control_plane():\n    assert True\n"
+            ),
+            "pm_acceptance/tasks/poison-target/test_target.py": (
+                f"def test_poison_target():\n    assert {not failing!r}\n"
+            ),
+            "poison_plugin.py": (
+                "def pytest_collection_modifyitems(items):\n"
+                "    items[:] = [\n"
+                "        item for item in items if 'poison-target' not in item.nodeid\n"
+                "    ]\n"
+            ),
+        },
+        pytest_environment=pytest_environment,
+    )
+    errors = (
+        (
+            "call-failed:pm_acceptance/tasks/poison-target/"
+            "test_target.py::test_poison_target",
+            "plain-pass-set-mismatch",
+            "unexpected-pytest-exit:1",
+        )
+        if failing
+        else ()
+    )
+    _assert_exact_plain_profile(
+        result,
+        collected_count=2,
+        passed_count=1 if failing else 2,
+        errors=errors,
+    )
+
+
+def _git_for_workflow_fixture(repo: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=repo,
+        env=_minimal_child_environment(
+            repo.parent,
+            GIT_CONFIG_GLOBAL="/dev/null",
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_TERMINAL_PROMPT="0",
+        ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def _workflow_condition_matches(condition: object, values: dict[str, str]) -> bool:
+    if condition is None:
+        return True
+    assert type(condition) is str
+    matches = []
+    for clause in condition.split(" && "):
+        parsed = re.fullmatch(r"([a-z0-9._-]+)\s*(==|!=)\s*'([^']*)'", clause)
+        assert parsed is not None, clause
+        variable, operator, expected = parsed.groups()
+        assert variable in values
+        matches.append(
+            values[variable] == expected if operator == "==" else values[variable] != expected
+        )
+    return all(matches)
+
+
+@pytest.mark.parametrize(
+    ("mode", "task_id", "erratum_version", "expected_indexes"),
+    (
+        ("implementation", "active", "", (0, 1, 2, 3, 4, 5, 17)),
+        ("pm-control-plane", "active", "", (0, 1, 2, 3, 4, 6, 7, 8, 9, 17)),
+        ("pm-task-definition", "active", "", (0, 1, 2, 3, 4, 6, 10, 11, 12, 17)),
+        (
+            "pm-task-definition",
+            "NO_ACTIVE_IMPLEMENTATION",
+            "",
+            (0, 1, 2, 3, 4, 6, 17),
+        ),
+        ("pm-frozen-erratum", "active", "v1", (0, 1, 2, 3, 4, 6, 13, 14, 17)),
+        ("pm-frozen-erratum", "active", "v2", (0, 1, 2, 3, 4, 6, 13, 15, 17)),
+        ("pm-recovery-bundle", "active", "", (0, 1, 2, 3, 4, 6, 16, 17)),
+    ),
+    ids=(
+        "implementation",
+        "control-plane",
+        "task-definition-open",
+        "task-definition-inactive-close",
+        "frozen-erratum-v1",
+        "frozen-erratum-v2",
+        "recovery-bundle",
+    ),
+)
+def test_workflow_enumerates_every_supported_acceptance_route(
+    mode: str,
+    task_id: str,
+    erratum_version: str,
+    expected_indexes: tuple[int, ...],
+):
+    steps = _acceptance_workflow_steps()
+    values = {
+        "needs.protected-paths.outputs.pr-mode": mode,
+        "needs.protected-paths.outputs.task-id": task_id,
+        "steps.erratum-stage.outputs.erratum_version": erratum_version,
+    }
+    route = tuple(
+        index
+        for index, step in enumerate(steps)
+        if _workflow_condition_matches(step.get("if"), values)
+    )
+    assert route == expected_indexes
+    assert steps[17]["name"] == "Run supplemental PR checks"
+    assert "if" not in steps[17]
+    assert route[-1] == 17
+
+
+def test_inactive_task_close_cli_routes_around_every_open_only_workflow_step(tmp_path: Path):
+    repository = Path(__file__).resolve().parents[1]
+    repo = tmp_path / "close-routing"
+    task_path = repo / "pm_acceptance/active_task.json"
+    task_path.parent.mkdir(parents=True)
+    task_path.write_bytes(_task_bytes(_active_task()))
+    _git_for_workflow_fixture(repo, "init", "-q", "-b", "main")
+    _git_for_workflow_fixture(repo, "config", "user.email", "pm@example.test")
+    _git_for_workflow_fixture(repo, "config", "user.name", "PM")
+    _git_for_workflow_fixture(repo, "add", "pm_acceptance/active_task.json")
+    _git_for_workflow_fixture(repo, "commit", "-q", "-m", "active task")
+    base_sha = _git_for_workflow_fixture(repo, "rev-parse", "HEAD")
+    task_path.write_bytes(CANONICAL)
+    _git_for_workflow_fixture(repo, "add", "pm_acceptance/active_task.json")
+    _git_for_workflow_fixture(repo, "commit", "-q", "-m", "close task")
+    head_sha = _git_for_workflow_fixture(repo, "rev-parse", "HEAD")
+    _git_for_workflow_fixture(repo, "checkout", "-q", base_sha)
+
+    routed = subprocess.run(
+        [
+            sys.executable,
+            str(repository / "scripts/check_task_scope.py"),
+            "--task-file",
+            "pm_acceptance/active_task.json",
+            "--base-sha",
+            base_sha,
+            "--head-sha",
+            head_sha,
+            "--actor",
+            "brullik",
+            "--labels-json",
+            '["pm-task-definition"]',
+        ],
+        cwd=repo,
+        env=_minimal_child_environment(repo),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=20,
+    )
+    expected_payload = {
+        "changed_count": 1,
+        "errors": [],
+        "mode": "pm-task-definition",
+        "ok": True,
+        "task_id": "NO_ACTIVE_IMPLEMENTATION",
+    }
+    assert routed.returncode == 0
+    assert routed.stderr == ""
+    assert routed.stdout == (
+        json.dumps(expected_payload, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+    payload = json.loads(routed.stdout)
+    assert payload == expected_payload
+    assert type(payload["ok"]) is bool and payload["ok"] is True
+
+    values = {
+        "needs.protected-paths.outputs.pr-mode": payload["mode"],
+        "needs.protected-paths.outputs.task-id": payload["task_id"],
+        "steps.erratum-stage.outputs.erratum_version": "",
+    }
+    steps = _acceptance_workflow_steps()
+    route = [
+        (index, step.get("name"), step.get("uses"), "run" in step)
+        for index, step in enumerate(steps)
+        if _workflow_condition_matches(step.get("if"), values)
+    ]
+    assert route == [
+        (0, "Checkout base control plane", "actions/checkout@v4", False),
+        (1, "Checkout PR head production code", "actions/checkout@v4", False),
+        (2, None, "actions/setup-python@v5", False),
+        (3, "Install PR package", None, True),
+        (4, "Stage base-controlled acceptance harness", None, True),
+        (6, "Run base control-plane self-tests for PM-owned PRs", None, True),
+        (17, "Run supplemental PR checks", None, True),
+    ]
+    assert all("name" in step for step in steps if "run" in step)
+    for open_only_name in (
+        "Require complete base acceptance tree plain green before opening task",
+        "Stage head task-definition acceptance tree",
+        "Compile and collect head task-definition acceptance tests",
+    ):
+        assert all(step_name != open_only_name for _index, step_name, _uses, _run in route)
 
 
 def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
