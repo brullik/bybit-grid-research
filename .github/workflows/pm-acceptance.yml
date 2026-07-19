@@ -269,6 +269,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install PR package
+        working-directory: head
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
       # Security: PR code is executed with a read-only token, persist-credentials=false, no secrets, and base-controlled acceptance tests.
       - name: Stage base-controlled acceptance harness
         env:
@@ -284,11 +289,6 @@ jobs:
           cp base/scripts/check_task_scope.py "$RUNNER_TEMP/scripts/check_task_scope.py"
           cp base/.github/workflows/pm-acceptance.yml "$RUNNER_TEMP/.github/workflows/pm-acceptance.yml"
           printf '[pytest]\n' > "$RUNNER_TEMP/pytest.ini"
-      - name: Install PR package
-        working-directory: head
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .[dev]
       - name: Run base isolated acceptance harness
         if: needs.protected-paths.outputs.pr-mode == 'implementation'
         working-directory: ${{ runner.temp }}
@@ -338,6 +338,16 @@ jobs:
       - name: Validate PR head workflow YAML syntax
         if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
         run: ruby -e 'require "psych"; Psych.parse_file(ARGV.fetch(0))' head/.github/workflows/pm-acceptance.yml
+      - name: Require complete base acceptance tree plain green before opening task
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition' && needs.protected-paths.outputs.task-id != 'NO_ACTIVE_IMPLEMENTATION'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ${{ runner.temp }}:${{ github.workspace }}/base
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
+            --exact-base-frozen-root "$RUNNER_TEMP"
       - name: Stage head task-definition acceptance tree
         if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition' && needs.protected-paths.outputs.task-id != 'NO_ACTIVE_IMPLEMENTATION'
         env:

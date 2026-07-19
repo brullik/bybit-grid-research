@@ -932,13 +932,25 @@ def pr_mode_scope_errors(task: ActiveTask, changed_paths: tuple[str, ...], *, ac
     return ()
 
 
-def acceptance_plan_for_mode(mode: str) -> tuple[str, ...]:
+def acceptance_plan_for_mode(
+    mode: str,
+    *,
+    task_id: str | None = None,
+) -> tuple[str, ...]:
     if mode == "implementation":
         return ("base-isolated-acceptance",)
     if mode == "pm-control-plane":
         return ("base-control-plane-self-tests", "head-control-plane-self-tests")
     if mode == "pm-task-definition":
-        return ("base-control-plane-self-tests", "head-task-definition-collect-only")
+        if task_id is None:
+            raise ValueError("task_id_required_for_pm_task_definition")
+        if task_id == _INACTIVE_TASK_ID:
+            return ("base-control-plane-self-tests",)
+        return (
+            "base-control-plane-self-tests",
+            "base-frozen-exact-plain-green",
+            "head-task-definition-collect-only",
+        )
     if mode == "pm-frozen-erratum":
         return (
             "base-control-plane-self-tests",
@@ -1898,19 +1910,46 @@ Path(os.environ["RECOVERY_RESULT"]).write_text(json.dumps({
     return 0 if seen == set(expected) else 1
 
 
-def run_exact_control_plane_self_tests(root: Path) -> int:
-    """Require one plain passing call for every collected control-plane self-test."""
+def _emit_exact_plain_result(
+    *, collected_count: int, passed_count: int, errors: list[str]
+) -> int:
+    payload = {
+        "collected_count": collected_count,
+        "errors": sorted(set(errors)),
+        "ok": not errors,
+        "passed_count": passed_count,
+    }
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    return 0 if not errors else 1
+
+
+def _run_exact_plain_passes(
+    root: Path,
+    *,
+    test_relative_path: str,
+    result_name: str,
+    error_prefix: str,
+    incomplete_error: str,
+    unreadable_error_prefix: str,
+    test_path_is_dir: bool = False,
+) -> int:
+    """Require exactly one plain passing call for every collected test node."""
     try:
         root = root.resolve(strict=True)
     except OSError as exc:
-        print(json.dumps({"errors": [f"control_plane_root_unreadable:{type(exc).__name__}"], "ok": False}))
-        return 1
-    test_path = root / "pm_acceptance/test_control_plane_self.py"
+        return _emit_exact_plain_result(
+            collected_count=0,
+            passed_count=0,
+            errors=[f"{unreadable_error_prefix}:{type(exc).__name__}"],
+        )
+    test_path = root / test_relative_path
     config_path = root / "pytest.ini"
-    if not root.is_dir() or not test_path.is_file() or not config_path.is_file():
-        print(json.dumps({"errors": ["control_plane_self_test_harness_incomplete"], "ok": False}))
-        return 1
-    result_path = root.parent / f".control-plane-self-{os.getpid()}.json"
+    valid_test_path = test_path.is_dir() if test_path_is_dir else test_path.is_file()
+    if not root.is_dir() or not valid_test_path or not config_path.is_file():
+        return _emit_exact_plain_result(
+            collected_count=0, passed_count=0, errors=[incomplete_error]
+        )
+    result_path = root.parent / f".{result_name}-{os.getpid()}.json"
     result_path.unlink(missing_ok=True)
     child = r'''
 from __future__ import annotations
@@ -1961,13 +2000,16 @@ class ExactPlainPasses:
 
 
 root = Path(os.environ["EXACT_CONTROL_ROOT"])
+test_path = root / os.environ["EXACT_TEST_RELATIVE_PATH"]
 outcomes = ExactPlainPasses()
 exit_code = pytest.main(
     [
-        str(root / "pm_acceptance/test_control_plane_self.py"),
+        str(test_path),
         "-q",
         "-c",
         str(root / "pytest.ini"),
+        "-o",
+        "addopts=",
         f"--confcutdir={root / 'pm_acceptance'}",
     ],
     plugins=[outcomes],
@@ -1988,10 +2030,15 @@ Path(os.environ["EXACT_CONTROL_RESULT"]).write_text(
     encoding="utf-8",
 )
 '''
-    environment = dict(os.environ)
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("PYTEST_")
+    }
     environment.update({
         "EXACT_CONTROL_RESULT": str(result_path),
         "EXACT_CONTROL_ROOT": str(root),
+        "EXACT_TEST_RELATIVE_PATH": test_relative_path,
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
     })
     result = subprocess.run(
@@ -2005,24 +2052,24 @@ Path(os.environ["EXACT_CONTROL_RESULT"]).write_text(
     )
     if result.returncode != 0 or not result_path.is_file():
         result_path.unlink(missing_ok=True)
-        payload = {
-            "collected_count": 0,
-            "errors": [f"control-plane-self-runner-failed:{result.returncode}"],
-            "ok": False,
-            "passed_count": 0,
-        }
-        print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-        return 1
+        return _emit_exact_plain_result(
+            collected_count=0,
+            passed_count=0,
+            errors=[f"{error_prefix}-runner-failed:{result.returncode}"],
+        )
     try:
         outcomes = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        payload = None
+        outcomes = None
     finally:
         result_path.unlink(missing_ok=True)
     expected_keys = {"call_node_ids", "collected", "exit_code", "forbidden", "passed"}
     if not isinstance(outcomes, dict) or set(outcomes) != expected_keys:
-        print(json.dumps({"errors": ["invalid_control_plane_self_result"], "ok": False}))
-        return 1
+        return _emit_exact_plain_result(
+            collected_count=0,
+            passed_count=0,
+            errors=[f"invalid_{error_prefix.replace('-', '_')}_result"],
+        )
     for key in ("call_node_ids", "collected", "forbidden", "passed"):
         value = outcomes[key]
         if (
@@ -2030,8 +2077,11 @@ Path(os.environ["EXACT_CONTROL_RESULT"]).write_text(
             or any(not isinstance(item, str) or not item for item in value)
             or len(set(value)) != len(value)
         ):
-            print(json.dumps({"errors": [f"invalid_control_plane_self_{key}"], "ok": False}))
-            return 1
+            return _emit_exact_plain_result(
+                collected_count=0,
+                passed_count=0,
+                errors=[f"invalid_{error_prefix.replace('-', '_')}_{key}"],
+            )
 
     collected = set(outcomes["collected"])
     call_node_ids = set(outcomes["call_node_ids"])
@@ -2047,14 +2097,36 @@ Path(os.environ["EXACT_CONTROL_RESULT"]).write_text(
     errors.extend(forbidden)
     if set(passed) != collected or len(passed) != len(outcomes["collected"]):
         errors.append("plain-pass-set-mismatch")
-    payload = {
-        "collected_count": len(outcomes["collected"]),
-        "errors": sorted(set(errors)),
-        "ok": not errors,
-        "passed_count": len(passed),
-    }
-    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-    return 0 if not errors else 1
+    return _emit_exact_plain_result(
+        collected_count=len(outcomes["collected"]),
+        passed_count=len(passed),
+        errors=errors,
+    )
+
+
+def run_exact_control_plane_self_tests(root: Path) -> int:
+    """Require one plain passing call for every collected control-plane self-test."""
+    return _run_exact_plain_passes(
+        root,
+        test_relative_path="pm_acceptance/test_control_plane_self.py",
+        result_name="control-plane-self",
+        error_prefix="control-plane-self",
+        incomplete_error="control_plane_self_test_harness_incomplete",
+        unreadable_error_prefix="control_plane_root_unreadable",
+    )
+
+
+def run_exact_base_frozen_tests(root: Path) -> int:
+    """Require one plain passing call for every test in the base acceptance tree."""
+    return _run_exact_plain_passes(
+        root,
+        test_relative_path="pm_acceptance",
+        result_name="base-frozen",
+        error_prefix="base-frozen",
+        incomplete_error="base_frozen_test_harness_incomplete",
+        unreadable_error_prefix="base_frozen_root_unreadable",
+        test_path_is_dir=True,
+    )
 
 
 def _emit(
@@ -2091,6 +2163,11 @@ def main(argv: list[str] | None = None) -> int:
         exact_parser.add_argument("--exact-control-plane-root", required=True)
         exact_args = exact_parser.parse_args(effective_argv)
         return run_exact_control_plane_self_tests(Path(exact_args.exact_control_plane_root))
+    if "--exact-base-frozen-root" in effective_argv:
+        exact_parser = argparse.ArgumentParser(add_help=True)
+        exact_parser.add_argument("--exact-base-frozen-root", required=True)
+        exact_args = exact_parser.parse_args(effective_argv)
+        return run_exact_base_frozen_tests(Path(exact_args.exact_base_frozen_root))
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--base-sha", required=True)
