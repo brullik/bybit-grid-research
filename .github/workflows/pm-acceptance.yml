@@ -1093,6 +1093,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
+      contents: read
+      pull-requests: read
       statuses: write
     steps:
       - name: Publish final aggregate status
@@ -1106,11 +1108,17 @@ jobs:
           PENDING_RESULT: ${{ needs.status-pending.result }}
           PROTECTED_RESULT: ${{ needs.protected-paths.result }}
           ACCEPTANCE_RESULT: ${{ needs.acceptance.result }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+          PR_MODE: ${{ needs.protected-paths.outputs.pr-mode }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           PR_SENDER: ${{ github.event.sender.login }}
@@ -1119,19 +1127,173 @@ jobs:
           import json
           import os
           import re
+          import urllib.error
           import urllib.request
 
+          owner = "brullik"
+          repository = "brullik/bybit-grid-research"
           sha = os.environ["HEAD_SHA"]
-          if os.environ["REPOSITORY"] != "brullik/bybit-grid-research":
+          if os.environ["REPOSITORY"] != repository:
               raise SystemExit("invalid_repository")
           if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
               raise SystemExit("invalid_head_sha")
-          if os.environ["EVENT_NAME"] != "pull_request_target" or os.environ["BASE_REF"] != "main":
+          head_ref = os.environ["HEAD_REF"]
+          if head_ref == "":
+              raise SystemExit("invalid_live_event_head_ref")
+          if os.environ["EVENT_NAME"] != "pull_request_target":
               raise SystemExit("invalid_live_event_identity")
-          if os.environ["PR_AUTHOR"] != "brullik" or os.environ["PR_SENDER"] != "brullik":
+          if os.environ["EVENT_ACTION"] not in {
+              "opened", "synchronize", "reopened", "ready_for_review",
+              "converted_to_draft", "labeled", "unlabeled",
+          }:
+              raise SystemExit("invalid_live_event_identity")
+          if os.environ["PR_AUTHOR"] != owner or os.environ["PR_SENDER"] != owner:
               raise SystemExit("invalid_live_owner_identity")
-          if re.fullmatch(r"[0-9a-f]{40}", os.environ["BASE_SHA"]) is None:
+          base_sha = os.environ["BASE_SHA"]
+          if re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
               raise SystemExit("invalid_live_base_sha")
+          number_text = os.environ["PR_NUMBER"]
+          if re.fullmatch(r"[1-9][0-9]*", number_text) is None:
+              raise SystemExit("invalid_live_pr_number")
+          number = int(number_text)
+          if os.environ["PR_DRAFT"] not in {"true", "false"}:
+              raise SystemExit("invalid_live_event_draft")
+          event_draft = os.environ["PR_DRAFT"] == "true"
+          try:
+              event_labels_raw = json.loads(os.environ["PR_LABELS_JSON"])
+          except json.JSONDecodeError:
+              raise SystemExit("invalid_live_event_labels")
+
+          def require(condition, reason):
+              if not condition:
+                  raise SystemExit(reason)
+
+          def parse_labels(value, reason, objects):
+              require(type(value) is list, reason)
+              result = []
+              for item in value:
+                  if objects:
+                      require(type(item) is dict and type(item.get("name")) is str, reason)
+                      name = item["name"]
+                  else:
+                      require(type(item) is str, reason)
+                      name = item
+                  require(name != "" and name not in result, reason)
+                  result.append(name)
+              return result
+
+          event_labels = parse_labels(event_labels_raw, "invalid_live_event_labels", False)
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f'Bearer {os.environ["GH_TOKEN"]}',
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def request_json(request, expected_status, reason):
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      require(type(response.status) is int and response.status == expected_status, reason)
+                      try:
+                          value = json.loads(response.read())
+                      except (UnicodeDecodeError, json.JSONDecodeError):
+                          raise SystemExit(reason)
+              except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+                  raise SystemExit(reason)
+              require(type(value) is dict, reason)
+              return value
+
+          def get_json(path, reason):
+              return request_json(
+                  urllib.request.Request(
+                      f'{os.environ["API_URL"]}{path}', headers=headers, method="GET"
+                  ),
+                  200,
+                  reason,
+              )
+
+          live = get_json(f"/repos/{repository}/pulls/{number}", "invalid_live_pr")
+          require(type(live.get("number")) is int, "invalid_live_pr")
+          require(type(live.get("state")) is str, "invalid_live_pr")
+          require(type(live.get("draft")) is bool, "invalid_live_pr")
+          require(type(live.get("user")) is dict, "invalid_live_pr")
+          require(type(live["user"].get("login")) is str, "invalid_live_pr")
+          for side in ("head", "base"):
+              require(type(live.get(side)) is dict, "invalid_live_pr")
+              require(type(live[side].get("sha")) is str, "invalid_live_pr")
+              require(re.fullmatch(r"[0-9a-f]{40}", live[side]["sha"]) is not None, "invalid_live_pr")
+              require(type(live[side].get("ref")) is str, "invalid_live_pr")
+              require(live[side]["ref"] != "", "invalid_live_pr")
+              require(type(live[side].get("repo")) is dict, "invalid_live_pr")
+              require(type(live[side]["repo"].get("full_name")) is str, "invalid_live_pr")
+          live_labels = parse_labels(live.get("labels"), "invalid_live_labels", True)
+
+          main = get_json(f"/repos/{repository}/git/ref/heads/main", "invalid_live_main")
+          require(main.get("ref") == "refs/heads/main", "invalid_live_main")
+          require(type(main.get("object")) is dict, "invalid_live_main")
+          require(main["object"].get("type") == "commit", "invalid_live_main")
+          require(type(main["object"].get("sha")) is str, "invalid_live_main")
+          require(re.fullmatch(r"[0-9a-f]{40}", main["object"]["sha"]) is not None, "invalid_live_main")
+
+          query = """query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}"""
+          cursor = None
+          seen_cursors = set()
+          unresolved = False
+          while True:
+              graphql_payload = {
+                  "query": query,
+                  "variables": {
+                      "owner": "brullik",
+                      "name": "bybit-grid-research",
+                      "number": number,
+                      "cursor": cursor,
+                  },
+              }
+              graph = request_json(
+                  urllib.request.Request(
+                      f'{os.environ["API_URL"]}/graphql',
+                      data=json.dumps(graphql_payload, separators=(",", ":")).encode(),
+                      headers=headers,
+                      method="POST",
+                  ),
+                  200,
+                  "invalid_live_review_threads",
+              )
+              require("errors" not in graph, "invalid_live_review_threads")
+              require(type(graph.get("data")) is dict, "invalid_live_review_threads")
+              graph_repository = graph["data"].get("repository")
+              require(type(graph_repository) is dict, "invalid_live_review_threads")
+              pull_request = graph_repository.get("pullRequest")
+              require(type(pull_request) is dict, "invalid_live_review_threads")
+              threads = pull_request.get("reviewThreads")
+              require(type(threads) is dict, "invalid_live_review_threads")
+              nodes = threads.get("nodes")
+              page_info = threads.get("pageInfo")
+              require(type(nodes) is list and type(page_info) is dict, "invalid_live_review_threads")
+              for node in nodes:
+                  require(type(node) is dict and type(node.get("isResolved")) is bool, "invalid_live_review_threads")
+                  if node["isResolved"] is not True:
+                      unresolved = True
+              has_next = page_info.get("hasNextPage")
+              require("endCursor" in page_info, "invalid_live_review_threads")
+              end_cursor = page_info.get("endCursor")
+              require(type(has_next) is bool, "invalid_live_review_threads")
+              if not has_next:
+                  require(
+                      end_cursor is None
+                      or (
+                          type(end_cursor) is str
+                          and end_cursor != ""
+                          and end_cursor not in seen_cursors
+                      ),
+                      "invalid_live_review_threads",
+                  )
+                  break
+              require(type(end_cursor) is str and end_cursor != "", "invalid_live_review_threads")
+              require(end_cursor not in seen_cursors, "invalid_live_review_threads")
+              seen_cursors.add(end_cursor)
+              cursor = end_cursor
+
           results = {
               "pending": os.environ["PENDING_RESULT"],
               "protected": os.environ["PROTECTED_RESULT"],
@@ -1142,6 +1304,36 @@ jobs:
           owner_authored = os.environ["PR_AUTHOR"] == "brullik"
           non_probe = not os.environ["HEAD_REF"].startswith("probe/")
           successful = upstream_success and ready and owner_authored and non_probe
+          event_state = os.environ.get("PR_STATE", "open")
+          exact_live_identity = all((
+              live["number"] == number,
+              event_state == "open",
+              live["state"] == event_state,
+              live["draft"] == event_draft,
+              live["user"]["login"] == owner,
+              live["head"]["sha"] == sha,
+              live["head"]["ref"] == head_ref,
+              live["head"]["repo"]["full_name"] == os.environ["HEAD_REPOSITORY"] == repository,
+              live["base"]["sha"] == base_sha,
+              live["base"]["ref"] == os.environ["BASE_REF"] == "main",
+              live["base"]["repo"]["full_name"] == os.environ["BASE_REPOSITORY"] == repository,
+              live_labels == event_labels,
+              main["object"]["sha"] == base_sha,
+          ))
+          recovery_exact = True
+          if (
+              os.environ["PR_MODE"] == "pm-recovery-bundle"
+              or "pm-recovery-bundle" in event_labels
+              or "pm-recovery-bundle" in live_labels
+          ):
+              recovery_exact = (
+                  os.environ["PR_MODE"] == "pm-recovery-bundle"
+                  and event_labels == ["pm-recovery-bundle"]
+                  and live_labels == ["pm-recovery-bundle"]
+                  and event_draft
+                  and live["draft"]
+              )
+          successful = successful and exact_live_identity and recovery_exact and not unresolved
           if successful:
               state = "success"
           elif upstream_success or any(result == "failure" for result in results.values()):
@@ -1152,6 +1344,8 @@ jobs:
               "ready": str(ready).lower(),
               "owner": str(owner_authored).lower(),
               "non_probe": str(non_probe).lower(),
+              "live_identity": str(exact_live_identity).lower(),
+              "threads_resolved": str(not unresolved).lower(),
           })
           summary = ", ".join(f"{name}={result}" for name, result in results.items())
           payload = {
@@ -1166,11 +1360,7 @@ jobs:
           request = urllib.request.Request(
               f'{os.environ["API_URL"]}/repos/{os.environ["REPOSITORY"]}/statuses/{sha}',
               data=json.dumps(payload, separators=(",", ":")).encode(),
-              headers={
-                  "Accept": "application/vnd.github+json",
-                  "Authorization": f'Bearer {os.environ["GH_TOKEN"]}',
-                  "X-GitHub-Api-Version": "2022-11-28",
-              },
+              headers=headers,
               method="POST",
           )
           with urllib.request.urlopen(request, timeout=30) as response:
