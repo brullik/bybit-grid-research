@@ -6,11 +6,14 @@ import argparse
 import ast
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import sysconfig
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -979,6 +982,88 @@ def git_blob_from_ref(ref: str, path: str, *, cwd: Path | None = None) -> bytes:
     return proc.stdout
 
 
+def git_regular_tree_from_ref(
+    ref: str, *, cwd: Path | None = None
+) -> tuple[dict[str, bytes], dict[str, int]]:
+    """Return every regular file in a commit, verified against its Git blob ID."""
+    if not _SHA_RE.fullmatch(ref):
+        raise ValueError("invalid_git_tree_ref")
+    environment = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", "--full-tree", ref],
+        cwd=cwd,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    failure = RuntimeError("git_regular_tree_failed")
+    if (
+        listing.returncode != 0
+        or listing.stderr
+        or not listing.stdout
+        or not listing.stdout.endswith(b"\0")
+    ):
+        raise failure
+    expected: dict[str, tuple[str, str]] = {}
+    for record in listing.stdout[:-1].split(b"\0"):
+        try:
+            metadata, raw_path = record.split(b"\t")
+            raw_mode, object_type, raw_object_id = metadata.split(b" ")
+            path = raw_path.decode("utf-8", "strict")
+            mode = raw_mode.decode("ascii", "strict")
+            object_id = raw_object_id.decode("ascii", "strict")
+        except (UnicodeDecodeError, ValueError):
+            raise failure from None
+        if (
+            _path_error(path) is not None
+            or path in expected
+            or mode not in {"100644", "100755"}
+            or object_type != b"blob"
+            or _COMMIT_SHA_RE.fullmatch(object_id) is None
+        ):
+            raise failure
+        expected[path] = (mode, object_id)
+
+    archived = subprocess.run(
+        ["git", "archive", "--format=tar", ref],
+        cwd=cwd,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if archived.returncode != 0 or archived.stderr or not archived.stdout:
+        raise failure
+    files: dict[str, bytes] = {}
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archived.stdout), mode="r:") as archive:
+            for member in archive.getmembers():
+                if member.isdir():
+                    directory = member.name.rstrip("/")
+                    if directory and _path_error(directory) is not None:
+                        raise failure
+                    continue
+                if not member.isfile() or _path_error(member.name) is not None:
+                    raise failure
+                extracted = archive.extractfile(member)
+                if extracted is None or member.name in files:
+                    raise failure
+                files[member.name] = extracted.read()
+    except tarfile.TarError:
+        raise failure from None
+    if set(files) != set(expected):
+        raise failure
+    modes: dict[str, int] = {}
+    for path, data in files.items():
+        mode, expected_object_id = expected[path]
+        header = f"blob {len(data)}\0".encode("ascii")
+        if hashlib.sha1(header + data).hexdigest() != expected_object_id:
+            raise failure
+        modes[path] = 0o555 if mode == "100755" else 0o444
+    return files, modes
+
+
 def git_tree_entry_mode(ref: str, path: str) -> str:
     if not _SHA_RE.fullmatch(ref):
         raise ValueError("invalid_git_tree_entry_ref")
@@ -1812,6 +1897,7 @@ def run_exact_recovery_bundle_red(
     manifest: RecoveryBundleManifest,
     *,
     pinned_files: dict[str, bytes] | None = None,
+    pinned_modes: dict[str, int] | None = None,
 ) -> int:
     """Run the frozen recovery tests and require their exact sentinel RED profile."""
     try:
@@ -1829,17 +1915,42 @@ def run_exact_recovery_bundle_red(
 
     def pinned_files_match() -> bool:
         if pinned_files is None:
-            return True
+            return pinned_modes is None
         required = {member.test_path for member in manifest.members}
         pinned_configs = [name for name in config_names if name in pinned_files]
-        if not required.issubset(pinned_files) or len(pinned_configs) != 1:
+        if (
+            not required.issubset(pinned_files)
+            or len(pinned_configs) != 1
+            or (pinned_modes is not None and set(pinned_modes) != set(pinned_files))
+        ):
             return False
+        actual_files: set[str] = set()
+        if pinned_modes is not None:
+            for path in root.rglob("*"):
+                if path.is_symlink() or (not path.is_dir() and not path.is_file()):
+                    return False
+                if path.is_file():
+                    actual_files.add(path.relative_to(root).as_posix())
+            if actual_files != set(pinned_files):
+                return False
         for relative_path, expected_bytes in pinned_files.items():
             if _path_error(relative_path) is not None or type(expected_bytes) is not bytes:
                 return False
             path = root / relative_path
             try:
-                if path.is_symlink() or not path.is_file() or path.read_bytes() != expected_bytes:
+                expected_mode = None if pinned_modes is None else pinned_modes.get(relative_path)
+                if (
+                    path.is_symlink()
+                    or not path.is_file()
+                    or path.read_bytes() != expected_bytes
+                    or (
+                        expected_mode is not None
+                        and (
+                            expected_mode not in {0o444, 0o555}
+                            or path.stat().st_mode & 0o777 != expected_mode
+                        )
+                    )
+                ):
                     return False
             except OSError:
                 return False
@@ -1860,6 +1971,13 @@ def run_exact_recovery_bundle_red(
 import json
 import os
 from pathlib import Path
+import sys
+
+root = Path(os.environ["RECOVERY_ROOT"]).resolve(strict=True)
+site_paths = json.loads(os.environ["RECOVERY_SITE_PATHS"])
+sys.dont_write_bytecode = True
+sys.path[:] = [str(root / "src"), str(root), *site_paths, *sys.path]
+
 import pytest
 
 class ExactRecoveryRed:
@@ -1892,9 +2010,39 @@ exit_code = pytest.main(
     [
         *json.loads(os.environ["RECOVERY_TEST_PATHS"]),
         "-q", "--noconftest", "-c", os.environ["RECOVERY_CONFIG"], "-o", "addopts=",
+        "-p", "no:cacheprovider",
     ],
     plugins=[plugin],
 )
+for name, module in tuple(sys.modules.items()):
+    top_level = name.partition(".")[0]
+    if top_level not in {"bybit_grid", "scripts"}:
+        continue
+    expected_root = root / "src/bybit_grid" if top_level == "bybit_grid" else root / "scripts"
+    origin = getattr(module, "__file__", None)
+    locations = getattr(module, "__path__", None)
+    if locations is not None:
+        try:
+            resolved_locations = [Path(location).resolve(strict=True) for location in locations]
+        except (OSError, TypeError):
+            plugin.forbidden.append(f"staged-import-unreadable:{name}")
+            continue
+        if not resolved_locations or any(
+            not location.is_relative_to(expected_root) for location in resolved_locations
+        ):
+            plugin.forbidden.append(f"staged-import-outside-root:{name}")
+            continue
+    if not isinstance(origin, str):
+        if locations is None:
+            plugin.forbidden.append(f"staged-import-missing-origin:{name}")
+        continue
+    try:
+        resolved = Path(origin).resolve(strict=True)
+    except OSError:
+        plugin.forbidden.append(f"staged-import-unreadable:{name}")
+        continue
+    if not resolved.is_relative_to(expected_root):
+        plugin.forbidden.append(f"staged-import-outside-root:{name}:{resolved}")
 Path(os.environ["RECOVERY_RESULT"]).write_text(json.dumps({
     "calls": plugin.calls,
     "collected": plugin.collected,
@@ -1902,16 +2050,27 @@ Path(os.environ["RECOVERY_RESULT"]).write_text(json.dumps({
     "forbidden": plugin.forbidden,
 }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 '''
-    environment = dict(os.environ)
+    site_paths = sorted({
+        str(Path(path).resolve())
+        for key in ("purelib", "platlib")
+        if (path := sysconfig.get_paths().get(key))
+    })
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("PYTHON") and not key.startswith("PYTEST_")
+    }
     environment.update({
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "RECOVERY_EXPECTED": json.dumps(expected, sort_keys=True, separators=(",", ":")),
         "RECOVERY_CONFIG": str(config_paths[0]),
+        "RECOVERY_ROOT": str(root),
         "RECOVERY_RESULT": str(result_path),
+        "RECOVERY_SITE_PATHS": json.dumps(site_paths),
         "RECOVERY_TEST_PATHS": json.dumps([str(path) for path in test_paths]),
     })
     result = subprocess.run(
-        [sys.executable, "-c", child], cwd=root, env=environment,
+        [sys.executable, "-I", "-S", "-c", child], cwd=root, env=environment,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
     )
     if result.returncode != 0 or not result_path.is_file():
@@ -1980,32 +2139,31 @@ def run_committed_exact_recovery_bundle_red(
     if destination.exists() or destination.is_symlink():
         return 1
     try:
-        manifest_bytes = git_blob_from_ref(source_sha, manifest_path, cwd=source_root)
+        committed_files, committed_modes = git_regular_tree_from_ref(
+            source_sha, cwd=source_root,
+        )
+        manifest_bytes = committed_files[manifest_path]
         manifest = parse_recovery_bundle_manifest_bytes(manifest_bytes)
-        committed_files = {
-            "pyproject.toml": git_blob_from_ref(
-                source_sha, "pyproject.toml", cwd=source_root,
-            ),
-            manifest_path: manifest_bytes,
-        }
-        committed_files.update({
-            member.test_path: git_blob_from_ref(
-                source_sha, member.test_path, cwd=source_root,
-            )
-            for member in manifest.members
-        })
         destination.mkdir(parents=True)
         for relative_path, data in committed_files.items():
             path = destination / relative_path
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-            path.chmod(0o444)
-    except (OSError, RuntimeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            path.chmod(committed_modes[relative_path])
+    except (
+        KeyError,
+        OSError,
+        RuntimeError,
+        UnicodeDecodeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
         return 1
     return run_exact_recovery_bundle_red(
         destination,
         manifest,
         pinned_files=committed_files,
+        pinned_modes=committed_modes,
     )
 
 

@@ -1024,6 +1024,63 @@ def test_recovery_bundle_exact_red_gate_rechecks_pinned_files_after_execution(
     assert run_exact_recovery_bundle_red(root, manifest, pinned_files=pinned) == 1
 
 
+@pytest.mark.parametrize("mutation", ("bytes", "mode", "addition"))
+def test_recovery_bundle_exact_red_gate_rechecks_complete_staged_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+):
+    root = tmp_path / "head"
+    test = root / "pm_acceptance/tasks/synthetic/test_contract.py"
+    test.parent.mkdir(parents=True)
+    test.write_text(
+        "def test_a():\n    raise AssertionError('synthetic_contract_unavailable')\n",
+        encoding="utf-8",
+    )
+    config = root / "pyproject.toml"
+    config.write_text("[tool.pytest.ini_options]\naddopts = []\n", encoding="utf-8")
+    production = root / "src/bybit_grid/recovery_contract.py"
+    production.parent.mkdir(parents=True)
+    production.write_text("STATE = 'committed'\n", encoding="utf-8")
+    manifest = _synthetic_recovery_manifest(root, ("test_a",))
+    nodes = [node for member in manifest.members for node in member.expected_red_node_ids]
+    pinned = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in (test, config, production)
+    }
+    modes = {path: 0o444 for path in pinned}
+    for relative_path in pinned:
+        (root / relative_path).chmod(modes[relative_path])
+
+    def fake_run(*args, **kwargs):
+        if mutation == "bytes":
+            production.chmod(0o644)
+            production.write_text("STATE = 'mutated'\n", encoding="utf-8")
+        elif mutation == "mode":
+            production.chmod(0o644)
+        else:
+            added = root / "src/bybit_grid/added.py"
+            added.write_text("POISON = True\n", encoding="utf-8")
+        Path(kwargs["env"]["RECOVERY_RESULT"]).write_text(
+            json.dumps({
+                "calls": [
+                    [node, "failed", "synthetic_contract_unavailable"] for node in nodes
+                ],
+                "collected": nodes,
+                "exit_code": 1,
+                "forbidden": [],
+            }),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args[0], 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert run_exact_recovery_bundle_red(
+        root,
+        manifest,
+        pinned_files=pinned,
+        pinned_modes=modes,
+    ) == 1
+
+
 def test_recovery_bundle_commit_runner_stages_only_immutable_git_blobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1040,24 +1097,27 @@ def test_recovery_bundle_commit_runner_stages_only_immutable_git_blobs(
         manifest_path: b"committed manifest\n",
         "pyproject.toml": b"[tool.pytest.ini_options]\naddopts = []\n",
         manifest.members[0].test_path: b"committed frozen tests\n",
+        "src/bybit_grid/recovery_contract.py": b"committed production input\n",
     }
+    committed_modes = {path: 0o444 for path in committed}
     (source_root / "pyproject.toml").write_text("mutated checkout\n", encoding="utf-8")
 
-    def fake_git_blob(ref, path, *, cwd=None):
+    def fake_git_tree(ref, *, cwd=None):
         assert ref == "a" * 40
         assert cwd == source_root
-        return committed[path]
+        return committed, committed_modes
 
-    def fake_exact(root, received_manifest, *, pinned_files=None):
+    def fake_exact(root, received_manifest, *, pinned_files=None, pinned_modes=None):
         assert root == destination
         assert received_manifest == manifest
         assert pinned_files == committed
+        assert pinned_modes == committed_modes
         assert {
             path: (root / path).read_bytes() for path in committed
         } == committed
         return 0
 
-    monkeypatch.setattr(check_task_scope, "git_blob_from_ref", fake_git_blob)
+    monkeypatch.setattr(check_task_scope, "git_regular_tree_from_ref", fake_git_tree)
     monkeypatch.setattr(
         check_task_scope,
         "parse_recovery_bundle_manifest_bytes",
@@ -1073,8 +1133,72 @@ def test_recovery_bundle_commit_runner_stages_only_immutable_git_blobs(
     ) == 0
 
 
+def test_recovery_bundle_commit_runner_isolates_imports_from_mutable_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.check_task_scope as check_task_scope
+
+    source_root = tmp_path / "mutable-head"
+    source_root.mkdir()
+    _git(source_root, "init", "-q", "-b", "main")
+    _git(source_root, "config", "user.email", "pm@example.test")
+    _git(source_root, "config", "user.name", "PM")
+    manifest = _synthetic_recovery_manifest(source_root, ("test_a",))
+    manifest_path = (
+        "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+    )
+    test_path = source_root / manifest.members[0].test_path
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        "from pathlib import Path\n"
+        "from bybit_grid import recovery_contract\n\n"
+        "def test_a():\n"
+        "    root = Path(__file__).resolve().parents[3]\n"
+        "    expected = root / 'src/bybit_grid/recovery_contract.py'\n"
+        "    assert Path(recovery_contract.__file__).resolve() == expected\n"
+        "    assert recovery_contract.STATE == 'committed'\n"
+        "    raise AssertionError('synthetic_contract_unavailable')\n",
+        encoding="utf-8",
+    )
+    package = source_root / "src/bybit_grid"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    contract = package / "recovery_contract.py"
+    contract.write_text("STATE = 'committed'\n", encoding="utf-8")
+    (source_root / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\naddopts = []\n", encoding="utf-8"
+    )
+    manifest_file = source_root / manifest_path
+    manifest_file.parent.mkdir(parents=True)
+    manifest_bytes = b"committed manifest\n"
+    manifest_file.write_bytes(manifest_bytes)
+    _git(source_root, "add", ".")
+    _git(source_root, "commit", "-q", "-m", "committed recovery tree")
+    source_sha = _git(source_root, "rev-parse", "HEAD")
+
+    contract.write_text("STATE = 'mutable poison'\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(source_root / "src"))
+    monkeypatch.setattr(
+        check_task_scope,
+        "parse_recovery_bundle_manifest_bytes",
+        lambda data: manifest if data == manifest_bytes else None,
+    )
+    destination = tmp_path / "exact-recovery"
+
+    assert check_task_scope.run_committed_exact_recovery_bundle_red(
+        source_root,
+        destination,
+        source_sha,
+        manifest_path,
+    ) == 0
+    assert (destination / "src/bybit_grid/recovery_contract.py").read_text(
+        encoding="utf-8"
+    ) == "STATE = 'committed'\n"
+
+
 def test_workflow_recovery_red_uses_only_base_owned_dependency_free_gate():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    checker = (Path(__file__).resolve().parents[1] / "scripts/check_task_scope.py").read_text()
     step = workflow.split("      - name: Run combined recovery bundle Draft RED\n", 1)[1].split(
         "      - name: Run supplemental PR checks\n", 1
     )[0]
@@ -1086,6 +1210,10 @@ def test_workflow_recovery_red_uses_only_base_owned_dependency_free_gate():
     assert "--json-report" not in step
     assert "python -m pytest" not in step
     assert "pip install" not in step
+    assert '["git", "archive", "--format=tar", ref]' in checker
+    assert '[sys.executable, "-I", "-S", "-c", child]' in checker
+    assert 'if not key.startswith("PYTHON") and not key.startswith("PYTEST_")' in checker
+    assert 'plugin.forbidden.append(f"staged-import-outside-root:{name}:{resolved}")' in checker
 
 
 @pytest.mark.parametrize("mutation", ("duplicate_collection", "duplicate_call", "deselected", "malformed", "subprocess"))
