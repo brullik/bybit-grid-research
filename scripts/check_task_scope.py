@@ -1050,6 +1050,37 @@ def git_first_parent_commits(start_sha: str) -> tuple[str, ...]:
     return commits
 
 
+def git_first_parent_path_commits(
+    start_sha: str, end_sha: str, path: str,
+) -> tuple[str, ...]:
+    if not _COMMIT_SHA_RE.fullmatch(start_sha):
+        raise ValueError("invalid_git_first_parent_path_start_ref")
+    if not _COMMIT_SHA_RE.fullmatch(end_sha):
+        raise ValueError("invalid_git_first_parent_path_end_ref")
+    if _path_error(path) is not None:
+        raise ValueError("invalid_git_first_parent_path")
+    proc = subprocess.run(
+        [
+            "git", "rev-list", "--first-parent", f"{start_sha}..{end_sha}",
+            "--", path,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    output_pattern = re.compile(r"(?:[0-9a-f]{40}\n)*")
+    commits = tuple(proc.stdout.splitlines())
+    if (
+        proc.returncode != 0
+        or proc.stderr
+        or output_pattern.fullmatch(proc.stdout) is None
+        or len(set(commits)) != len(commits)
+    ):
+        raise RuntimeError("git_first_parent_path_history_failed")
+    return commits
+
+
 def git_commit_parents(commit_sha: str) -> tuple[str, ...]:
     if not _COMMIT_SHA_RE.fullmatch(commit_sha):
         raise ValueError("invalid_git_commit_ref")
@@ -1114,6 +1145,16 @@ def recovery_bundle_history_errors(
     if hashlib.sha256(predecessor_task).hexdigest() != current_member.active_task_sha256:
         return (
             "recovery_bundle_suspension_predecessor_active_task_mismatch:"
+            f"{current_member.task_id}",
+        )
+    active_task_transitions = git_first_parent_path_commits(
+        current_member.activation_commit_sha,
+        manifest.suspension.commit_sha,
+        _TASK_FILE,
+    )
+    if active_task_transitions != (manifest.suspension.commit_sha,):
+        return (
+            "recovery_bundle_current_member_replayed:"
             f"{current_member.task_id}",
         )
     changed_paths = git_commit_changed_paths(manifest.suspension.commit_sha)
