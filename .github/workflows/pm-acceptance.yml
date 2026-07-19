@@ -77,6 +77,145 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Validate current trusted PR identity before head fetch
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_SENDER: ${{ github.event.sender.login }}
+          EVENT_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          EVENT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT_DRAFT: ${{ toJSON(github.event.pull_request.draft) }}
+          GH_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.request
+
+          owner = "brullik"
+          repository = "brullik/bybit-grid-research"
+          actions = {
+              "opened",
+              "synchronize",
+              "reopened",
+              "ready_for_review",
+              "converted_to_draft",
+              "labeled",
+              "unlabeled",
+          }
+
+          def require(condition, reason):
+              if not condition:
+                  raise SystemExit(reason)
+
+          def get_json(path, reason):
+              request = urllib.request.Request(
+                  f'{os.environ["API_URL"]}{path}',
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f'Bearer {os.environ["GH_TOKEN"]}',
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+                  method="GET",
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  require(response.status == 200, reason)
+                  try:
+                      payload = json.loads(response.read())
+                  except (UnicodeDecodeError, json.JSONDecodeError):
+                      raise SystemExit(reason)
+              require(type(payload) is dict, reason)
+              return payload
+
+          def labels(payload, reason, objects):
+              require(type(payload) is list, reason)
+              names = []
+              for item in payload:
+                  if objects:
+                      require(type(item) is dict and type(item.get("name")) is str, reason)
+                      name = item["name"]
+                  else:
+                      require(type(item) is str, reason)
+                      name = item
+                  require(name and name not in names, reason)
+                  names.append(name)
+              return names
+
+          require(os.environ["GITHUB_EVENT_NAME"] == "pull_request_target", "invalid_event_name")
+          require(os.environ["EVENT_ACTION"] in actions, "invalid_event_action")
+          require(os.environ["EVENT_SENDER"] == owner, "invalid_event_sender")
+          require(os.environ["EVENT_PR_AUTHOR"] == owner, "invalid_event_pr_author")
+          require(os.environ["EVENT_REPOSITORY"] == repository, "invalid_event_repository")
+          require(os.environ["EVENT_BASE_REPOSITORY"] == repository, "invalid_event_base_repository")
+          require(os.environ["EVENT_HEAD_REPOSITORY"] == repository, "invalid_event_head_repository")
+          require(os.environ["EVENT_BASE_REF"] == "main", "invalid_event_base_ref")
+
+          number_text = os.environ["EVENT_PR_NUMBER"]
+          require(re.fullmatch(r"[1-9][0-9]*", number_text) is not None, "invalid_pr_number")
+          number = int(number_text)
+          head_sha = os.environ["EVENT_HEAD_SHA"]
+          base_sha = os.environ["EVENT_BASE_SHA"]
+          require(re.fullmatch(r"[0-9a-f]{40}", head_sha) is not None, "invalid_event_head_sha")
+          require(re.fullmatch(r"[0-9a-f]{40}", base_sha) is not None, "invalid_event_base_sha")
+          try:
+              event_labels_raw = json.loads(os.environ["EVENT_LABELS_JSON"])
+          except json.JSONDecodeError:
+              raise SystemExit("invalid_event_labels")
+          event_labels = labels(event_labels_raw, "invalid_event_labels", False)
+          require(os.environ["EVENT_DRAFT"] in {"true", "false"}, "invalid_event_draft")
+          event_draft = os.environ["EVENT_DRAFT"] == "true"
+
+          live = get_json(f"/repos/{repository}/pulls/{number}", "invalid_live_pr")
+          require(type(live.get("number")) is int, "invalid_live_pr")
+          require(live["number"] == number, "pr_number_mismatch")
+          require(type(live.get("state")) is str, "invalid_live_pr")
+          require(live["state"] == "open", "live_pr_not_open")
+          require(type(live.get("draft")) is bool, "invalid_live_pr")
+          require(
+              type(live.get("user")) is dict and type(live["user"].get("login")) is str,
+              "invalid_live_pr",
+          )
+          require(live["user"]["login"] == owner, "live_pr_author_mismatch")
+          require(type(live.get("head")) is dict, "invalid_live_pr")
+          require(type(live["head"].get("sha")) is str, "invalid_live_pr")
+          require(re.fullmatch(r"[0-9a-f]{40}", live["head"]["sha"]) is not None, "invalid_live_pr")
+          require(type(live["head"].get("repo")) is dict, "invalid_live_pr")
+          require(live["head"]["repo"].get("full_name") == repository, "live_head_repository_mismatch")
+          require(type(live.get("base")) is dict, "invalid_live_pr")
+          require(type(live["base"].get("sha")) is str, "invalid_live_pr")
+          require(re.fullmatch(r"[0-9a-f]{40}", live["base"]["sha"]) is not None, "invalid_live_pr")
+          require(live["base"].get("ref") == "main", "live_base_ref_mismatch")
+          require(type(live["base"].get("repo")) is dict, "invalid_live_pr")
+          require(live["base"]["repo"].get("full_name") == repository, "live_base_repository_mismatch")
+          live_labels = labels(live.get("labels"), "invalid_live_labels", True)
+
+          require(live["head"]["sha"] == head_sha, "stale_event_head_sha")
+          require(live["base"]["sha"] == base_sha, "stale_event_base_sha")
+          if "pm-recovery-bundle" in event_labels or "pm-recovery-bundle" in live_labels:
+              require(event_labels == ["pm-recovery-bundle"], "invalid_recovery_labels")
+              require(live_labels == ["pm-recovery-bundle"], "invalid_recovery_labels")
+              require(event_draft and live["draft"], "recovery_pr_not_draft")
+          else:
+              require(live_labels == event_labels, "live_label_drift")
+              require(live["draft"] == event_draft, "live_draft_drift")
+
+          main = get_json(f"/repos/{repository}/git/ref/heads/main", "invalid_live_main")
+          require(main.get("ref") == "refs/heads/main", "invalid_live_main")
+          require(type(main.get("object")) is dict, "invalid_live_main")
+          require(main["object"].get("type") == "commit", "invalid_live_main")
+          require(type(main["object"].get("sha")) is str, "invalid_live_main")
+          require(re.fullmatch(r"[0-9a-f]{40}", main["object"]["sha"]) is not None, "invalid_live_main")
+          require(main["object"]["sha"] == base_sha, "base_not_current_main")
+          PY
       - name: Fetch PR head for diff only
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
