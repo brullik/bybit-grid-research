@@ -1,7 +1,9 @@
 name: PM Acceptance
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
+    types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
+  pull_request_review_thread:
+    types: [resolved, unresolved]
 permissions:
   contents: read
   pull-requests: read
@@ -72,6 +74,39 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      - name: Preflight privileged recovery identity before checkout
+        if: contains(github.event.pull_request.labels.*.name, 'pm-recovery-bundle')
+        env:
+          PR_ACTOR: ${{ github.event.pull_request.user.login }}
+          PR_SENDER: ${{ github.event.sender.login }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          try:
+              labels = json.loads(os.environ["PR_LABELS_JSON"])
+          except json.JSONDecodeError as exc:
+              raise SystemExit("invalid_recovery_labels") from exc
+          expected = {
+              "PR_ACTOR": "brullik",
+              "PR_SENDER": "brullik",
+              "REPOSITORY": "brullik/bybit-grid-research",
+              "BASE_REPOSITORY": "brullik/bybit-grid-research",
+              "HEAD_REPOSITORY": "brullik/bybit-grid-research",
+              "BASE_REF": "main",
+          }
+          if labels != ["pm-recovery-bundle"]:
+              raise SystemExit("recovery_mode_label_mismatch")
+          for name, value in expected.items():
+              if os.environ[name] != value:
+                  raise SystemExit(f"recovery_identity_mismatch:{name}")
+          PY
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -87,16 +122,31 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
+          PR_SENDER: ${{ github.event.sender.login }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set +e
-          json=$(python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --actor "$PR_ACTOR" --labels-json "$PR_LABELS_JSON")
+          json=$(python scripts/check_task_scope.py \
+            --task-file pm_acceptance/active_task.json \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --actor "$PR_ACTOR" \
+            --sender "$PR_SENDER" \
+            --repository "$REPOSITORY" \
+            --base-repository "$BASE_REPOSITORY" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --base-ref "$BASE_REF" \
+            --labels-json "$PR_LABELS_JSON")
           status=$?
           printf '%s\n' "$json"
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
-          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum"}, mode; print(mode)')
+          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum","pm-recovery-bundle"}, mode; print(mode)')
           task_id=$(JSON_PAYLOAD="$json" python -c 'import json, os; task_id=json.loads(os.environ["JSON_PAYLOAD"]).get("task_id"); assert isinstance(task_id, str) and task_id; print(task_id)')
           printf 'pr_mode=%s\n' "$pr_mode" >> "$GITHUB_OUTPUT"
           printf 'task_id=%s\n' "$task_id" >> "$GITHUB_OUTPUT"
@@ -154,13 +204,22 @@ jobs:
         if: needs.protected-paths.outputs.pr-mode == 'implementation'
         working-directory: ${{ runner.temp }}
         env:
-          PYTHONPATH: ${{ runner.temp }}:${{ github.workspace }}/base
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          TASK_ID: ${{ needs.protected-paths.outputs.task-id }}
+          PYTHONPATH: ${{ runner.temp }}
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
-          python -m pytest pm_acceptance -q \
-            -c "$RUNNER_TEMP/pytest.ini" \
-            --confcutdir="$RUNNER_TEMP/pm_acceptance"
+          if [ "$TASK_ID" = "p0-recovery-walk-forward-committed-key" ] && \
+             case "$HEAD_REF" in probe/*) true;; *) false;; esac; then
+            python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
+              --exact-recovery-root "$RUNNER_TEMP" \
+              --recovery-manifest \
+                "$RUNNER_TEMP/pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+          else
+            python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
+              --exact-acceptance-root "$RUNNER_TEMP"
+          fi
       - name: Run base control-plane self-tests for PM-owned PRs
         if: needs.protected-paths.outputs.pr-mode != 'implementation'
         working-directory: ${{ runner.temp }}
@@ -171,6 +230,16 @@ jobs:
         run: |
           python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
             --exact-control-plane-root "$RUNNER_TEMP"
+      - name: Block ordinary task opening unless complete base frozen suite is plain green
+        if: needs.protected-paths.outputs.pr-mode == 'pm-task-definition' && needs.protected-paths.outputs.task-id != 'NO_ACTIVE_IMPLEMENTATION'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ${{ runner.temp }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
+            --exact-acceptance-root "$RUNNER_TEMP"
       - name: Stage head control-plane self-tests
         if: needs.protected-paths.outputs.pr-mode == 'pm-control-plane'
         env:
@@ -223,6 +292,27 @@ jobs:
           python -m pytest "$task_path" --collect-only -q \
             -c "$HEAD_ACCEPTANCE_TEMP/pytest.ini" \
             --confcutdir="$task_path"
+      - name: Stage exact recovery activation manifest
+        if: needs.protected-paths.outputs.pr-mode == 'pm-recovery-bundle'
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/pm_acceptance/reactivations"
+          cp \
+            head/pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json \
+            "$RUNNER_TEMP/pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+      - name: Collect exact recovery activation node set without executing RED
+        if: needs.protected-paths.outputs.pr-mode == 'pm-recovery-bundle'
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ${{ runner.temp }}
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python "${{ github.workspace }}/base/scripts/check_task_scope.py" \
+            --recovery-collection-root "$RUNNER_TEMP" \
+            --recovery-manifest \
+              "$RUNNER_TEMP/pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
       - name: Stage SHA-pinned head frozen erratum
         id: erratum-stage
         if: needs.protected-paths.outputs.pr-mode == 'pm-frozen-erratum'
@@ -943,12 +1033,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
+      contents: read
+      pull-requests: read
       statuses: write
     steps:
       - name: Publish final aggregate status
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           REPOSITORY: ${{ github.repository }}
           API_URL: ${{ github.api_url }}
           SERVER_URL: ${{ github.server_url }}
@@ -959,6 +1052,11 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_HEAD_REPOSITORY: ${{ github.repository }}
+          PR_BASE_REPOSITORY: ${{ github.repository }}
         run: |
           python - <<'PY'
           import json
@@ -967,10 +1065,143 @@ jobs:
           import urllib.request
 
           sha = os.environ["HEAD_SHA"]
-          if os.environ["REPOSITORY"] != "brullik/bybit-grid-research":
+          repository = os.environ["REPOSITORY"]
+          if repository != "brullik/bybit-grid-research":
               raise SystemExit("invalid_repository")
-          if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+          expected_base_sha = os.environ["EXPECTED_BASE_SHA"]
+          if (
+              re.fullmatch(r"[0-9a-f]{40}", sha) is None
+              or re.fullmatch(r"[0-9a-f]{40}", expected_base_sha) is None
+          ):
               raise SystemExit("invalid_head_sha")
+          try:
+              pr_number = int(os.environ["PR_NUMBER"])
+              expected_labels = json.loads(os.environ["PR_LABELS_JSON"])
+          except (ValueError, json.JSONDecodeError) as exc:
+              raise SystemExit("invalid_pull_request_identity_input") from exc
+          if (
+              pr_number <= 0
+              or not isinstance(expected_labels, list)
+              or any(not isinstance(label, str) for label in expected_labels)
+              or len(set(expected_labels)) != len(expected_labels)
+          ):
+              raise SystemExit("invalid_pull_request_identity_input")
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f'Bearer {os.environ["GH_TOKEN"]}',
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          live_request = urllib.request.Request(
+              f"{os.environ['API_URL']}/repos/{repository}/pulls/{pr_number}",
+              headers=headers,
+          )
+          with urllib.request.urlopen(live_request, timeout=30) as response:
+              if response.status != 200:
+                  raise SystemExit(f"live_pull_request_read_failed:{response.status}")
+              live = json.loads(response.read())
+          try:
+              live_identity = {
+                  "author": live["user"]["login"],
+                  "base_ref": live["base"]["ref"],
+                  "base_repository": live["base"]["repo"]["full_name"],
+                  "base_sha": live["base"]["sha"],
+                  "draft": str(live["draft"]).lower(),
+                  "head_ref": live["head"]["ref"],
+                  "head_repository": live["head"]["repo"]["full_name"],
+                  "head_sha": live["head"]["sha"],
+                  "labels": sorted(label["name"] for label in live["labels"]),
+                  "state": live["state"],
+              }
+          except (KeyError, TypeError) as exc:
+              raise SystemExit("live_pull_request_identity_malformed") from exc
+          expected_identity = {
+              "author": os.environ["PR_AUTHOR"],
+              "base_ref": os.environ["BASE_REF"],
+              "base_repository": os.environ["PR_BASE_REPOSITORY"],
+              "base_sha": expected_base_sha,
+              "draft": os.environ["PR_DRAFT"],
+              "head_ref": os.environ["HEAD_REF"],
+              "head_repository": os.environ["PR_HEAD_REPOSITORY"],
+              "head_sha": sha,
+              "labels": sorted(expected_labels),
+              "state": "open",
+          }
+          if live_identity != expected_identity:
+              raise SystemExit("live_pull_request_identity_mismatch")
+
+          main_request = urllib.request.Request(
+              f"{os.environ['API_URL']}/repos/{repository}/git/ref/heads/main",
+              headers=headers,
+          )
+          with urllib.request.urlopen(main_request, timeout=30) as response:
+              if response.status != 200:
+                  raise SystemExit(f"live_main_read_failed:{response.status}")
+              live_main = json.loads(response.read())
+          try:
+              live_main_sha = live_main["object"]["sha"]
+          except (KeyError, TypeError) as exc:
+              raise SystemExit("live_main_identity_malformed") from exc
+          if (
+              not isinstance(live_main_sha, str)
+              or re.fullmatch(r"[0-9a-f]{40}", live_main_sha) is None
+              or live_main_sha != expected_base_sha
+          ):
+              raise SystemExit("live_main_sha_mismatch")
+
+          owner, name = repository.split("/", 1)
+          query = (
+              "query($owner:String!,$name:String!,$number:Int!,$after:String){"
+              "repository(owner:$owner,name:$name){pullRequest(number:$number){"
+              "reviewThreads(first:100,after:$after){nodes{isResolved}"
+              "pageInfo{hasNextPage endCursor}}}}}"
+          )
+          thread_nodes = []
+          cursor = None
+          seen_cursors = set()
+          while True:
+              graph_payload = {
+                  "query": query,
+                  "variables": {
+                      "after": cursor,
+                      "name": name,
+                      "number": pr_number,
+                      "owner": owner,
+                  },
+              }
+              graph_request = urllib.request.Request(
+                  f"{os.environ['API_URL']}/graphql",
+                  data=json.dumps(graph_payload, separators=(",", ":")).encode(),
+                  headers=headers,
+                  method="POST",
+              )
+              with urllib.request.urlopen(graph_request, timeout=30) as response:
+                  if response.status != 200:
+                      raise SystemExit(f"review_thread_read_failed:{response.status}")
+                  graph = json.loads(response.read())
+              try:
+                  review_threads = graph["data"]["repository"]["pullRequest"]["reviewThreads"]
+                  page_nodes = review_threads["nodes"]
+                  page_info = review_threads["pageInfo"]
+                  has_next_page = page_info["hasNextPage"]
+                  end_cursor = page_info["endCursor"]
+              except (KeyError, TypeError) as exc:
+                  raise SystemExit("review_thread_state_malformed") from exc
+              if (
+                  type(has_next_page) is not bool
+                  or not isinstance(page_nodes, list)
+                  or any(not isinstance(thread, dict) for thread in page_nodes)
+              ):
+                  raise SystemExit("review_thread_state_malformed")
+              thread_nodes.extend(page_nodes)
+              if not has_next_page:
+                  break
+              cursor = end_cursor
+              if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                  raise SystemExit("review_thread_state_malformed")
+              seen_cursors.add(cursor)
+          if any(thread.get("isResolved") is not True for thread in thread_nodes):
+              raise SystemExit("unresolved_review_threads")
           results = {
               "pending": os.environ["PENDING_RESULT"],
               "protected": os.environ["PROTECTED_RESULT"],

@@ -35,7 +35,188 @@ _OWNER = "brullik"
 _TASK_FILE = "pm_acceptance/active_task.json"
 _INACTIVE_TASK_ID = "NO_ACTIVE_IMPLEMENTATION"
 _TASK_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
-_MODE_LABELS = frozenset({"pm-task-definition", "pm-control-plane", "pm-frozen-erratum"})
+_MODE_LABELS = frozenset({
+    "pm-task-definition",
+    "pm-control-plane",
+    "pm-frozen-erratum",
+    "pm-recovery-bundle",
+})
+_RECOVERY_BUNDLE_ID = "p0-recovery-walk-forward-committed-key"
+_RECOVERY_MANIFEST_PATH = (
+    f"pm_acceptance/reactivations/{_RECOVERY_BUNDLE_ID}.json"
+)
+_RECOVERY_SCHEMA = "pm_recovery_bundle_v1"
+_RECOVERY_REPOSITORY = "brullik/bybit-grid-research"
+_RECOVERY_KEYS = frozenset({
+    "activation_base_sha",
+    "allowed_paths",
+    "bundle_id",
+    "head_active_task_sha256",
+    "members",
+    "previous_erratum",
+    "required_paths",
+    "schema",
+    "suspension_commit_sha",
+})
+_RECOVERY_MEMBER_KEYS = frozenset({
+    "contract_path",
+    "expected_failure_sentinel",
+    "expected_node_ids",
+    "frozen_test_path",
+    "historical_activation_commit_sha",
+    "historical_active_task_sha256",
+    "historical_contract_sha256",
+    "historical_frozen_test_sha256",
+    "issue_number",
+    "task_id",
+})
+_RECOVERY_ERRATUM_KEYS = frozenset({
+    "commit_sha",
+    "corrected_frozen_test_sha256",
+    "manifest_path",
+    "manifest_sha256",
+})
+_RECOVERY_PATHS = (
+    "src/bybit_grid/research/scoring/outcome_grains.py",
+    "src/bybit_grid/research/walk_forward/splits.py",
+    "src/bybit_grid/research/walk_forward/leakage_audit.py",
+    "scripts/check_scoring_review_pack.py",
+    "scripts/make_scoring_review_pack.py",
+    "tests/test_sprint_05_cost_scoring_walkforward.py",
+    "tests/test_sprint_05_6_review_pack_closure.py",
+    "tests/test_persisted_exclusive_outcome_end_walk_forward.py",
+    "src/bybit_grid/data/market_store/models.py",
+    "src/bybit_grid/data/market_store/import_public_batch.py",
+    "src/bybit_grid/data/market_store/transaction.py",
+    "tests/test_store_committed_key_preflight.py",
+)
+_RECOVERY_PREVIOUS_CLOSE_SHA = "c0f1a58f0efdb5afcdb0f128ce3d896d689d32aa"
+_RECOVERY_PREVIOUS_TEST_PATH = (
+    "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/"
+    "test_walk_forward_exclusive_outcome_end.py"
+)
+_RECOVERY_SUSPENDED_TEST_PATH = (
+    "pm_acceptance/tasks/p0-committed-key-preflight/"
+    "test_store_committed_key_preflight.py"
+)
+_RECOVERY_MEMBER_NODE_IDS = (
+    tuple(
+        f"{_RECOVERY_PREVIOUS_TEST_PATH}::{suffix}"
+        for suffix in (
+            "test_contract_markers_exact_scope_and_embedded_source",
+            "test_contract_versions_and_review_pack_members_are_pinned",
+            "test_grains_preserve_non_aligned_v5_persisted_exclusive_end_without_legacy_alias",
+            "test_grains_fail_closed_on_invalid_v5_boundary_contract[outcome_end_exclusive_ms-None]",
+            "test_grains_fail_closed_on_invalid_v5_boundary_contract[outcome_end_exclusive_ms-3660000.0]",
+            "test_grains_fail_closed_on_invalid_v5_boundary_contract[outcome_end_exclusive_ms-True]",
+            "test_grains_fail_closed_on_invalid_v5_boundary_contract[decision_time_source-signal_time_fallback]",
+            "test_grains_fail_closed_on_invalid_v5_boundary_contract[causal_provenance_complete_bool-False]",
+            "test_grains_fail_closed_on_invalid_v5_boundary_contract[future_outcome_eligible_bool-False]",
+            "test_grains_fail_closed_on_invalid_v5_boundary_contract[signal_time_ms--1]",
+            "test_grains_reject_legacy_alias_and_duplicate_source_provenance",
+            "test_split_accepts_exact_persisted_end_at_each_own_role_boundary",
+            "test_split_excludes_valid_persisted_end_one_ms_past_each_role_boundary",
+            "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[missing_canonical_end]",
+            "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[legacy_only]",
+            "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[duplicate_event_horizon]",
+            "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[float_end]",
+            "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[boolean_end]",
+            "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[wrong_decision_source]",
+            "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[eligibility_mismatch]",
+            "test_build_splits_rejects_invalid_or_ambiguous_source_before_classification[negative_signal]",
+            "test_schema_less_empty_split_input_does_not_bypass_required_contract",
+            "test_missing_and_ineligible_max_horizons_are_distinct_and_universe_is_not_shrunk",
+            "test_write_splits_persists_full_disposition_ledger_and_zero_derivation",
+            "test_leakage_audit_uses_each_roles_own_end_not_the_next_role_start[train]",
+            "test_leakage_audit_uses_each_roles_own_end_not_the_next_role_start[validation]",
+            "test_leakage_audit_uses_each_roles_own_end_not_the_next_role_start[test]",
+            "test_leakage_audit_rejects_duplicate_fold_event_inconsistent_bounds_and_legacy_alias",
+            "test_checker_rejects_coherent_legacy_v4_contract",
+            "test_checker_recomputes_dispositions_instead_of_trusting_coherently_relabelled_summaries",
+            "test_checker_rejects_assigned_ledger_split_divergence_even_with_fresh_hashes",
+            "test_maker_declares_v5_contract_and_canonical_boundary_copy_is_lazy_import_safe",
+        )
+    ),
+    tuple(
+        f"{_RECOVERY_SUSPENDED_TEST_PATH}::{suffix}"
+        for suffix in (
+            "test_contract_markers_and_exact_implementation_scope",
+            "test_contract_markers_and_exact_public_surface",
+            "test_platform_path_reaches_preflight_without_creating_store_root",
+            "test_source_hash_revalidation_is_typed_and_prewrite",
+            "test_projection_revalidation_rejects_forged_instance",
+            "test_exact_accepted_evidence_reimport_is_typed_noop",
+            "test_receipt_appearing_after_plan_is_still_exact_typed_noop",
+            "test_preflight_rejects_real_different_evidence_key_conflict",
+            "test_stale_plan_rechecks_committed_keys_before_transaction_root",
+            "test_equal_committed_rows_are_rejected_for_every_dataset[instrument_snapshot]",
+            "test_equal_committed_rows_are_rejected_for_every_dataset[trade_kline_1m]",
+            "test_equal_committed_rows_are_rejected_for_every_dataset[mark_kline_1m]",
+            "test_equal_committed_rows_are_rejected_for_every_dataset[funding_rate]",
+            "test_different_committed_rows_are_rejected_for_every_dataset[instrument_snapshot]",
+            "test_different_committed_rows_are_rejected_for_every_dataset[trade_kline_1m]",
+            "test_different_committed_rows_are_rejected_for_every_dataset[mark_kline_1m]",
+            "test_different_committed_rows_are_rejected_for_every_dataset[funding_rate]",
+            "test_nonoverlapping_second_import_remains_valid",
+            "test_nonexact_existing_receipt_graph_is_not_a_noop",
+            "test_conflicting_immutable_chunk_path_fails_before_transaction_root",
+        )
+    ),
+)
+_RECOVERY_MEMBER_PERMITS = (
+    {
+        "contract_path": (
+            "docs/frozen_contracts/tasks/"
+            "p0-walk-forward-exclusive-outcome-end.md"
+        ),
+        "expected_failure_sentinel": (
+            "persisted_exclusive_outcome_end_walk_forward_contract_unavailable"
+        ),
+        "expected_node_ids": _RECOVERY_MEMBER_NODE_IDS[0],
+        "frozen_test_path": _RECOVERY_PREVIOUS_TEST_PATH,
+        "historical_activation_commit_sha": (
+            "1305abb1517944e2cc9790e5546ca52ae66f592e"
+        ),
+        "historical_active_task_sha256": (
+            "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e"
+        ),
+        "historical_contract_sha256": (
+            "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05"
+        ),
+        "historical_frozen_test_sha256": (
+            "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e"
+        ),
+        "issue_number": 156,
+        "node_count": 32,
+        "task_id": "p0-walk-forward-exclusive-outcome-end",
+    },
+    {
+        "contract_path": (
+            "docs/frozen_contracts/tasks/p0-committed-key-preflight.md"
+        ),
+        "expected_failure_sentinel": "committed_key_preflight_contract_unavailable",
+        "expected_node_ids": _RECOVERY_MEMBER_NODE_IDS[1],
+        "frozen_test_path": _RECOVERY_SUSPENDED_TEST_PATH,
+        "historical_activation_commit_sha": (
+            "3b826f2a6a3b02897047a30de8e920e2f5b72431"
+        ),
+        "historical_active_task_sha256": (
+            "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89"
+        ),
+        "historical_contract_sha256": (
+            "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696"
+        ),
+        "historical_frozen_test_sha256": (
+            "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513"
+        ),
+        "issue_number": 157,
+        "node_count": 20,
+        "task_id": "p0-committed-key-preflight",
+    },
+)
+_RECOVERY_PREVIOUS_ERRATUM_PATH = (
+    "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json"
+)
 _ERRATUM_SCHEMA = "pm_frozen_erratum_v1"
 _ERRATUM_V2_SCHEMA = "pm_frozen_erratum_v2"
 _ERRATUM_PREFIX = "pm_acceptance/errata/"
@@ -157,6 +338,41 @@ class FrozenErratumV2Manifest:
     reason_code: str
     expected_red_failed_node_ids: tuple[str, ...]
     expected_red_passed_node_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RecoveryBundleMember:
+    task_id: str
+    issue_number: int
+    historical_activation_commit_sha: str
+    historical_active_task_sha256: str
+    historical_frozen_test_sha256: str
+    historical_contract_sha256: str
+    frozen_test_path: str
+    contract_path: str
+    expected_failure_sentinel: str
+    expected_node_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RecoveryErratumEvidence:
+    commit_sha: str
+    manifest_path: str
+    manifest_sha256: str
+    corrected_frozen_test_sha256: str
+
+
+@dataclass(frozen=True)
+class RecoveryBundleManifest:
+    schema: str
+    bundle_id: str
+    activation_base_sha: str
+    head_active_task_sha256: str
+    suspension_commit_sha: str
+    allowed_paths: tuple[str, ...]
+    required_paths: tuple[str, ...]
+    members: tuple[RecoveryBundleMember, ...]
+    previous_erratum: RecoveryErratumEvidence
 
 
 def _reject_constant(value: str) -> None:
@@ -442,6 +658,156 @@ def parse_frozen_erratum_v2_manifest_bytes(data: bytes) -> FrozenErratumV2Manife
     )
 
 
+def parse_recovery_bundle_manifest_bytes(data: bytes) -> RecoveryBundleManifest:
+    """Parse the one fixed two-task recovery permit without genericizing it."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("utf8_bom")
+    obj = json.loads(
+        data.decode("utf-8", "strict"),
+        object_pairs_hook=_pairs_hook,
+        parse_float=_reject_float,
+        parse_constant=_reject_constant,
+    )
+    if not isinstance(obj, dict):
+        raise ValueError("recovery_manifest_not_object")
+    if set(obj) != _RECOVERY_KEYS:
+        unknown = sorted(set(obj) - _RECOVERY_KEYS)
+        missing = sorted(_RECOVERY_KEYS - set(obj))
+        raise ValueError(
+            f"invalid_recovery_manifest_keys:missing={','.join(missing)}:"
+            f"unknown={','.join(unknown)}"
+        )
+    if obj["schema"] != _RECOVERY_SCHEMA or not isinstance(obj["schema"], str):
+        raise ValueError("invalid_recovery_schema")
+    if obj["bundle_id"] != _RECOVERY_BUNDLE_ID or not isinstance(obj["bundle_id"], str):
+        raise ValueError("recovery_bundle_id_mismatch")
+    for key in ("activation_base_sha", "suspension_commit_sha"):
+        if not isinstance(obj[key], str) or not _COMMIT_SHA_RE.fullmatch(obj[key]):
+            raise ValueError(f"invalid_recovery_{key}")
+    if (
+        not isinstance(obj["head_active_task_sha256"], str)
+        or not _SHA256_RE.fullmatch(obj["head_active_task_sha256"])
+    ):
+        raise ValueError("invalid_recovery_head_active_task_sha256")
+    if obj["allowed_paths"] != list(_RECOVERY_PATHS):
+        raise ValueError("recovery_allowed_paths_mismatch")
+    if obj["required_paths"] != list(_RECOVERY_PATHS):
+        raise ValueError("recovery_required_paths_mismatch")
+
+    raw_members = obj["members"]
+    if not isinstance(raw_members, list) or len(raw_members) != len(_RECOVERY_MEMBER_PERMITS):
+        raise ValueError("recovery_member_identity_mismatch")
+    members: list[RecoveryBundleMember] = []
+    all_node_ids: set[str] = set()
+    for raw_member, permit in zip(raw_members, _RECOVERY_MEMBER_PERMITS, strict=True):
+        if not isinstance(raw_member, dict) or set(raw_member) != _RECOVERY_MEMBER_KEYS:
+            raise ValueError("invalid_recovery_member_keys")
+        fixed = {
+            key: value
+            for key, value in permit.items()
+            if key not in {"expected_node_ids", "node_count"}
+        }
+        if any(raw_member.get(key) != value for key, value in fixed.items()):
+            raise ValueError("recovery_member_identity_mismatch")
+        node_ids = raw_member["expected_node_ids"]
+        if not isinstance(node_ids, list):
+            raise ValueError("recovery_node_count_mismatch")
+        prefix = f'{permit["frozen_test_path"]}::'
+        checked_nodes: list[str] = []
+        for node_id in node_ids:
+            if (
+                not isinstance(node_id, str)
+                or not node_id.startswith(prefix)
+                or any(ord(character) < 32 or ord(character) == 127 for character in node_id)
+            ):
+                raise ValueError("invalid_recovery_node_id")
+            if node_id in all_node_ids:
+                raise ValueError("duplicate_recovery_node_id")
+            all_node_ids.add(node_id)
+            checked_nodes.append(node_id)
+        if len(node_ids) != permit["node_count"]:
+            raise ValueError("recovery_node_count_mismatch")
+        if tuple(node_ids) != permit["expected_node_ids"]:
+            raise ValueError("recovery_node_ids_mismatch")
+        members.append(RecoveryBundleMember(
+            task_id=raw_member["task_id"],
+            issue_number=raw_member["issue_number"],
+            historical_activation_commit_sha=raw_member["historical_activation_commit_sha"],
+            historical_active_task_sha256=raw_member["historical_active_task_sha256"],
+            historical_frozen_test_sha256=raw_member["historical_frozen_test_sha256"],
+            historical_contract_sha256=raw_member["historical_contract_sha256"],
+            frozen_test_path=raw_member["frozen_test_path"],
+            contract_path=raw_member["contract_path"],
+            expected_failure_sentinel=raw_member["expected_failure_sentinel"],
+            expected_node_ids=tuple(checked_nodes),
+        ))
+    if len(all_node_ids) != 52:
+        raise ValueError("recovery_total_node_count_mismatch")
+
+    raw_erratum = obj["previous_erratum"]
+    if not isinstance(raw_erratum, dict) or set(raw_erratum) != _RECOVERY_ERRATUM_KEYS:
+        raise ValueError("invalid_recovery_previous_erratum_keys")
+    if raw_erratum.get("manifest_path") != _RECOVERY_PREVIOUS_ERRATUM_PATH:
+        raise ValueError("recovery_previous_erratum_identity_mismatch")
+    if (
+        not isinstance(raw_erratum.get("commit_sha"), str)
+        or not _COMMIT_SHA_RE.fullmatch(raw_erratum["commit_sha"])
+    ):
+        raise ValueError("invalid_recovery_previous_erratum_commit_sha")
+    for key in ("manifest_sha256", "corrected_frozen_test_sha256"):
+        if not isinstance(raw_erratum.get(key), str) or not _SHA256_RE.fullmatch(raw_erratum[key]):
+            raise ValueError(f"invalid_recovery_previous_erratum_{key}")
+
+    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if data != canonical:
+        raise ValueError("noncanonical_recovery_manifest_bytes")
+    return RecoveryBundleManifest(
+        schema=obj["schema"],
+        bundle_id=obj["bundle_id"],
+        activation_base_sha=obj["activation_base_sha"],
+        head_active_task_sha256=obj["head_active_task_sha256"],
+        suspension_commit_sha=obj["suspension_commit_sha"],
+        allowed_paths=tuple(obj["allowed_paths"]),
+        required_paths=tuple(obj["required_paths"]),
+        members=tuple(members),
+        previous_erratum=RecoveryErratumEvidence(
+            commit_sha=raw_erratum["commit_sha"],
+            manifest_path=raw_erratum["manifest_path"],
+            manifest_sha256=raw_erratum["manifest_sha256"],
+            corrected_frozen_test_sha256=raw_erratum["corrected_frozen_test_sha256"],
+        ),
+    )
+
+
+def recovery_event_identity_errors(
+    *,
+    actor: str,
+    sender: str,
+    repository: str,
+    base_repository: str,
+    head_repository: str,
+    base_ref: str,
+    labels: tuple[str, ...],
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    if actor != _OWNER:
+        errors.append(f"wrong_recovery_actor:{actor}")
+    if sender != _OWNER:
+        errors.append(f"wrong_recovery_sender:{sender}")
+    for field_name, value in (
+        ("repository", repository),
+        ("base_repository", base_repository),
+        ("head_repository", head_repository),
+    ):
+        if value != _RECOVERY_REPOSITORY:
+            errors.append(f"wrong_recovery_{field_name}:{value}")
+    if base_ref != "main":
+        errors.append(f"wrong_recovery_base_ref:{base_ref}")
+    if labels != ("pm-recovery-bundle",):
+        errors.append("recovery_mode_label_mismatch")
+    return tuple(sorted(errors))
+
+
 def _matches(rule: str, path: str) -> bool:
     if rule == "requirements/*.txt":
         rest = path.removeprefix("requirements/")
@@ -644,6 +1010,12 @@ def classify_pr_mode(actor: str, labels: tuple[str, ...], changed_paths: tuple[s
                 erratum_manifest = path.startswith(_ERRATUM_PREFIX) and path.endswith(".json")
                 if path != _TASK_FILE and not task_test and not erratum_manifest:
                     errors.append(f"pm_frozen_erratum_out_of_scope:{path}")
+        elif label == "pm-recovery-bundle":
+            mode = "pm-recovery-bundle"
+            expected = {_TASK_FILE, _RECOVERY_MANIFEST_PATH}
+            for path in valid:
+                if path not in expected:
+                    errors.append(f"pm_recovery_bundle_out_of_scope:{path}")
         else:
             mode = "pm-control-plane"
             for path in valid:
@@ -679,6 +1051,11 @@ def acceptance_plan_for_mode(mode: str) -> tuple[str, ...]:
         return (
             "base-control-plane-self-tests",
             "head-frozen-erratum-exact-red",
+        )
+    if mode == "pm-recovery-bundle":
+        return (
+            "base-control-plane-self-tests",
+            "head-recovery-bundle-manifest-validation",
         )
     raise ValueError(f"invalid_mode:{mode}")
 
@@ -729,6 +1106,101 @@ def git_is_ancestor(ancestor_sha: str, descendant_sha: str) -> bool:
     if proc.returncode == 1:
         return False
     raise RuntimeError("git_ancestor_check_failed")
+
+
+def git_blob_mode_from_ref(ref: str, path: str) -> str | None:
+    if not _SHA_RE.fullmatch(ref):
+        raise ValueError("invalid_git_mode_ref")
+    if _path_error(path) is not None:
+        raise ValueError("invalid_git_mode_path")
+    proc = subprocess.run(
+        ["git", "ls-tree", "-z", ref, "--", path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("git_mode_check_failed")
+    if not proc.stdout:
+        return None
+    records = [record for record in proc.stdout.split(b"\0") if record]
+    if len(records) != 1:
+        raise RuntimeError("git_mode_check_ambiguous")
+    metadata, separator, raw_path = records[0].partition(b"\t")
+    fields = metadata.split()
+    if separator != b"\t" or len(fields) != 3 or raw_path.decode("utf-8", "strict") != path:
+        raise RuntimeError("git_mode_check_malformed")
+    return fields[0].decode("ascii", "strict")
+
+
+def git_commit_parents(ref: str) -> tuple[str, ...]:
+    if not _SHA_RE.fullmatch(ref):
+        raise ValueError("invalid_git_commit_ref")
+    proc = subprocess.run(
+        ["git", "show", "-s", "--format=%P", ref],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("git_commit_parents_unreadable")
+    parents = tuple(proc.stdout.strip().split())
+    if any(_COMMIT_SHA_RE.fullmatch(parent) is None for parent in parents):
+        raise RuntimeError("git_commit_parents_malformed")
+    return parents
+
+
+def git_first_parent_commits(ref: str) -> tuple[str, ...]:
+    if not _SHA_RE.fullmatch(ref):
+        raise ValueError("invalid_git_history_ref")
+    proc = subprocess.run(
+        ["git", "rev-list", "--first-parent", ref],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("git_first_parent_history_unreadable")
+    commits = tuple(line for line in proc.stdout.splitlines() if line)
+    if not commits or any(_COMMIT_SHA_RE.fullmatch(commit) is None for commit in commits):
+        raise RuntimeError("git_first_parent_history_malformed")
+    return commits
+
+
+def git_path_first_parent_changes(ref: str, path: str) -> tuple[str, ...]:
+    if not _SHA_RE.fullmatch(ref):
+        raise ValueError("invalid_git_path_history_ref")
+    if _path_error(path) is not None:
+        raise ValueError("invalid_git_path_history_path")
+    proc = subprocess.run(
+        ["git", "log", "--first-parent", "--format=%H", ref, "--", path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("git_path_history_unreadable")
+    commits = tuple(line for line in proc.stdout.splitlines() if line)
+    if any(_COMMIT_SHA_RE.fullmatch(commit) is None for commit in commits):
+        raise RuntimeError("git_path_history_malformed")
+    return commits
+
+
+def git_active_task_digest_occurrences(ref: str, digest: str) -> tuple[str, ...]:
+    if _SHA256_RE.fullmatch(digest) is None:
+        raise ValueError("invalid_active_task_history_digest")
+    occurrences: list[str] = []
+    for commit in git_path_first_parent_changes(ref, _TASK_FILE):
+        try:
+            task_bytes = git_blob_from_ref(commit, _TASK_FILE)
+        except RuntimeError:
+            continue
+        if _sha256(task_bytes) == digest:
+            occurrences.append(commit)
+    return tuple(occurrences)
 
 
 def _erratum_manifest_path(task_id: str) -> str:
@@ -1163,6 +1635,328 @@ def frozen_erratum_v2_transition_errors(
     return tuple(sorted(errors))
 
 
+def recovery_bundle_transition_errors(
+    base_sha: str,
+    head_sha: str,
+    base_task: ActiveTask,
+    head_task: ActiveTask,
+    changed_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Validate the single fixed recovery activation and its complete audit chain."""
+    errors = _changed_path_errors(changed_paths)
+    valid = [path for path in changed_paths if isinstance(path, str) and _path_error(path) is None]
+    expected_paths = {_TASK_FILE, _RECOVERY_MANIFEST_PATH}
+    if len(valid) != 2 or set(valid) != expected_paths:
+        errors.append("recovery_activation_diff_not_exact_two_paths")
+
+    previous_permit, suspended_permit = _RECOVERY_MEMBER_PERMITS
+    if (
+        base_task.task_id != previous_permit["task_id"]
+        or base_task.allowed_paths != _RECOVERY_PATHS[:8]
+        or base_task.required_paths != _RECOVERY_PATHS[:8]
+        or _sha256(_task_bytes_for_hash(base_task))
+        != previous_permit["historical_active_task_sha256"]
+    ):
+        errors.append("recovery_base_task_not_exact_erratum_reactivation")
+    if (
+        head_task.task_id != _RECOVERY_BUNDLE_ID
+        or head_task.allowed_paths != _RECOVERY_PATHS
+        or head_task.required_paths != _RECOVERY_PATHS
+        or head_task.forbidden_paths != base_task.forbidden_paths
+    ):
+        errors.append("recovery_head_task_not_exact_union")
+
+    if git_commit_parents(head_sha) != (base_sha,):
+        errors.append("recovery_head_not_single_direct_commit")
+    if git_object_exists(base_sha, _RECOVERY_MANIFEST_PATH):
+        errors.append("recovery_manifest_already_exists")
+    if not git_object_exists(head_sha, _RECOVERY_MANIFEST_PATH):
+        errors.append("head_recovery_manifest_missing")
+        return tuple(sorted(set(errors)))
+
+    try:
+        manifest_bytes = git_blob_from_ref(head_sha, _RECOVERY_MANIFEST_PATH)
+        manifest = parse_recovery_bundle_manifest_bytes(manifest_bytes)
+    except (RuntimeError, UnicodeDecodeError, ValueError) as exc:
+        errors.append(str(exc))
+        return tuple(sorted(set(errors)))
+    if manifest.activation_base_sha != base_sha:
+        errors.append("recovery_activation_base_sha_mismatch")
+    if manifest.head_active_task_sha256 != _sha256(_task_bytes_for_hash(head_task)):
+        errors.append("recovery_head_active_task_sha256_mismatch")
+    for path in (_TASK_FILE, _RECOVERY_MANIFEST_PATH):
+        try:
+            mode = git_blob_mode_from_ref(head_sha, path)
+        except (RuntimeError, UnicodeDecodeError, ValueError):
+            mode = None
+        if mode != "100644":
+            errors.append(f"recovery_head_file_mode_mismatch:{path}")
+
+    first_parent_history = git_first_parent_commits(base_sha)
+    history_set = set(first_parent_history)
+    if manifest.suspension_commit_sha not in history_set:
+        errors.append("recovery_suspension_not_first_parent")
+    task_changes = git_path_first_parent_changes(base_sha, _TASK_FILE)
+    if manifest.suspension_commit_sha not in task_changes:
+        errors.append("recovery_suspension_not_task_transition")
+    else:
+        try:
+            suspension_parents = git_commit_parents(manifest.suspension_commit_sha)
+            suspension_task_bytes = git_blob_from_ref(
+                manifest.suspension_commit_sha,
+                _TASK_FILE,
+            )
+            suspension_task = parse_active_task_bytes(suspension_task_bytes)
+            historical_close_bytes = git_blob_from_ref(
+                _RECOVERY_PREVIOUS_CLOSE_SHA,
+                _TASK_FILE,
+            )
+            parent_task_bytes = git_blob_from_ref(suspension_parents[0], _TASK_FILE)
+            suspension_mode = git_blob_mode_from_ref(
+                manifest.suspension_commit_sha,
+                _TASK_FILE,
+            )
+            parent_task_mode = git_blob_mode_from_ref(suspension_parents[0], _TASK_FILE)
+        except (IndexError, RuntimeError, UnicodeDecodeError, ValueError):
+            errors.append("recovery_suspension_transition_unreadable")
+        else:
+            if len(suspension_parents) != 1:
+                errors.append("recovery_suspension_not_single_commit")
+            if (
+                suspension_task.task_id != _INACTIVE_TASK_ID
+                or suspension_task.allowed_paths
+                or suspension_task.required_paths
+                or suspension_task_bytes != historical_close_bytes
+                or _sha256(parent_task_bytes)
+                != suspended_permit["historical_active_task_sha256"]
+                or suspension_mode != "100644"
+                or parent_task_mode != "100644"
+            ):
+                errors.append("recovery_suspension_transition_mismatch")
+            try:
+                suspension_paths = changed_paths_from_git(
+                    suspension_parents[0],
+                    manifest.suspension_commit_sha,
+                )
+            except RuntimeError:
+                errors.append("recovery_suspension_diff_unreadable")
+            else:
+                if suspension_paths != (_TASK_FILE,):
+                    errors.append("recovery_suspension_diff_mismatch")
+
+    for member, permit in zip(manifest.members, _RECOVERY_MEMBER_PERMITS, strict=True):
+        activation = member.historical_activation_commit_sha
+        if activation not in history_set:
+            errors.append(f"recovery_activation_not_first_parent:{member.task_id}")
+            continue
+        for path, digest, label in (
+            (_TASK_FILE, member.historical_active_task_sha256, "active_task"),
+            (member.frozen_test_path, member.historical_frozen_test_sha256, "frozen_test"),
+            (member.contract_path, member.historical_contract_sha256, "contract"),
+        ):
+            try:
+                historical_bytes = git_blob_from_ref(activation, path)
+                mode = git_blob_mode_from_ref(activation, path)
+            except (RuntimeError, UnicodeDecodeError, ValueError):
+                errors.append(f"recovery_historical_{label}_unreadable:{member.task_id}")
+                continue
+            if _sha256(historical_bytes) != digest:
+                errors.append(f"recovery_historical_{label}_sha256_mismatch:{member.task_id}")
+            if mode != "100644":
+                errors.append(f"recovery_historical_{label}_mode_mismatch:{member.task_id}")
+
+        occurrences = git_active_task_digest_occurrences(
+            base_sha,
+            member.historical_active_task_sha256,
+        )
+        if member.task_id == previous_permit["task_id"]:
+            expected_occurrences = {
+                member.historical_activation_commit_sha,
+                manifest.previous_erratum.commit_sha,
+            }
+        else:
+            expected_occurrences = {member.historical_activation_commit_sha}
+        if set(occurrences) != expected_occurrences or len(occurrences) != len(expected_occurrences):
+            errors.append(f"recovery_task_state_replayed:{member.task_id}")
+
+        for path, digest, label in (
+            (member.contract_path, member.historical_contract_sha256, "contract"),
+            (
+                member.frozen_test_path,
+                (
+                    manifest.previous_erratum.corrected_frozen_test_sha256
+                    if member.task_id == previous_permit["task_id"]
+                    else member.historical_frozen_test_sha256
+                ),
+                "frozen_test",
+            ),
+        ):
+            try:
+                base_bytes = git_blob_from_ref(base_sha, path)
+                base_mode = git_blob_mode_from_ref(base_sha, path)
+            except (RuntimeError, UnicodeDecodeError, ValueError):
+                errors.append(f"recovery_base_{label}_unreadable:{member.task_id}")
+                continue
+            if _sha256(base_bytes) != digest:
+                errors.append(f"recovery_base_{label}_sha256_mismatch:{member.task_id}")
+            if base_mode != "100644":
+                errors.append(f"recovery_base_{label}_mode_mismatch:{member.task_id}")
+
+    erratum = manifest.previous_erratum
+    previous_activation = previous_permit["historical_activation_commit_sha"]
+    suspended_activation = suspended_permit["historical_activation_commit_sha"]
+    expected_task_history = (
+        erratum.commit_sha,
+        manifest.suspension_commit_sha,
+        suspended_activation,
+        _RECOVERY_PREVIOUS_CLOSE_SHA,
+        previous_activation,
+    )
+    if previous_activation not in task_changes:
+        errors.append("recovery_previous_activation_not_task_transition")
+    else:
+        task_slice = task_changes[: task_changes.index(previous_activation) + 1]
+        if task_slice != expected_task_history:
+            errors.append("recovery_active_task_history_mismatch")
+
+    if erratum.commit_sha != base_sha:
+        errors.append("recovery_erratum_not_activation_base")
+    if erratum.commit_sha not in history_set:
+        errors.append("recovery_erratum_commit_not_first_parent")
+    erratum_changes = git_path_first_parent_changes(base_sha, erratum.manifest_path)
+    if erratum_changes != (erratum.commit_sha,):
+        errors.append("recovery_erratum_history_not_exactly_once")
+    if (
+        erratum.commit_sha in history_set
+        and manifest.suspension_commit_sha in history_set
+        and suspended_activation in history_set
+        and _RECOVERY_PREVIOUS_CLOSE_SHA in history_set
+        and previous_activation in history_set
+    ):
+        lifecycle = tuple(
+            first_parent_history.index(commit)
+            for commit in expected_task_history
+        )
+        if lifecycle != tuple(sorted(lifecycle)):
+            errors.append("recovery_lifecycle_order_mismatch")
+
+    try:
+        previous_close_parents = git_commit_parents(_RECOVERY_PREVIOUS_CLOSE_SHA)
+        suspended_activation_parents = git_commit_parents(suspended_activation)
+        previous_close_task = parse_active_task_bytes(
+            git_blob_from_ref(_RECOVERY_PREVIOUS_CLOSE_SHA, _TASK_FILE)
+        )
+        previous_close_mode = git_blob_mode_from_ref(_RECOVERY_PREVIOUS_CLOSE_SHA, _TASK_FILE)
+    except (RuntimeError, UnicodeDecodeError, ValueError):
+        errors.append("recovery_historical_transition_unreadable")
+    else:
+        if previous_close_parents != (previous_activation,):
+            errors.append("recovery_previous_close_parent_mismatch")
+        if suspended_activation_parents != (_RECOVERY_PREVIOUS_CLOSE_SHA,):
+            errors.append("recovery_suspended_activation_parent_mismatch")
+        if (
+            previous_close_task.task_id != _INACTIVE_TASK_ID
+            or previous_close_task.allowed_paths
+            or previous_close_task.required_paths
+            or previous_close_mode != "100644"
+        ):
+            errors.append("recovery_previous_close_state_mismatch")
+
+    erratum_parents: tuple[str, ...] = ()
+    try:
+        erratum_parents = git_commit_parents(erratum.commit_sha)
+    except (RuntimeError, ValueError):
+        errors.append("recovery_erratum_parent_unreadable")
+    if erratum_parents != (manifest.suspension_commit_sha,):
+        errors.append("recovery_erratum_parent_mismatch")
+    else:
+        expected_erratum_paths = {
+            _TASK_FILE,
+            erratum.manifest_path,
+            previous_permit["frozen_test_path"],
+        }
+        try:
+            actual_erratum_paths = changed_paths_from_git(
+                manifest.suspension_commit_sha,
+                erratum.commit_sha,
+            )
+        except RuntimeError:
+            errors.append("recovery_erratum_diff_unreadable")
+        else:
+            if len(actual_erratum_paths) != 3 or set(actual_erratum_paths) != expected_erratum_paths:
+                errors.append("recovery_erratum_diff_mismatch")
+
+    try:
+        erratum_bytes = git_blob_from_ref(base_sha, erratum.manifest_path)
+        corrected_test = git_blob_from_ref(base_sha, previous_permit["frozen_test_path"])
+        erratum_manifest = parse_frozen_erratum_manifest_bytes(erratum_bytes)
+        manifest_mode = git_blob_mode_from_ref(base_sha, erratum.manifest_path)
+        test_mode = git_blob_mode_from_ref(base_sha, previous_permit["frozen_test_path"])
+        task_mode = git_blob_mode_from_ref(base_sha, _TASK_FILE)
+    except (RuntimeError, UnicodeDecodeError, ValueError):
+        errors.append("recovery_erratum_manifest_invalid")
+        erratum_manifest = None
+    else:
+        if _sha256(erratum_bytes) != erratum.manifest_sha256:
+            errors.append("recovery_erratum_manifest_sha256_mismatch")
+        if _sha256(corrected_test) != erratum.corrected_frozen_test_sha256:
+            errors.append("recovery_corrected_test_sha256_mismatch")
+        if manifest_mode != "100644" or test_mode != "100644" or task_mode != "100644":
+            errors.append("recovery_erratum_file_mode_mismatch")
+
+    if erratum_manifest is not None:
+        if (
+            erratum_manifest.task_id != previous_permit["task_id"]
+            or erratum_manifest.issue_number != previous_permit["issue_number"]
+            or erratum_manifest.test_path != previous_permit["frozen_test_path"]
+            or erratum_manifest.historical_active_task_commit_sha != previous_activation
+            or erratum_manifest.base_sha256
+            != previous_permit["historical_frozen_test_sha256"]
+            or erratum_manifest.head_sha256
+            != erratum.corrected_frozen_test_sha256
+            or erratum_manifest.head_active_task_sha256
+            != previous_permit["historical_active_task_sha256"]
+            or erratum_manifest.expected_red_failed_node_ids
+            != previous_permit["expected_node_ids"]
+            or erratum_manifest.expected_red_passed_node_ids
+        ):
+            errors.append("recovery_erratum_manifest_identity_mismatch")
+
+    try:
+        suspension_test = git_blob_from_ref(
+            manifest.suspension_commit_sha,
+            previous_permit["frozen_test_path"],
+        )
+        suspension_test_mode = git_blob_mode_from_ref(
+            manifest.suspension_commit_sha,
+            previous_permit["frozen_test_path"],
+        )
+    except (RuntimeError, UnicodeDecodeError, ValueError):
+        errors.append("recovery_erratum_base_test_unreadable")
+    else:
+        if (
+            _sha256(suspension_test) != previous_permit["historical_frozen_test_sha256"]
+            or suspension_test_mode != "100644"
+        ):
+            errors.append("recovery_erratum_base_test_mismatch")
+    if git_object_exists(manifest.suspension_commit_sha, erratum.manifest_path):
+        errors.append("recovery_erratum_manifest_preexisted")
+
+    expected_path_histories = {
+        previous_permit["frozen_test_path"]: (erratum.commit_sha, previous_activation),
+        previous_permit["contract_path"]: (previous_activation,),
+        suspended_permit["frozen_test_path"]: (suspended_activation,),
+        suspended_permit["contract_path"]: (suspended_activation,),
+    }
+    for path, expected_changes in expected_path_histories.items():
+        if git_path_first_parent_changes(base_sha, path) != expected_changes:
+            errors.append(f"recovery_path_history_mismatch:{path}")
+
+    if suspended_activation not in history_set:
+        errors.append("recovery_suspended_activation_not_first_parent")
+    return tuple(sorted(set(errors)))
+
+
 def _task_bytes_for_hash(task: ActiveTask) -> bytes:
     obj = {
         "allowed_paths": list(task.allowed_paths),
@@ -1214,6 +2008,296 @@ def task_definition_base_path_errors(
     if git_object_exists(base_sha, _task_contract_path(head_task.task_id)):
         errors.append(f"task_contract_id_reused:{head_task.task_id}")
     return tuple(errors)
+
+
+def _run_exact_pytest(
+    root: Path,
+    targets: tuple[str, ...],
+    *,
+    collect_only: bool = False,
+) -> tuple[dict[str, Any] | None, str | None]:
+    result_path = root.parent / f".exact-pytest-{os.getpid()}.json"
+    result_path.unlink(missing_ok=True)
+    child = r'''
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+
+class ExactOutcomes:
+    def __init__(self) -> None:
+        self.call_node_ids: set[str] = set()
+        self.collected: list[str] = []
+        self.failed: list[str] = []
+        self.failure_text: dict[str, str] = {}
+        self.forbidden: list[str] = []
+        self.passed: list[str] = []
+
+    def pytest_collection_finish(self, session) -> None:
+        self.collected = [item.nodeid for item in session.items]
+        if len(set(self.collected)) != len(self.collected):
+            self.forbidden.append("duplicate-collected-node-id")
+
+    def pytest_collectreport(self, report) -> None:
+        if report.outcome != "passed":
+            self.forbidden.append(f"collect-{report.outcome}:{report.nodeid}")
+
+    def pytest_deselected(self, items) -> None:
+        self.forbidden.extend(f"deselected:{item.nodeid}" for item in items)
+
+    def pytest_runtest_logreport(self, report) -> None:
+        if getattr(report, "wasxfail", None) is not None:
+            self.forbidden.append(f"xfail-or-xpass:{report.nodeid}:{report.when}")
+        if report.when != "call":
+            if report.outcome != "passed":
+                self.forbidden.append(
+                    f"non-call-{report.when}-{report.outcome}:{report.nodeid}"
+                )
+            return
+        if report.nodeid in self.call_node_ids:
+            self.forbidden.append(f"duplicate-call:{report.nodeid}")
+            return
+        self.call_node_ids.add(report.nodeid)
+        if report.outcome == "passed":
+            self.passed.append(report.nodeid)
+        elif report.outcome == "failed":
+            self.failed.append(report.nodeid)
+            self.failure_text[report.nodeid] = report.longreprtext
+        else:
+            self.forbidden.append(f"call-{report.outcome}:{report.nodeid}")
+
+
+root = Path(os.environ["EXACT_ROOT"])
+targets = json.loads(os.environ["EXACT_TARGETS_JSON"])
+outcomes = ExactOutcomes()
+arguments = [
+    *targets,
+    "-q",
+    "-c",
+    str(root / "pytest.ini"),
+    f"--confcutdir={root / 'pm_acceptance'}",
+]
+collect_only = os.environ["EXACT_COLLECT_ONLY"] == "1"
+if collect_only:
+    arguments.append("--collect-only")
+exit_code = pytest.main(arguments, plugins=[outcomes])
+collected = set(outcomes.collected)
+if not collect_only:
+    outcomes.forbidden.extend(
+        f"missing-call:{node_id}" for node_id in sorted(collected - outcomes.call_node_ids)
+    )
+    outcomes.forbidden.extend(
+        f"call-not-collected:{node_id}" for node_id in sorted(outcomes.call_node_ids - collected)
+    )
+Path(os.environ["EXACT_RESULT"]).write_text(
+    json.dumps(
+        {
+            "collected": outcomes.collected,
+            "exit_code": int(exit_code),
+            "failed": outcomes.failed,
+            "failure_text": outcomes.failure_text,
+            "forbidden": outcomes.forbidden,
+            "passed": outcomes.passed,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    + "\n",
+    encoding="utf-8",
+)
+'''
+    environment = dict(os.environ)
+    environment.update({
+        "EXACT_RESULT": str(result_path),
+        "EXACT_ROOT": str(root),
+        "EXACT_TARGETS_JSON": json.dumps(list(targets), separators=(",", ":")),
+        "EXACT_COLLECT_ONLY": "1" if collect_only else "0",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTHONPATH": str(root),
+        "RUNNER_TEMP": str(root),
+    })
+    result = subprocess.run(
+        [sys.executable, "-c", child],
+        cwd=root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result_path.is_file():
+        result_path.unlink(missing_ok=True)
+        return None, f"exact_pytest_runner_failed:{result.returncode}"
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
+    finally:
+        result_path.unlink(missing_ok=True)
+    expected_keys = {"collected", "exit_code", "failed", "failure_text", "forbidden", "passed"}
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        return None, "invalid_exact_pytest_payload"
+    for key in ("collected", "failed", "forbidden", "passed"):
+        value = payload[key]
+        if (
+            not isinstance(value, list)
+            or any(not isinstance(item, str) or not item for item in value)
+            or len(set(value)) != len(value)
+        ):
+            return None, f"invalid_exact_pytest_{key}"
+    failure_text = payload["failure_text"]
+    if (
+        not isinstance(failure_text, dict)
+        or any(
+            not isinstance(key, str)
+            or not key
+            or not isinstance(value, str)
+            for key, value in failure_text.items()
+        )
+        or set(failure_text) != set(payload["failed"])
+    ):
+        return None, "invalid_exact_pytest_failure_text"
+    if type(payload["exit_code"]) is not int:
+        return None, "invalid_exact_pytest_exit_code"
+    return payload, None
+
+
+def run_exact_acceptance_tests(root: Path) -> int:
+    """Require the complete staged frozen tree to produce only plain passes."""
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        print(json.dumps({"errors": [f"acceptance_root_unreadable:{type(exc).__name__}"], "ok": False}))
+        return 1
+    if not (root / "pm_acceptance").is_dir() or not (root / "pytest.ini").is_file():
+        print(json.dumps({"errors": ["acceptance_harness_incomplete"], "ok": False}))
+        return 1
+    payload, runner_error = _run_exact_pytest(root, ("pm_acceptance",))
+    if payload is None:
+        print(json.dumps({"errors": [runner_error], "ok": False}, sort_keys=True))
+        return 1
+    errors = list(payload["forbidden"])
+    collected = list(payload["collected"])
+    passed = list(payload["passed"])
+    failed = list(payload["failed"])
+    if payload["exit_code"] != 0:
+        errors.append(f"unexpected_acceptance_pytest_exit:{payload['exit_code']}")
+    if not collected:
+        errors.append("acceptance_collection_empty")
+    if failed:
+        errors.append("acceptance_failed_node_ids=" + ",".join(sorted(failed)))
+    if sorted(passed) != sorted(collected):
+        errors.append("acceptance_plain_pass_set_mismatch")
+    output = {
+        "collected_count": len(collected),
+        "errors": sorted(set(errors)),
+        "ok": not errors,
+        "passed_count": len(passed),
+    }
+    print(json.dumps(output, sort_keys=True, separators=(",", ":")))
+    return 0 if not errors else 1
+
+
+def run_exact_recovery_probe(root: Path, manifest_path: Path) -> int:
+    """Require the one recovery probe to fail exactly 52 calls with pinned sentinels."""
+    try:
+        root = root.resolve(strict=True)
+        manifest_path = manifest_path.resolve(strict=True)
+    except OSError as exc:
+        print(json.dumps({"errors": [f"recovery_probe_root_unreadable:{type(exc).__name__}"], "ok": False}))
+        return 1
+    expected_manifest_path = root / _RECOVERY_MANIFEST_PATH
+    if manifest_path != expected_manifest_path or not (root / "pytest.ini").is_file():
+        print(json.dumps({"errors": ["recovery_probe_harness_incomplete"], "ok": False}))
+        return 1
+    try:
+        manifest = parse_recovery_bundle_manifest_bytes(manifest_path.read_bytes())
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        print(json.dumps({"errors": [str(exc)], "ok": False}, sort_keys=True))
+        return 1
+    targets = tuple(member.frozen_test_path for member in manifest.members)
+    payload, runner_error = _run_exact_pytest(root, targets)
+    if payload is None:
+        print(json.dumps({"errors": [runner_error], "ok": False}, sort_keys=True))
+        return 1
+    expected = {
+        node_id
+        for member in manifest.members
+        for node_id in member.expected_node_ids
+    }
+    collected = set(payload["collected"])
+    failed = set(payload["failed"])
+    passed = set(payload["passed"])
+    errors = list(payload["forbidden"])
+    if payload["exit_code"] != 1:
+        errors.append(f"unexpected_recovery_probe_pytest_exit:{payload['exit_code']}")
+    if collected != expected:
+        errors.append("recovery_collected_node_ids_mismatch")
+    if failed != expected:
+        errors.append("recovery_failed_node_ids_mismatch")
+    if passed:
+        errors.append("recovery_unexpected_passed_node_ids")
+    failure_text = payload["failure_text"]
+    for member in manifest.members:
+        for node_id in member.expected_node_ids:
+            if member.expected_failure_sentinel not in failure_text.get(node_id, ""):
+                errors.append(f"recovery_failure_sentinel_mismatch:{node_id}")
+    output = {
+        "collected_count": len(collected),
+        "errors": sorted(set(errors)),
+        "failed_count": len(failed),
+        "ok": not errors,
+        "status": "exact-recovery-red-matched" if not errors else "rejected",
+    }
+    print(json.dumps(output, sort_keys=True, separators=(",", ":")))
+    return 0 if not errors else 1
+
+
+def run_recovery_manifest_collection(root: Path, manifest_path: Path) -> int:
+    """Collect exactly the manifest-declared 52 nodes without executing activation RED."""
+    try:
+        root = root.resolve(strict=True)
+        manifest_path = manifest_path.resolve(strict=True)
+    except OSError as exc:
+        print(json.dumps({"errors": [f"recovery_collection_unreadable:{type(exc).__name__}"], "ok": False}))
+        return 1
+    if manifest_path != root / _RECOVERY_MANIFEST_PATH or not (root / "pytest.ini").is_file():
+        print(json.dumps({"errors": ["recovery_collection_harness_incomplete"], "ok": False}))
+        return 1
+    try:
+        manifest = parse_recovery_bundle_manifest_bytes(manifest_path.read_bytes())
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        print(json.dumps({"errors": [str(exc)], "ok": False}, sort_keys=True))
+        return 1
+    targets = tuple(member.frozen_test_path for member in manifest.members)
+    payload, runner_error = _run_exact_pytest(root, targets, collect_only=True)
+    if payload is None:
+        print(json.dumps({"errors": [runner_error], "ok": False}, sort_keys=True))
+        return 1
+    expected = {
+        node_id
+        for member in manifest.members
+        for node_id in member.expected_node_ids
+    }
+    errors = list(payload["forbidden"])
+    if payload["exit_code"] != 0:
+        errors.append(f"unexpected_recovery_collection_exit:{payload['exit_code']}")
+    if set(payload["collected"]) != expected:
+        errors.append("recovery_collection_node_ids_mismatch")
+    if payload["passed"] or payload["failed"] or payload["failure_text"]:
+        errors.append("recovery_collection_executed_calls")
+    output = {
+        "collected_count": len(payload["collected"]),
+        "errors": sorted(set(errors)),
+        "ok": not errors,
+        "status": "exact-recovery-collection-matched" if not errors else "rejected",
+    }
+    print(json.dumps(output, sort_keys=True, separators=(",", ":")))
+    return 0 if not errors else 1
 
 
 def run_exact_control_plane_self_tests(root: Path) -> int:
@@ -1392,6 +2476,29 @@ def _emit(
 
 def main(argv: list[str] | None = None) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--exact-acceptance-root" in effective_argv:
+        acceptance_parser = argparse.ArgumentParser(add_help=True)
+        acceptance_parser.add_argument("--exact-acceptance-root", required=True)
+        acceptance_args = acceptance_parser.parse_args(effective_argv)
+        return run_exact_acceptance_tests(Path(acceptance_args.exact_acceptance_root))
+    if "--exact-recovery-root" in effective_argv:
+        recovery_parser = argparse.ArgumentParser(add_help=True)
+        recovery_parser.add_argument("--exact-recovery-root", required=True)
+        recovery_parser.add_argument("--recovery-manifest", required=True)
+        recovery_args = recovery_parser.parse_args(effective_argv)
+        return run_exact_recovery_probe(
+            Path(recovery_args.exact_recovery_root),
+            Path(recovery_args.recovery_manifest),
+        )
+    if "--recovery-collection-root" in effective_argv:
+        collection_parser = argparse.ArgumentParser(add_help=True)
+        collection_parser.add_argument("--recovery-collection-root", required=True)
+        collection_parser.add_argument("--recovery-manifest", required=True)
+        collection_args = collection_parser.parse_args(effective_argv)
+        return run_recovery_manifest_collection(
+            Path(collection_args.recovery_collection_root),
+            Path(collection_args.recovery_manifest),
+        )
     if "--exact-control-plane-root" in effective_argv:
         exact_parser = argparse.ArgumentParser(add_help=True)
         exact_parser.add_argument("--exact-control-plane-root", required=True)
@@ -1402,6 +2509,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--actor", default="")
+    parser.add_argument("--sender", default="")
+    parser.add_argument("--repository", default="")
+    parser.add_argument("--base-repository", default="")
+    parser.add_argument("--head-repository", default="")
+    parser.add_argument("--base-ref", default="")
     parser.add_argument("--labels-json", default="[]")
     args = parser.parse_args(effective_argv)
     errors: list[str] = []
@@ -1451,6 +2563,28 @@ def main(argv: list[str] | None = None) -> int:
                     changed,
                 )
             return _emit(len(changed), erratum_errors, mode, head_task.task_id)
+        if mode == "pm-recovery-bundle":
+            identity_errors = recovery_event_identity_errors(
+                actor=args.actor,
+                sender=args.sender,
+                repository=args.repository,
+                base_repository=args.base_repository,
+                head_repository=args.head_repository,
+                base_ref=args.base_ref,
+                labels=labels,
+            )
+            head_task = parse_active_task_bytes(git_blob_from_ref(args.head_sha, _TASK_FILE))
+            recovery_errors = tuple(sorted((
+                *identity_errors,
+                *recovery_bundle_transition_errors(
+                    args.base_sha,
+                    args.head_sha,
+                    task,
+                    head_task,
+                    changed,
+                ),
+            )))
+            return _emit(len(changed), recovery_errors, mode, head_task.task_id)
         return _emit(len(changed), (), mode, task.task_id)
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as exc:
         return _emit(0, (str(exc),))

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.check_task_scope as task_scope_module
 from scripts.check_protected_paths import parse_git_diff_raw_z, protected_path_errors, changed_paths_from_git
 from scripts.check_task_scope import (
     ActiveTask,
@@ -22,7 +23,13 @@ from scripts.check_task_scope import (
     parse_frozen_erratum_manifest_bytes,
     parse_frozen_erratum_v2_manifest_bytes,
     parse_labels_json,
+    parse_recovery_bundle_manifest_bytes,
     pr_mode_scope_errors,
+    recovery_event_identity_errors,
+    recovery_bundle_transition_errors,
+    run_exact_acceptance_tests,
+    run_exact_recovery_probe,
+    run_recovery_manifest_collection,
     task_definition_base_path_errors,
     task_definition_head_path_errors,
     task_definition_transition_errors,
@@ -136,6 +143,136 @@ def _erratum_v2_bytes(
         "task_id": task.task_id,
         "test_path": test_path,
     }
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+RECOVERY_BUNDLE_ID = "p0-recovery-walk-forward-committed-key"
+RECOVERY_PREVIOUS_TASK = "p0-walk-forward-exclusive-outcome-end"
+RECOVERY_SUSPENDED_TASK = "p0-committed-key-preflight"
+RECOVERY_PREVIOUS_TEST = (
+    "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/"
+    "test_walk_forward_exclusive_outcome_end.py"
+)
+RECOVERY_SUSPENDED_TEST = (
+    "pm_acceptance/tasks/p0-committed-key-preflight/"
+    "test_store_committed_key_preflight.py"
+)
+RECOVERY_PATHS = (
+    "src/bybit_grid/research/scoring/outcome_grains.py",
+    "src/bybit_grid/research/walk_forward/splits.py",
+    "src/bybit_grid/research/walk_forward/leakage_audit.py",
+    "scripts/check_scoring_review_pack.py",
+    "scripts/make_scoring_review_pack.py",
+    "tests/test_sprint_05_cost_scoring_walkforward.py",
+    "tests/test_sprint_05_6_review_pack_closure.py",
+    "tests/test_persisted_exclusive_outcome_end_walk_forward.py",
+    "src/bybit_grid/data/market_store/models.py",
+    "src/bybit_grid/data/market_store/import_public_batch.py",
+    "src/bybit_grid/data/market_store/transaction.py",
+    "tests/test_store_committed_key_preflight.py",
+)
+
+
+def _recovery_task() -> ActiveTask:
+    return ActiveTask(
+        "pm_active_task_v1",
+        RECOVERY_BUNDLE_ID,
+        RECOVERY_PATHS,
+        RECOVERY_PATHS,
+        parse_active_task_bytes(CANONICAL).forbidden_paths,
+    )
+
+
+def _recovery_nodes(test_path: str, count: int) -> list[str]:
+    permit = next(
+        permit
+        for permit in task_scope_module._RECOVERY_MEMBER_PERMITS
+        if permit["frozen_test_path"] == test_path
+    )
+    node_ids = list(permit["expected_node_ids"])
+    assert len(node_ids) == count
+    return node_ids
+
+
+def _recovery_manifest_bytes(
+    *,
+    activation_base_sha: str = "a" * 40,
+    suspension_commit_sha: str = "b" * 40,
+    erratum_commit_sha: str = "c" * 40,
+    transform=None,
+) -> bytes:
+    task = _recovery_task()
+    obj = {
+        "activation_base_sha": activation_base_sha,
+        "allowed_paths": list(RECOVERY_PATHS),
+        "bundle_id": RECOVERY_BUNDLE_ID,
+        "head_active_task_sha256": hashlib.sha256(_task_bytes(task)).hexdigest(),
+        "members": [
+            {
+                "contract_path": (
+                    "docs/frozen_contracts/tasks/"
+                    "p0-walk-forward-exclusive-outcome-end.md"
+                ),
+                "expected_failure_sentinel": (
+                    "persisted_exclusive_outcome_end_walk_forward_contract_unavailable"
+                ),
+                "expected_node_ids": _recovery_nodes(RECOVERY_PREVIOUS_TEST, 32),
+                "frozen_test_path": RECOVERY_PREVIOUS_TEST,
+                "historical_activation_commit_sha": (
+                    "1305abb1517944e2cc9790e5546ca52ae66f592e"
+                ),
+                "historical_active_task_sha256": (
+                    "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e"
+                ),
+                "historical_contract_sha256": (
+                    "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05"
+                ),
+                "historical_frozen_test_sha256": (
+                    "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e"
+                ),
+                "issue_number": 156,
+                "task_id": RECOVERY_PREVIOUS_TASK,
+            },
+            {
+                "contract_path": (
+                    "docs/frozen_contracts/tasks/p0-committed-key-preflight.md"
+                ),
+                "expected_failure_sentinel": (
+                    "committed_key_preflight_contract_unavailable"
+                ),
+                "expected_node_ids": _recovery_nodes(RECOVERY_SUSPENDED_TEST, 20),
+                "frozen_test_path": RECOVERY_SUSPENDED_TEST,
+                "historical_activation_commit_sha": (
+                    "3b826f2a6a3b02897047a30de8e920e2f5b72431"
+                ),
+                "historical_active_task_sha256": (
+                    "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89"
+                ),
+                "historical_contract_sha256": (
+                    "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696"
+                ),
+                "historical_frozen_test_sha256": (
+                    "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513"
+                ),
+                "issue_number": 157,
+                "task_id": RECOVERY_SUSPENDED_TASK,
+            },
+        ],
+        "previous_erratum": {
+            "commit_sha": erratum_commit_sha,
+            "corrected_frozen_test_sha256": "d" * 64,
+            "manifest_path": (
+                "pm_acceptance/errata/"
+                "p0-walk-forward-exclusive-outcome-end.json"
+            ),
+            "manifest_sha256": "e" * 64,
+        },
+        "required_paths": list(RECOVERY_PATHS),
+        "schema": "pm_recovery_bundle_v1",
+        "suspension_commit_sha": suspension_commit_sha,
+    }
+    if transform is not None:
+        transform(obj)
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
@@ -360,6 +497,469 @@ def test_pr_mode_labels_and_scope_fail_closed():
         "pm_frozen_erratum_out_of_scope:src/example.py",
         "production_path_forbidden_in_pm_mode:src/example.py",
     )
+
+
+def test_recovery_bundle_mode_is_owner_only_exact_and_has_a_dedicated_plan():
+    manifest_path = (
+        "pm_acceptance/reactivations/"
+        "p0-recovery-walk-forward-committed-key.json"
+    )
+    paths = ("pm_acceptance/active_task.json", manifest_path)
+
+    assert classify_pr_mode("brullik", ("pm-recovery-bundle",), paths) == (
+        "pm-recovery-bundle",
+        (),
+    )
+    assert classify_pr_mode("alice", ("pm-recovery-bundle",), paths)[1] == (
+        "wrong_author:alice",
+    )
+    assert classify_pr_mode(
+        "brullik",
+        ("pm-recovery-bundle", "pm-control-plane"),
+        paths,
+    )[1] == ("multiple_mode_labels",)
+    assert acceptance_plan_for_mode("pm-recovery-bundle") == (
+        "base-control-plane-self-tests",
+        "head-recovery-bundle-manifest-validation",
+    )
+
+
+def test_recovery_bundle_manifest_parses_only_the_exact_pinned_permit():
+    manifest = parse_recovery_bundle_manifest_bytes(_recovery_manifest_bytes())
+
+    assert manifest.schema == "pm_recovery_bundle_v1"
+    assert manifest.bundle_id == RECOVERY_BUNDLE_ID
+    assert manifest.allowed_paths == RECOVERY_PATHS
+    assert manifest.required_paths == RECOVERY_PATHS
+    assert tuple(member.task_id for member in manifest.members) == (
+        RECOVERY_PREVIOUS_TASK,
+        RECOVERY_SUSPENDED_TASK,
+    )
+    assert tuple(len(member.expected_node_ids) for member in manifest.members) == (32, 20)
+    assert len({node for member in manifest.members for node in member.expected_node_ids}) == 52
+    assert manifest.previous_erratum.manifest_path == (
+        "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json"
+    )
+
+
+@pytest.mark.parametrize(
+    ("transform", "expected"),
+    (
+        (lambda obj: obj.update(extra=True), "invalid_recovery_manifest_keys"),
+        (lambda obj: obj.update(bundle_id="p0-other"), "recovery_bundle_id_mismatch"),
+        (lambda obj: obj.update(allowed_paths=list(reversed(RECOVERY_PATHS))), "recovery_allowed_paths_mismatch"),
+        (lambda obj: obj.update(required_paths=list(RECOVERY_PATHS[:-1])), "recovery_required_paths_mismatch"),
+        (lambda obj: obj["members"][0].update(issue_number=True), "recovery_member_identity_mismatch"),
+        (lambda obj: obj["members"].reverse(), "recovery_member_identity_mismatch"),
+        (
+            lambda obj: obj["members"][0]["expected_node_ids"].append(
+                obj["members"][0]["expected_node_ids"][0]
+            ),
+            "duplicate_recovery_node_id",
+        ),
+        (
+            lambda obj: obj["members"][1].update(expected_node_ids=[]),
+            "recovery_node_count_mismatch",
+        ),
+        (
+            lambda obj: obj["previous_erratum"].update(manifest_path="../escape.json"),
+            "recovery_previous_erratum_identity_mismatch",
+        ),
+    ),
+)
+def test_recovery_bundle_manifest_rejects_substitution_mutability_and_ambiguity(
+    transform,
+    expected: str,
+):
+    with pytest.raises(ValueError, match=expected):
+        parse_recovery_bundle_manifest_bytes(_recovery_manifest_bytes(transform=transform))
+
+
+def test_recovery_bundle_manifest_rejects_bom_duplicate_keys_float_and_format_drift():
+    canonical = _recovery_manifest_bytes()
+    with pytest.raises(ValueError, match="utf8_bom"):
+        parse_recovery_bundle_manifest_bytes(b"\xef\xbb\xbf" + canonical)
+    with pytest.raises(ValueError, match="noncanonical_recovery_manifest_bytes"):
+        parse_recovery_bundle_manifest_bytes(
+            json.dumps(json.loads(canonical), indent=2).encode() + b"\n"
+        )
+    with pytest.raises(ValueError, match="duplicate_json_key:schema"):
+        parse_recovery_bundle_manifest_bytes(
+            canonical.replace(
+                b'"schema":"pm_recovery_bundle_v1"',
+                b'"schema":"pm_recovery_bundle_v1","schema":"pm_recovery_bundle_v1"',
+            )
+        )
+    with pytest.raises(ValueError, match="float_token:1.0"):
+        parse_recovery_bundle_manifest_bytes(
+            canonical.replace(b'"issue_number":156', b'"issue_number":1.0')
+        )
+
+
+def test_recovery_event_identity_requires_owner_sender_canonical_repositories_and_main():
+    valid = {
+        "actor": "brullik",
+        "sender": "brullik",
+        "repository": "brullik/bybit-grid-research",
+        "base_repository": "brullik/bybit-grid-research",
+        "head_repository": "brullik/bybit-grid-research",
+        "base_ref": "main",
+        "labels": ("pm-recovery-bundle",),
+    }
+    assert recovery_event_identity_errors(**valid) == ()
+    expected = {
+        "actor": "wrong_recovery_actor:alice",
+        "sender": "wrong_recovery_sender:alice",
+        "repository": "wrong_recovery_repository:fork/repo",
+        "base_repository": "wrong_recovery_base_repository:fork/repo",
+        "head_repository": "wrong_recovery_head_repository:fork/repo",
+        "base_ref": "wrong_recovery_base_ref:develop",
+        "labels": "recovery_mode_label_mismatch",
+    }
+    replacements = {
+        "actor": "alice",
+        "sender": "alice",
+        "repository": "fork/repo",
+        "base_repository": "fork/repo",
+        "head_repository": "fork/repo",
+        "base_ref": "develop",
+        "labels": ("pm-recovery-bundle", "pm-control-plane"),
+    }
+    for field, error in expected.items():
+        arguments = dict(valid)
+        arguments[field] = replacements[field]
+        assert error in recovery_event_identity_errors(**arguments)
+
+
+def _mock_recovery_transition(monkeypatch: pytest.MonkeyPatch) -> tuple[str, str, ActiveTask]:
+    base_sha = "9" * 40
+    head_sha = "7" * 40
+    suspension_sha = "8" * 40
+    erratum_sha = base_sha
+    previous_task = ActiveTask(
+        "pm_active_task_v1",
+        RECOVERY_PREVIOUS_TASK,
+        RECOVERY_PATHS[:8],
+        RECOVERY_PATHS[:8],
+        parse_active_task_bytes(CANONICAL).forbidden_paths,
+    )
+    recovery_task = _recovery_task()
+    historical = {
+        member["task_id"]: member
+        for member in task_scope_module._RECOVERY_MEMBER_PERMITS
+    }
+    previous_permit = historical[RECOVERY_PREVIOUS_TASK]
+    suspended_permit = historical[RECOVERY_SUSPENDED_TASK]
+    previous_historical_test = b"historical frozen test:p0-walk-forward-exclusive-outcome-end\n"
+    corrected_test = b"corrected previous frozen test\n"
+    previous_manifest_obj = json.loads(_erratum_bytes(
+        task=previous_task,
+        base_test=previous_historical_test,
+        head_test=corrected_test,
+        test_path=RECOVERY_PREVIOUS_TEST,
+        failed=tuple(_recovery_nodes(RECOVERY_PREVIOUS_TEST, 32)),
+        issue_number=156,
+        historical_active_task_commit_sha=previous_permit["historical_activation_commit_sha"],
+    ))
+    previous_manifest_obj.update({
+        "base_sha256": previous_permit["historical_frozen_test_sha256"],
+        "head_active_task_sha256": previous_permit["historical_active_task_sha256"],
+    })
+    previous_manifest = (
+        json.dumps(previous_manifest_obj, sort_keys=True, separators=(",", ":")).encode()
+        + b"\n"
+    )
+    manifest = _recovery_manifest_bytes(
+        activation_base_sha=base_sha,
+        suspension_commit_sha=suspension_sha,
+        erratum_commit_sha=erratum_sha,
+        transform=lambda obj: obj["previous_erratum"].update(
+            corrected_frozen_test_sha256=hashlib.sha256(corrected_test).hexdigest(),
+            manifest_sha256=hashlib.sha256(previous_manifest).hexdigest(),
+        ),
+    )
+    blobs = {
+        (head_sha, "pm_acceptance/active_task.json"): _task_bytes(recovery_task),
+        (
+            head_sha,
+            "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json",
+        ): manifest,
+        (base_sha, "pm_acceptance/active_task.json"): _task_bytes(previous_task),
+        (suspension_sha, "pm_acceptance/active_task.json"): CANONICAL,
+        (suspension_sha, RECOVERY_PREVIOUS_TEST): previous_historical_test,
+        (erratum_sha, RECOVERY_PREVIOUS_TEST): corrected_test,
+        (
+            erratum_sha,
+            "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json",
+        ): previous_manifest,
+        (base_sha, RECOVERY_PREVIOUS_TEST): corrected_test,
+        (
+            base_sha,
+            "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json",
+        ): previous_manifest,
+    }
+    digest_overrides: dict[bytes, str] = {}
+    for permit in historical.values():
+        activation = permit["historical_activation_commit_sha"]
+        active_bytes = f"historical active task:{permit['task_id']}\n".encode()
+        test_bytes = f"historical frozen test:{permit['task_id']}\n".encode()
+        contract_bytes = f"historical contract:{permit['task_id']}\n".encode()
+        blobs[(activation, "pm_acceptance/active_task.json")] = active_bytes
+        blobs[(activation, permit["frozen_test_path"])] = test_bytes
+        blobs[(activation, permit["contract_path"])] = contract_bytes
+        blobs[(base_sha, permit["contract_path"])] = contract_bytes
+        if permit["task_id"] == RECOVERY_SUSPENDED_TASK:
+            blobs[(base_sha, permit["frozen_test_path"])] = test_bytes
+        digest_overrides.update({
+            active_bytes: permit["historical_active_task_sha256"],
+            test_bytes: permit["historical_frozen_test_sha256"],
+            contract_bytes: permit["historical_contract_sha256"],
+        })
+    previous_close_sha = task_scope_module._RECOVERY_PREVIOUS_CLOSE_SHA
+    blobs[(previous_close_sha, "pm_acceptance/active_task.json")] = CANONICAL
+    monkeypatch.setattr(
+        task_scope_module,
+        "changed_paths_from_git",
+        lambda parent, commit: (
+            ("pm_acceptance/active_task.json",)
+            if commit == suspension_sha
+            else (
+                "pm_acceptance/active_task.json",
+                "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json",
+                RECOVERY_PREVIOUS_TEST,
+            )
+            if (parent, commit) == (suspension_sha, erratum_sha)
+            else ()
+        ),
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_blob_from_ref",
+        lambda ref, path: blobs[(ref, path)],
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_object_exists",
+        lambda ref, path: (ref, path) in blobs,
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_blob_mode_from_ref",
+        lambda ref, path: "100644" if (ref, path) in blobs else None,
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_commit_parents",
+        lambda ref: (
+            (base_sha,)
+            if ref == head_sha
+            else (
+                (suspension_sha,)
+                if ref == erratum_sha
+                else (
+                    (suspended_permit["historical_activation_commit_sha"],)
+                    if ref == suspension_sha
+                    else (
+                        (previous_close_sha,)
+                        if ref == suspended_permit["historical_activation_commit_sha"]
+                        else (
+                            (previous_permit["historical_activation_commit_sha"],)
+                            if ref == previous_close_sha
+                            else ()
+                        )
+                    )
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_first_parent_commits",
+        lambda ref: (
+            base_sha,
+            suspension_sha,
+            historical[RECOVERY_SUSPENDED_TASK]["historical_activation_commit_sha"],
+            previous_close_sha,
+            historical[RECOVERY_PREVIOUS_TASK]["historical_activation_commit_sha"],
+        ),
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_active_task_digest_occurrences",
+        lambda _base, digest: {
+            historical[RECOVERY_PREVIOUS_TASK]["historical_active_task_sha256"]: (
+                historical[RECOVERY_PREVIOUS_TASK]["historical_activation_commit_sha"],
+                erratum_sha,
+            ),
+            historical[RECOVERY_SUSPENDED_TASK]["historical_active_task_sha256"]: (
+                historical[RECOVERY_SUSPENDED_TASK]["historical_activation_commit_sha"],
+            ),
+        }.get(digest, ()),
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_path_first_parent_changes",
+        lambda _base, path: {
+            "pm_acceptance/active_task.json": (
+                erratum_sha,
+                suspension_sha,
+                suspended_permit["historical_activation_commit_sha"],
+                previous_close_sha,
+                previous_permit["historical_activation_commit_sha"],
+            ),
+            "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json": (
+                erratum_sha,
+            ),
+            RECOVERY_PREVIOUS_TEST: (
+                erratum_sha,
+                previous_permit["historical_activation_commit_sha"],
+            ),
+            previous_permit["contract_path"]: (
+                previous_permit["historical_activation_commit_sha"],
+            ),
+            RECOVERY_SUSPENDED_TEST: (
+                suspended_permit["historical_activation_commit_sha"],
+            ),
+            suspended_permit["contract_path"]: (
+                suspended_permit["historical_activation_commit_sha"],
+            ),
+        }.get(path, ()),
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "_sha256",
+        lambda data: digest_overrides.get(data, hashlib.sha256(data).hexdigest()),
+    )
+    return base_sha, head_sha, previous_task
+
+
+def test_recovery_transition_accepts_only_direct_one_commit_exact_history(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    base, head, previous_task = _mock_recovery_transition(monkeypatch)
+    changed = (
+        "pm_acceptance/active_task.json",
+        "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json",
+    )
+    assert recovery_bundle_transition_errors(
+        base,
+        head,
+        previous_task,
+        _recovery_task(),
+        changed,
+    ) == ()
+
+    monkeypatch.setattr(task_scope_module, "git_commit_parents", lambda _ref: (base, "5" * 40))
+    errors = recovery_bundle_transition_errors(
+        base,
+        head,
+        previous_task,
+        _recovery_task(),
+        changed,
+    )
+    assert "recovery_head_not_single_direct_commit" in errors
+
+
+def test_recovery_transition_rejects_replay_and_change_revert_history(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    base, head, previous_task = _mock_recovery_transition(monkeypatch)
+    manifest_path = (
+        "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+    )
+    original_exists = task_scope_module.git_object_exists
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_object_exists",
+        lambda ref, path: True if (ref, path) == (base, manifest_path) else original_exists(ref, path),
+    )
+    original_occurrences = task_scope_module.git_active_task_digest_occurrences
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_active_task_digest_occurrences",
+        lambda ref, digest: (*original_occurrences(ref, digest), "4" * 40),
+    )
+    errors = recovery_bundle_transition_errors(
+        base,
+        head,
+        previous_task,
+        _recovery_task(),
+        ("pm_acceptance/active_task.json", manifest_path),
+    )
+    assert "recovery_manifest_already_exists" in errors
+    assert any(error.startswith("recovery_task_state_replayed:") for error in errors)
+
+
+def test_recovery_transition_rejects_invalid_v1_erratum_and_noncanonical_chain(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    base, head, previous_task = _mock_recovery_transition(monkeypatch)
+    changed = (
+        "pm_acceptance/active_task.json",
+        "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json",
+    )
+    original_blob = task_scope_module.git_blob_from_ref
+    erratum_path = "pm_acceptance/errata/p0-walk-forward-exclusive-outcome-end.json"
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_blob_from_ref",
+        lambda ref, path: (
+            b"not-json\n"
+            if (ref, path) == (base, erratum_path)
+            else original_blob(ref, path)
+        ),
+    )
+    errors = recovery_bundle_transition_errors(
+        base,
+        head,
+        previous_task,
+        _recovery_task(),
+        changed,
+    )
+    assert "recovery_erratum_manifest_invalid" in errors
+
+
+def test_recovery_transition_rejects_extra_task_transition_and_nonregular_head_mode(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    base, head, previous_task = _mock_recovery_transition(monkeypatch)
+    changed = (
+        "pm_acceptance/active_task.json",
+        "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json",
+    )
+    original_changes = task_scope_module.git_path_first_parent_changes
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_path_first_parent_changes",
+        lambda ref, path: (
+            (
+                original_changes(ref, path)[0],
+                "4" * 40,
+                *original_changes(ref, path)[1:],
+            )
+            if path == "pm_acceptance/active_task.json"
+            else original_changes(ref, path)
+        ),
+    )
+    original_mode = task_scope_module.git_blob_mode_from_ref
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_blob_mode_from_ref",
+        lambda ref, path: (
+            "100755"
+            if (ref, path) == (head, "pm_acceptance/active_task.json")
+            else original_mode(ref, path)
+        ),
+    )
+    errors = recovery_bundle_transition_errors(
+        base,
+        head,
+        previous_task,
+        _recovery_task(),
+        changed,
+    )
+    assert "recovery_active_task_history_mismatch" in errors
+    assert "recovery_head_file_mode_mismatch:pm_acceptance/active_task.json" in errors
 
 
 def test_comma_containing_label_cannot_select_privileged_mode():
@@ -713,7 +1313,7 @@ def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
     acceptance = workflow.split("\n  acceptance:\n", 1)[1].split("\n  status-final:\n", 1)[0]
 
     assert (
-        "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]"
+        "types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft, labeled, unlabeled]"
         in workflow
     )
     assert "group: pm-acceptance-${{ github.event.pull_request.number }}" in workflow
@@ -795,6 +1395,118 @@ def test_exact_control_plane_gate_rejects_early_success_process_exit(tmp_path: P
     assert "control-plane-self-runner-failed:0" in result.stdout
 
 
+def test_exact_full_acceptance_gate_requires_every_plain_call(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    root = tmp_path / "acceptance"
+    suite = root / "pm_acceptance"
+    suite.mkdir(parents=True)
+    (root / "pytest.ini").write_text("[pytest]\n")
+    test_file = suite / "test_plain.py"
+    test_file.write_text("def test_plain():\n    assert True\n")
+    assert run_exact_acceptance_tests(root) == 0
+    assert '"passed_count":1' in capsys.readouterr().out
+
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_plain():\n"
+        "    pytest.skip('not green')\n"
+    )
+    assert run_exact_acceptance_tests(root) == 1
+    assert "call-skipped" in capsys.readouterr().out
+
+
+def _write_recovery_probe_harness(root: Path, *, skip_first: bool = False) -> Path:
+    (root / "pm_acceptance").mkdir(parents=True)
+    (root / "pytest.ini").write_text("[pytest]\n")
+    manifest_path = (
+        root
+        / "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+    )
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_bytes(_recovery_manifest_bytes())
+    for path, count, sentinel in (
+        (
+            RECOVERY_PREVIOUS_TEST,
+            32,
+            "persisted_exclusive_outcome_end_walk_forward_contract_unavailable",
+        ),
+        (
+            RECOVERY_SUSPENDED_TEST,
+            20,
+            "committed_key_preflight_contract_unavailable",
+        ),
+    ):
+        test_path = root / path
+        test_path.parent.mkdir(parents=True)
+        grouped: dict[str, list[str | None]] = {}
+        for node_id in _recovery_nodes(path, count):
+            leaf = node_id.rsplit("::", 1)[1]
+            if leaf.endswith("]") and "[" in leaf:
+                name, parameter_id = leaf[:-1].split("[", 1)
+                grouped.setdefault(name, []).append(parameter_id)
+            else:
+                grouped.setdefault(leaf, []).append(None)
+        body = "import pytest\n\n"
+        first = True
+        for name, parameter_ids in grouped.items():
+            skip_this = skip_first and path == RECOVERY_PREVIOUS_TEST and first
+            if parameter_ids == [None]:
+                body += f"def {name}():\n"
+                if skip_this:
+                    body += "    pytest.skip('forbidden')\n"
+                body += f"    raise AssertionError({sentinel!r})\n\n"
+            else:
+                ids = [parameter_id for parameter_id in parameter_ids if parameter_id is not None]
+                body += "@pytest.mark.parametrize('case', [\n"
+                body += "".join(
+                    f"    pytest.param(None, id={parameter_id!r}),\n"
+                    for parameter_id in ids
+                )
+                body += "])\n"
+                body += f"def {name}(case):\n"
+                if skip_this:
+                    body += "    pytest.skip('forbidden')\n"
+                body += f"    raise AssertionError({sentinel!r})\n\n"
+            first = False
+        test_path.write_text(body)
+    return manifest_path
+
+
+def test_recovery_probe_gate_requires_exact_52_failures_and_both_sentinels(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    manifest = _write_recovery_probe_harness(tmp_path)
+    assert run_exact_recovery_probe(tmp_path, manifest) == 0
+    output = capsys.readouterr().out
+    assert '"failed_count":52' in output
+    assert '"status":"exact-recovery-red-matched"' in output
+
+
+def test_recovery_activation_collects_exact_52_nodes_without_executing_red(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    manifest = _write_recovery_probe_harness(tmp_path)
+    assert run_recovery_manifest_collection(tmp_path, manifest) == 0
+    output = capsys.readouterr().out
+    assert '"collected_count":52' in output
+    assert '"status":"exact-recovery-collection-matched"' in output
+
+
+def test_recovery_probe_gate_rejects_skip_and_missing_plain_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    manifest = _write_recovery_probe_harness(tmp_path, skip_first=True)
+    assert run_exact_recovery_probe(tmp_path, manifest) == 1
+    output = capsys.readouterr().out
+    assert "call-skipped" in output
+    assert "recovery_failed_node_ids_mismatch" in output
+
+
 def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     pending = workflow.split("\n  status-pending:\n", 1)[1].split("\n  protected-paths:\n", 1)[0]
@@ -822,6 +1534,57 @@ def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
     assert 'state = "error"' in final
     assert 'summary[:140]' in final
     assert 'raise SystemExit("pm_acceptance_failed")' in final
+    assert 'f"{os.environ[\'API_URL\']}/repos/{repository}/pulls/{pr_number}"' in final
+    assert '"reviewThreads"' in final
+    assert 'raise SystemExit("live_pull_request_identity_mismatch")' in final
+    assert 'raise SystemExit("unresolved_review_threads")' in final
+
+
+def test_workflow_recovery_and_task_opening_gates_are_exact_and_base_owned():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    protected = workflow.split("\n  protected-paths:\n", 1)[1].split("\n  acceptance:\n", 1)[0]
+    acceptance = workflow.split("\n  acceptance:\n", 1)[1].split("\n  status-final:\n", 1)[0]
+    for identity in (
+        "--sender",
+        "--repository",
+        "--base-repository",
+        "--head-repository",
+        "--base-ref",
+    ):
+        assert identity in protected
+    preflight = protected.split(
+        "      - name: Preflight privileged recovery identity before checkout\n",
+        1,
+    )[1].split("      - uses: actions/checkout@v4\n", 1)[0]
+    assert "pm-recovery-bundle" in preflight
+    assert "github.event.sender.login" in preflight
+    assert protected.index("Preflight privileged recovery identity") < protected.index(
+        "actions/checkout@v4"
+    )
+    assert "--exact-recovery-root" in acceptance
+    assert "--recovery-collection-root" in acceptance
+    assert "--exact-acceptance-root" in acceptance
+    assert "p0-recovery-walk-forward-committed-key" in acceptance
+    assert "probe/*" in acceptance
+    assert (
+        "Block ordinary task opening unless complete base frozen suite is plain green"
+        in acceptance
+    )
+    assert acceptance.count('"${{ github.workspace }}/base/scripts/check_task_scope.py"') >= 5
+
+
+def test_workflow_finalizer_rechecks_live_main_and_paginates_review_threads():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    final = workflow.split("\n  status-final:\n", 1)[1]
+    assert "contents: read" in final
+    assert 'f"{os.environ[\'API_URL\']}/repos/{repository}/git/ref/heads/main"' in final
+    assert "live_main_sha != expected_base_sha" in final
+    assert '"after": cursor' in final
+    assert "while True:" in final
+    assert 'page_info["endCursor"]' in final
+    assert "pull_request_review_thread:" in workflow
+    assert "types: [resolved, unresolved]" in workflow
+    assert "edited" in workflow
 
 
 def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
@@ -831,7 +1594,6 @@ def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
 
     for status_job in (pending, final):
         assert "statuses: write" in status_job
-        assert "contents: read" not in status_job
         assert "actions/checkout" not in status_job
         assert "\n      - uses:" not in status_job
         assert "working-directory:" not in status_job
@@ -841,6 +1603,8 @@ def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
         assert "cache" not in status_job
         assert "urllib.request.urlopen" in status_job
 
+    assert "contents: read" not in pending
+    assert "contents: read" in final
     assert "converted_to_draft" in workflow
 
 
@@ -1070,6 +1834,7 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
     environment = {
         "GH_TOKEN": "test-token",
         "HEAD_SHA": "a" * 40,
+        "EXPECTED_BASE_SHA": "b" * 40,
         "REPOSITORY": "brullik/bybit-grid-research",
         "API_URL": "https://api.example.test",
         "SERVER_URL": "https://example.test",
@@ -1080,15 +1845,27 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
         "PR_AUTHOR": "brullik",
         "PR_DRAFT": "false",
         "HEAD_REF": "pm/task-a",
+        "BASE_REF": "main",
+        "PR_NUMBER": "42",
+        "PR_LABELS_JSON": '["pm-control-plane"]',
+        "PR_HEAD_REPOSITORY": "brullik/bybit-grid-research",
+        "PR_BASE_REPOSITORY": "brullik/bybit-grid-research",
     }
+    live_head_sha = overrides.pop("MOCK_LIVE_HEAD_SHA", environment["HEAD_SHA"])
+    live_main_sha = overrides.pop("MOCK_LIVE_MAIN_SHA", environment["EXPECTED_BASE_SHA"])
+    unresolved = overrides.pop("MOCK_UNRESOLVED", "false") == "true"
+    paginated = overrides.pop("MOCK_PAGINATED", "false") == "true"
     environment.update(overrides)
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
     captured: dict[str, str] = {}
+    graph_calls = 0
 
     class Response:
-        status = 201
+        def __init__(self, status: int, payload: dict[str, object] | None = None):
+            self.status = status
+            self.payload = payload
 
         def __enter__(self):
             return self
@@ -1096,10 +1873,61 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
         def __exit__(self, *args):
             return False
 
+        def read(self):
+            return json.dumps(self.payload).encode() if self.payload is not None else b""
+
     def fake_urlopen(request, timeout):
+        nonlocal graph_calls
         assert timeout == 30
+        if request.full_url.endswith("/pulls/42"):
+            return Response(200, {
+                "base": {
+                    "ref": environment["BASE_REF"],
+                    "repo": {"full_name": environment["PR_BASE_REPOSITORY"]},
+                    "sha": environment["EXPECTED_BASE_SHA"],
+                },
+                "draft": environment["PR_DRAFT"] == "true",
+                "head": {
+                    "ref": environment["HEAD_REF"],
+                    "repo": {"full_name": environment["PR_HEAD_REPOSITORY"]},
+                    "sha": live_head_sha,
+                },
+                "labels": [
+                    {"name": label}
+                    for label in json.loads(environment["PR_LABELS_JSON"])
+                ],
+                "state": "open",
+                "user": {"login": environment["PR_AUTHOR"]},
+            })
+        if request.full_url.endswith("/git/ref/heads/main"):
+            return Response(200, {"object": {"sha": live_main_sha}})
+        if request.full_url.endswith("/graphql"):
+            graph_calls += 1
+            variables = json.loads(request.data)["variables"]
+            first_page = paginated and variables["after"] is None
+            return Response(200, {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": (
+                                    [{"isResolved": False}]
+                                    if unresolved
+                                    else [{"isResolved": True}]
+                                    if first_page
+                                    else []
+                                ),
+                                "pageInfo": {
+                                    "endCursor": "cursor-1" if first_page else None,
+                                    "hasNextPage": first_page,
+                                },
+                            }
+                        }
+                    }
+                }
+            })
         captured.update(json.loads(request.data))
-        return Response()
+        return Response(201)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     exit_reason = None
@@ -1107,6 +1935,7 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
         exec(compile(source, "pm-acceptance-finalizer", "exec"), {})
     except SystemExit as exc:
         exit_reason = str(exc)
+    captured["graph_calls"] = str(graph_calls)
     return exit_reason, captured
 
 
@@ -1116,6 +1945,10 @@ def test_final_status_script_succeeds_only_for_ready_owner_non_probe(monkeypatch
     assert payload["state"] == "success"
     assert payload["context"] == "pm-acceptance"
     assert payload["target_url"].endswith("/actions/runs/123")
+
+    exit_reason, payload = _execute_final_status_script(monkeypatch, MOCK_PAGINATED="true")
+    assert exit_reason is None
+    assert payload["graph_calls"] == "2"
 
     for ineligible in (
         {"PR_DRAFT": "true"},
@@ -1135,6 +1968,24 @@ def test_final_status_script_distinguishes_failure_from_cancelled(monkeypatch):
     exit_reason, payload = _execute_final_status_script(monkeypatch, ACCEPTANCE_RESULT="cancelled")
     assert exit_reason == "pm_acceptance_failed"
     assert payload["state"] == "error"
+
+
+def test_final_status_script_rejects_stale_live_head_and_unresolved_threads(monkeypatch):
+    exit_reason, _payload = _execute_final_status_script(
+        monkeypatch,
+        MOCK_LIVE_HEAD_SHA="c" * 40,
+    )
+    assert exit_reason == "live_pull_request_identity_mismatch"
+    exit_reason, _payload = _execute_final_status_script(
+        monkeypatch,
+        MOCK_LIVE_MAIN_SHA="c" * 40,
+    )
+    assert exit_reason == "live_main_sha_mismatch"
+    exit_reason, _payload = _execute_final_status_script(
+        monkeypatch,
+        MOCK_UNRESOLVED="true",
+    )
+    assert exit_reason == "unresolved_review_threads"
 
 
 def test_direct_task_scope_cli_import_shape_from_repository_root():
