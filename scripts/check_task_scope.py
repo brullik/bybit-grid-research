@@ -1225,8 +1225,6 @@ def recovery_bundle_transition_errors(
     errors: list[str] = []
     if changed_paths != (_TASK_FILE, manifest_path) and set(changed_paths) != {_TASK_FILE, manifest_path}:
         errors.append("recovery_bundle_exact_paths_mismatch")
-    if base_task.task_id != _INACTIVE_TASK_ID:
-        errors.append("recovery_bundle_base_task_not_inactive")
     expected_scope = (
         "src/bybit_grid/research/scoring/outcome_grains.py",
         "src/bybit_grid/research/walk_forward/splits.py",
@@ -1247,6 +1245,10 @@ def recovery_bundle_transition_errors(
         errors.append("recovery_bundle_replay")
     try:
         manifest = parse_recovery_bundle_manifest_bytes(git_blob_from_ref(head_sha, manifest_path))
+        if _sha256(_task_bytes_for_hash(base_task)) != manifest.members[0].active_task_sha256:
+            errors.append(
+                f"recovery_bundle_base_task_not_previous_member:{manifest.members[0].task_id}"
+            )
         errors.extend(recovery_bundle_history_errors(base_sha, manifest))
         if tuple(path for member in manifest.members for path in member.required_paths) != expected_scope:
             errors.append("recovery_bundle_manifest_scope_mismatch")
