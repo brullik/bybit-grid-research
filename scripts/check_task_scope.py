@@ -1213,6 +1213,26 @@ def recovery_bundle_history_errors(
     )
     if erratum_errors:
         return erratum_errors
+    for member in manifest.members:
+        activation_parents = git_commit_parents(member.activation_commit_sha)
+        if len(activation_parents) != 1:
+            return (
+                "recovery_bundle_activation_requires_single_parent:"
+                f"{member.task_id}:{member.activation_commit_sha}",
+            )
+        activation_changed_paths = git_commit_changed_paths(
+            member.activation_commit_sha,
+        )
+        expected_activation_paths = {
+            _TASK_FILE,
+            member.test_path,
+            member.contract_path,
+        }
+        if set(activation_changed_paths) != expected_activation_paths:
+            return (
+                "recovery_bundle_activation_changed_paths_mismatch:"
+                f"{member.task_id}",
+            )
     return ()
 
 
