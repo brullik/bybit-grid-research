@@ -64,6 +64,7 @@ def _build_recovery_bundle_erratum_predecessor_fixture(
     tmp_path: Path,
     *,
     extra_activation_path: bool = False,
+    executable_activation_contract: bool = False,
 ):
     from scripts.check_task_scope import (
         RecoveryBundleManifest,
@@ -76,6 +77,7 @@ def _build_recovery_bundle_erratum_predecessor_fixture(
         _build_frozen_erratum_repo(
             tmp_path,
             extra_activation_path=extra_activation_path,
+            executable_activation_contract=executable_activation_contract,
         )
     )
     activation_sha = _git(repo, "rev-parse", f"{suspension_sha}^")
@@ -539,6 +541,31 @@ def test_recovery_history_rejects_erratum_member_activation_extra_path(tmp_path:
         os.chdir(repo)
         assert check_task_scope.recovery_bundle_history_errors(erratum_sha, manifest) == (
             "recovery_bundle_activation_changed_paths_mismatch:task-a",
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_recovery_history_requires_regular_mode_for_member_activation_contract(
+    tmp_path: Path,
+):
+    import scripts.check_task_scope as check_task_scope
+
+    repo, _suspension_sha, erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(
+            tmp_path,
+            executable_activation_contract=True,
+        )
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(
+            erratum_sha, manifest
+        ) == (
+            "recovery_bundle_historical_mode_mismatch:task-a:"
+            "docs/frozen_contracts/tasks/task-a.md:100755:100644",
         )
     finally:
         os.chdir(old_cwd)
@@ -2766,6 +2793,7 @@ def _build_frozen_erratum_repo(
     head_test: bytes | None = None,
     manifest_transform=None,
     extra_activation_path: bool = False,
+    executable_activation_contract: bool = False,
 ) -> tuple[Path, str, str, ActiveTask, bytes, bytes]:
     repo = tmp_path / "erratum-repo"
     test_path = repo / "pm_acceptance/tasks/task-a/test_contract.py"
@@ -2796,6 +2824,8 @@ def _build_frozen_erratum_repo(
     contract_path.write_text("# Frozen task\n")
     if extra_activation_path:
         (repo / "unrelated.txt").write_text("unrelated activation path\n", encoding="utf-8")
+    if executable_activation_contract:
+        contract_path.chmod(0o755)
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "historical active task")
     historical_active = _git(repo, "rev-parse", "HEAD")
