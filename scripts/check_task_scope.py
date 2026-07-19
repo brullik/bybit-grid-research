@@ -18,14 +18,14 @@ if __package__:
     from .check_protected_paths import (
         _path_error,
         _SHA_RE,
-        changed_paths_from_git,
+        parse_git_diff_raw_z,
         protected_path_errors,
     )
 else:
     from check_protected_paths import (  # type: ignore[no-redef]
         _path_error,
         _SHA_RE,
-        changed_paths_from_git,
+        parse_git_diff_raw_z,
         protected_path_errors,
     )
 
@@ -783,6 +783,8 @@ def recovery_event_identity_errors(
     *,
     actor: str,
     sender: str,
+    triggering_actor: str,
+    run_attempt: int,
     repository: str,
     base_repository: str,
     head_repository: str,
@@ -794,6 +796,10 @@ def recovery_event_identity_errors(
         errors.append(f"wrong_recovery_actor:{actor}")
     if sender != _OWNER:
         errors.append(f"wrong_recovery_sender:{sender}")
+    if triggering_actor != _OWNER:
+        errors.append(f"wrong_recovery_triggering_actor:{triggering_actor}")
+    if type(run_attempt) is not int or run_attempt < 1:
+        errors.append("invalid_recovery_run_attempt")
     for field_name, value in (
         ("repository", repository),
         ("base_repository", base_repository),
@@ -1066,7 +1072,7 @@ def git_blob_from_ref(ref: str, path: str) -> bytes:
     if _path_error(path) is not None:
         raise ValueError("invalid_git_blob_path")
     proc = subprocess.run(
-        ["git", "show", f"{ref}:{path}"],
+        ["git", "--no-replace-objects", "show", f"{ref}:{path}"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -1081,13 +1087,7 @@ def git_object_exists(ref: str, path: str) -> bool:
         raise ValueError("invalid_git_object_ref")
     if _path_error(path) is not None:
         raise ValueError("invalid_git_object_path")
-    proc = subprocess.run(
-        ["git", "cat-file", "-e", f"{ref}:{path}"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return proc.returncode == 0
+    return git_blob_mode_from_ref(ref, path) is not None
 
 
 def git_is_ancestor(ancestor_sha: str, descendant_sha: str) -> bool:
@@ -1096,7 +1096,7 @@ def git_is_ancestor(ancestor_sha: str, descendant_sha: str) -> bool:
     if not _SHA_RE.fullmatch(descendant_sha):
         raise ValueError("invalid_git_descendant_ref")
     proc = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
+        ["git", "--no-replace-objects", "merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
@@ -1114,7 +1114,7 @@ def git_blob_mode_from_ref(ref: str, path: str) -> str | None:
     if _path_error(path) is not None:
         raise ValueError("invalid_git_mode_path")
     proc = subprocess.run(
-        ["git", "ls-tree", "-z", ref, "--", path],
+        ["git", "--no-replace-objects", "ls-tree", "-z", ref, "--", path],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -1137,7 +1137,7 @@ def git_commit_parents(ref: str) -> tuple[str, ...]:
     if not _SHA_RE.fullmatch(ref):
         raise ValueError("invalid_git_commit_ref")
     proc = subprocess.run(
-        ["git", "show", "-s", "--format=%P", ref],
+        ["git", "--no-replace-objects", "show", "-s", "--format=%P", ref],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -1155,7 +1155,7 @@ def git_first_parent_commits(ref: str) -> tuple[str, ...]:
     if not _SHA_RE.fullmatch(ref):
         raise ValueError("invalid_git_history_ref")
     proc = subprocess.run(
-        ["git", "rev-list", "--first-parent", ref],
+        ["git", "--no-replace-objects", "rev-list", "--first-parent", ref],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -1175,7 +1175,7 @@ def git_path_first_parent_changes(ref: str, path: str) -> tuple[str, ...]:
     if _path_error(path) is not None:
         raise ValueError("invalid_git_path_history_path")
     proc = subprocess.run(
-        ["git", "log", "--first-parent", "--format=%H", ref, "--", path],
+        ["git", "--no-replace-objects", "log", "--first-parent", "--format=%H", ref, "--", path],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -1194,13 +1194,39 @@ def git_active_task_digest_occurrences(ref: str, digest: str) -> tuple[str, ...]
         raise ValueError("invalid_active_task_history_digest")
     occurrences: list[str] = []
     for commit in git_path_first_parent_changes(ref, _TASK_FILE):
-        try:
-            task_bytes = git_blob_from_ref(commit, _TASK_FILE)
-        except RuntimeError:
-            continue
+        task_bytes = git_blob_from_ref(commit, _TASK_FILE)
         if _sha256(task_bytes) == digest:
             occurrences.append(commit)
     return tuple(occurrences)
+
+
+def changed_paths_from_git(base_sha: str, head_sha: str) -> tuple[str, ...]:
+    """Read the exact three-dot diff without honoring local replacement refs."""
+    if not _SHA_RE.fullmatch(base_sha) or not _SHA_RE.fullmatch(head_sha):
+        raise ValueError("invalid_git_diff_ref")
+    proc = subprocess.run(
+        [
+            "git",
+            "--no-replace-objects",
+            "diff",
+            "--raw",
+            "-z",
+            "--no-renames",
+            "--diff-filter=ACDMRTUXB",
+            f"{base_sha}...{head_sha}",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("git_diff_failed")
+    if proc.stderr:
+        proc.stderr.decode("utf-8", "strict")
+    paths, errors = parse_git_diff_raw_z(proc.stdout)
+    if errors:
+        raise RuntimeError(errors[0])
+    return paths
 
 
 def _erratum_manifest_path(task_id: str) -> str:
@@ -2010,12 +2036,35 @@ def task_definition_base_path_errors(
     return tuple(errors)
 
 
+def _isolated_python_environment(overrides: dict[str, str]) -> dict[str, str]:
+    """Build a minimal child environment without inherited pytest/Python controls."""
+    environment = {
+        name: os.environ[name]
+        for name in ("HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", "TZ")
+        if name in os.environ
+    }
+    environment.update(
+        {
+            "PYTHONHASHSEED": "0",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+    environment.update(overrides)
+    return environment
+
+
 def _run_exact_pytest(
     root: Path,
     targets: tuple[str, ...],
     *,
     collect_only: bool = False,
+    config_path: Path | None = None,
+    confcutdir: Path | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
+    if config_path is None:
+        config_path = root / "pytest.ini"
+    if confcutdir is None:
+        confcutdir = root / "pm_acceptance"
     result_path = root.parent / f".exact-pytest-{os.getpid()}.json"
     result_path.unlink(missing_ok=True)
     child = r'''
@@ -2033,7 +2082,8 @@ class ExactOutcomes:
         self.call_node_ids: set[str] = set()
         self.collected: list[str] = []
         self.failed: list[str] = []
-        self.failure_text: dict[str, str] = {}
+        self.failure_message: dict[str, str] = {}
+        self.failure_type: dict[str, str] = {}
         self.forbidden: list[str] = []
         self.passed: list[str] = []
 
@@ -2048,6 +2098,22 @@ class ExactOutcomes:
 
     def pytest_deselected(self, items) -> None:
         self.forbidden.extend(f"deselected:{item.nodeid}" for item in items)
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_makereport(self, item, call):
+        outcome = yield
+        report = outcome.get_result()
+        if (
+            call.when == "call"
+            and call.excinfo is not None
+            and report.failed
+            and getattr(report, "wasxfail", None) is None
+        ):
+            exception_type = call.excinfo.type
+            self.failure_type[item.nodeid] = (
+                f"{exception_type.__module__}.{exception_type.__qualname__}"
+            )
+            self.failure_message[item.nodeid] = str(call.excinfo.value)
 
     def pytest_runtest_logreport(self, report) -> None:
         if getattr(report, "wasxfail", None) is not None:
@@ -2066,7 +2132,6 @@ class ExactOutcomes:
             self.passed.append(report.nodeid)
         elif report.outcome == "failed":
             self.failed.append(report.nodeid)
-            self.failure_text[report.nodeid] = report.longreprtext
         else:
             self.forbidden.append(f"call-{report.outcome}:{report.nodeid}")
 
@@ -2077,9 +2142,11 @@ outcomes = ExactOutcomes()
 arguments = [
     *targets,
     "-q",
+    "-p",
+    "no:cacheprovider",
     "-c",
-    str(root / "pytest.ini"),
-    f"--confcutdir={root / 'pm_acceptance'}",
+    os.environ["EXACT_CONFIG"],
+    f"--confcutdir={os.environ['EXACT_CONFCUTDIR']}",
 ]
 collect_only = os.environ["EXACT_COLLECT_ONLY"] == "1"
 if collect_only:
@@ -2099,7 +2166,8 @@ Path(os.environ["EXACT_RESULT"]).write_text(
             "collected": outcomes.collected,
             "exit_code": int(exit_code),
             "failed": outcomes.failed,
-            "failure_text": outcomes.failure_text,
+            "failure_message": outcomes.failure_message,
+            "failure_type": outcomes.failure_type,
             "forbidden": outcomes.forbidden,
             "passed": outcomes.passed,
         },
@@ -2110,12 +2178,13 @@ Path(os.environ["EXACT_RESULT"]).write_text(
     encoding="utf-8",
 )
 '''
-    environment = dict(os.environ)
-    environment.update({
+    environment = _isolated_python_environment({
         "EXACT_RESULT": str(result_path),
         "EXACT_ROOT": str(root),
         "EXACT_TARGETS_JSON": json.dumps(list(targets), separators=(",", ":")),
         "EXACT_COLLECT_ONLY": "1" if collect_only else "0",
+        "EXACT_CONFIG": str(config_path),
+        "EXACT_CONFCUTDIR": str(confcutdir),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
         "PYTHONPATH": str(root),
         "RUNNER_TEMP": str(root),
@@ -2138,7 +2207,15 @@ Path(os.environ["EXACT_RESULT"]).write_text(
         payload = None
     finally:
         result_path.unlink(missing_ok=True)
-    expected_keys = {"collected", "exit_code", "failed", "failure_text", "forbidden", "passed"}
+    expected_keys = {
+        "collected",
+        "exit_code",
+        "failed",
+        "failure_message",
+        "failure_type",
+        "forbidden",
+        "passed",
+    }
     if not isinstance(payload, dict) or set(payload) != expected_keys:
         return None, "invalid_exact_pytest_payload"
     for key in ("collected", "failed", "forbidden", "passed"):
@@ -2149,18 +2226,19 @@ Path(os.environ["EXACT_RESULT"]).write_text(
             or len(set(value)) != len(value)
         ):
             return None, f"invalid_exact_pytest_{key}"
-    failure_text = payload["failure_text"]
-    if (
-        not isinstance(failure_text, dict)
-        or any(
-            not isinstance(key, str)
-            or not key
-            or not isinstance(value, str)
-            for key, value in failure_text.items()
-        )
-        or set(failure_text) != set(payload["failed"])
-    ):
-        return None, "invalid_exact_pytest_failure_text"
+    for field in ("failure_message", "failure_type"):
+        failure_details = payload[field]
+        if (
+            not isinstance(failure_details, dict)
+            or any(
+                not isinstance(key, str)
+                or not key
+                or not isinstance(value, str)
+                for key, value in failure_details.items()
+            )
+            or set(failure_details) != set(payload["failed"])
+        ):
+            return None, f"invalid_exact_pytest_{field}"
     if type(payload["exit_code"]) is not int:
         return None, "invalid_exact_pytest_exit_code"
     return payload, None
@@ -2192,6 +2270,49 @@ def run_exact_acceptance_tests(root: Path) -> int:
         errors.append("acceptance_failed_node_ids=" + ",".join(sorted(failed)))
     if sorted(passed) != sorted(collected):
         errors.append("acceptance_plain_pass_set_mismatch")
+    output = {
+        "collected_count": len(collected),
+        "errors": sorted(set(errors)),
+        "ok": not errors,
+        "passed_count": len(passed),
+    }
+    print(json.dumps(output, sort_keys=True, separators=(",", ":")))
+    return 0 if not errors else 1
+
+
+def run_exact_ordinary_tests(root: Path) -> int:
+    """Require every collected ordinary test to have one plain passing call."""
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        print(json.dumps({"errors": [f"ordinary_root_unreadable:{type(exc).__name__}"], "ok": False}))
+        return 1
+    tests = root / "tests"
+    config = root / "pyproject.toml"
+    if not tests.is_dir() or not config.is_file():
+        print(json.dumps({"errors": ["ordinary_harness_incomplete"], "ok": False}))
+        return 1
+    payload, runner_error = _run_exact_pytest(
+        root,
+        ("tests",),
+        config_path=config,
+        confcutdir=tests,
+    )
+    if payload is None:
+        print(json.dumps({"errors": [runner_error], "ok": False}, sort_keys=True))
+        return 1
+    errors = list(payload["forbidden"])
+    collected = list(payload["collected"])
+    passed = list(payload["passed"])
+    failed = list(payload["failed"])
+    if payload["exit_code"] != 0:
+        errors.append(f"unexpected_ordinary_pytest_exit:{payload['exit_code']}")
+    if not collected:
+        errors.append("ordinary_collection_empty")
+    if failed:
+        errors.append("ordinary_failed_node_ids=" + ",".join(sorted(failed)))
+    if sorted(passed) != sorted(collected):
+        errors.append("ordinary_plain_pass_set_mismatch")
     output = {
         "collected_count": len(collected),
         "errors": sorted(set(errors)),
@@ -2241,10 +2362,14 @@ def run_exact_recovery_probe(root: Path, manifest_path: Path) -> int:
         errors.append("recovery_failed_node_ids_mismatch")
     if passed:
         errors.append("recovery_unexpected_passed_node_ids")
-    failure_text = payload["failure_text"]
+    failure_message = payload["failure_message"]
+    failure_type = payload["failure_type"]
     for member in manifest.members:
         for node_id in member.expected_node_ids:
-            if member.expected_failure_sentinel not in failure_text.get(node_id, ""):
+            if (
+                failure_type.get(node_id) != "builtins.RuntimeError"
+                or failure_message.get(node_id) != member.expected_failure_sentinel
+            ):
                 errors.append(f"recovery_failure_sentinel_mismatch:{node_id}")
     output = {
         "collected_count": len(collected),
@@ -2288,7 +2413,12 @@ def run_recovery_manifest_collection(root: Path, manifest_path: Path) -> int:
         errors.append(f"unexpected_recovery_collection_exit:{payload['exit_code']}")
     if set(payload["collected"]) != expected:
         errors.append("recovery_collection_node_ids_mismatch")
-    if payload["passed"] or payload["failed"] or payload["failure_text"]:
+    if (
+        payload["passed"]
+        or payload["failed"]
+        or payload["failure_message"]
+        or payload["failure_type"]
+    ):
         errors.append("recovery_collection_executed_calls")
     output = {
         "collected_count": len(payload["collected"]),
@@ -2390,8 +2520,7 @@ Path(os.environ["EXACT_CONTROL_RESULT"]).write_text(
     encoding="utf-8",
 )
 '''
-    environment = dict(os.environ)
-    environment.update({
+    environment = _isolated_python_environment({
         "EXACT_CONTROL_RESULT": str(result_path),
         "EXACT_CONTROL_ROOT": str(root),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
@@ -2481,6 +2610,11 @@ def main(argv: list[str] | None = None) -> int:
         acceptance_parser.add_argument("--exact-acceptance-root", required=True)
         acceptance_args = acceptance_parser.parse_args(effective_argv)
         return run_exact_acceptance_tests(Path(acceptance_args.exact_acceptance_root))
+    if "--exact-ordinary-root" in effective_argv:
+        ordinary_parser = argparse.ArgumentParser(add_help=True)
+        ordinary_parser.add_argument("--exact-ordinary-root", required=True)
+        ordinary_args = ordinary_parser.parse_args(effective_argv)
+        return run_exact_ordinary_tests(Path(ordinary_args.exact_ordinary_root))
     if "--exact-recovery-root" in effective_argv:
         recovery_parser = argparse.ArgumentParser(add_help=True)
         recovery_parser.add_argument("--exact-recovery-root", required=True)
@@ -2510,6 +2644,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--actor", default="")
     parser.add_argument("--sender", default="")
+    parser.add_argument("--triggering-actor", default="")
+    parser.add_argument("--run-attempt", type=int, default=0)
     parser.add_argument("--repository", default="")
     parser.add_argument("--base-repository", default="")
     parser.add_argument("--head-repository", default="")
@@ -2567,6 +2703,8 @@ def main(argv: list[str] | None = None) -> int:
             identity_errors = recovery_event_identity_errors(
                 actor=args.actor,
                 sender=args.sender,
+                triggering_actor=args.triggering_actor,
+                run_attempt=args.run_attempt,
                 repository=args.repository,
                 base_repository=args.base_repository,
                 head_repository=args.head_repository,

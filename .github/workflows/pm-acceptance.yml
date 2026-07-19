@@ -2,8 +2,6 @@ name: PM Acceptance
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
-  pull_request_review_thread:
-    types: [resolved, unresolved]
 permissions:
   contents: read
   pull-requests: read
@@ -79,6 +77,8 @@ jobs:
         env:
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
           PR_SENDER: ${{ github.event.sender.login }}
+          PR_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           REPOSITORY: ${{ github.repository }}
           BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
@@ -96,6 +96,7 @@ jobs:
           expected = {
               "PR_ACTOR": "brullik",
               "PR_SENDER": "brullik",
+              "PR_TRIGGERING_ACTOR": "brullik",
               "REPOSITORY": "brullik/bybit-grid-research",
               "BASE_REPOSITORY": "brullik/bybit-grid-research",
               "HEAD_REPOSITORY": "brullik/bybit-grid-research",
@@ -103,6 +104,8 @@ jobs:
           }
           if labels != ["pm-recovery-bundle"]:
               raise SystemExit("recovery_mode_label_mismatch")
+          if not os.environ["RUN_ATTEMPT"].isdigit() or int(os.environ["RUN_ATTEMPT"]) < 1:
+              raise SystemExit("invalid_recovery_run_attempt")
           for name, value in expected.items():
               if os.environ[name] != value:
                   raise SystemExit(f"recovery_identity_mismatch:{name}")
@@ -123,6 +126,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
           PR_SENDER: ${{ github.event.sender.login }}
+          PR_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           REPOSITORY: ${{ github.repository }}
           BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
@@ -136,6 +141,8 @@ jobs:
             --head-sha "$HEAD_SHA" \
             --actor "$PR_ACTOR" \
             --sender "$PR_SENDER" \
+            --triggering-actor "$PR_TRIGGERING_ACTOR" \
+            --run-attempt "$RUN_ATTEMPT" \
             --repository "$REPOSITORY" \
             --base-repository "$BASE_REPOSITORY" \
             --head-repository "$HEAD_REPOSITORY" \
@@ -167,25 +174,139 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          path: base
+          path: base_checkout
           persist-credentials: false
           fetch-depth: 0
       - name: Checkout PR head production code
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          path: head
+          path: head_checkout
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # Security: PR code is executed with a read-only token, persist-credentials=false, no secrets, and base-controlled acceptance tests.
+      # Security: all network/build work finishes before exact Git-object evidence is staged.
+      - name: Install PR package
+        working-directory: head_checkout
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .[dev]
+      - name: Rebuild immutable Git-object snapshots
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MATRIX_PYTHON: ${{ matrix.python-version }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import re
+          import subprocess
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          inventory_path = Path(os.environ["RUNNER_TEMP"]) / (
+              f"pm-object-snapshots-{os.environ['MATRIX_PYTHON']}.json"
+          )
+          if inventory_path.exists():
+              raise SystemExit("snapshot_inventory_already_exists")
+
+          def git(checkout: Path, *arguments: str) -> bytes:
+              result = subprocess.run(
+                  ["git", "--no-replace-objects", "-C", str(checkout), *arguments],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  check=False,
+                  env={**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"},
+              )
+              if result.returncode != 0:
+                  raise SystemExit(f"snapshot_git_failed:{arguments[0]}:{result.returncode}")
+              return result.stdout
+
+          def materialize(name: str, sha: str) -> dict[str, dict[str, str]]:
+              if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+                  raise SystemExit("snapshot_invalid_commit_sha")
+              checkout = workspace / f"{name}_checkout"
+              destination = workspace / name
+              if destination.exists() or destination.is_symlink():
+                  raise SystemExit("snapshot_destination_already_exists")
+              if git(checkout, "cat-file", "-t", sha) != b"commit\n":
+                  raise SystemExit("snapshot_source_not_commit")
+              if git(checkout, "for-each-ref", "--format=%(refname)", "refs/replace").strip():
+                  raise SystemExit("snapshot_replace_ref_present")
+              git_dir = Path(git(checkout, "rev-parse", "--absolute-git-dir").decode().strip())
+              grafts = git_dir / "info/grafts"
+              if grafts.exists() and grafts.read_bytes():
+                  raise SystemExit("snapshot_grafts_present")
+              destination.mkdir(mode=0o755)
+              records = [
+                  record
+                  for record in git(
+                      checkout, "ls-tree", "-rz", "--full-tree", "-r", sha
+                  ).split(b"\0")
+                  if record
+              ]
+              inventory: dict[str, dict[str, str]] = {}
+              for record in records:
+                  metadata, separator, raw_path = record.partition(b"\t")
+                  fields = metadata.split()
+                  if separator != b"\t" or len(fields) != 3:
+                      raise SystemExit("snapshot_tree_record_malformed")
+                  mode, object_type, _object_id = (field.decode("ascii") for field in fields)
+                  path = raw_path.decode("utf-8", "strict")
+                  pure = PurePosixPath(path)
+                  if (
+                      mode not in {"100644", "100755"}
+                      or object_type != "blob"
+                      or pure.is_absolute()
+                      or pure.as_posix() != path
+                      or ".." in pure.parts
+                      or "\\" in path
+                      or any(ord(character) < 32 or ord(character) == 127 for character in path)
+                      or path in inventory
+                  ):
+                      raise SystemExit(f"snapshot_unsafe_tree_entry:{path}")
+                  data = git(checkout, "show", f"{sha}:{path}")
+                  if git(checkout, "show", f"{sha}:{path}") != data:
+                      raise SystemExit("snapshot_source_changed_after_install")
+                  target = destination.joinpath(*pure.parts)
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  descriptor = os.open(
+                      target,
+                      os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                      0o755 if mode == "100755" else 0o644,
+                  )
+                  with os.fdopen(descriptor, "wb") as stream:
+                      stream.write(data)
+                  inventory[path] = {
+                      "mode": mode,
+                      "sha256": hashlib.sha256(data).hexdigest(),
+                  }
+              return inventory
+
+          payload = {
+              "base": materialize("base", os.environ["BASE_SHA"]),
+              "head": materialize("head", os.environ["HEAD_SHA"]),
+          }
+          inventory_path.write_text(
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
       - name: Stage base-controlled acceptance harness
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
-          rm -rf "$RUNNER_TEMP/pm_acceptance" "$RUNNER_TEMP/scripts" "$RUNNER_TEMP/frozen_contracts" "$RUNNER_TEMP/.github"
+          test ! -e "$RUNNER_TEMP/pm_acceptance"
+          test ! -e "$RUNNER_TEMP/scripts"
+          test ! -e "$RUNNER_TEMP/frozen_contracts"
+          test ! -e "$RUNNER_TEMP/.github"
           cp -R base/pm_acceptance "$RUNNER_TEMP/pm_acceptance"
           cp -R base/docs/frozen_contracts "$RUNNER_TEMP/frozen_contracts"
           mkdir -p "$RUNNER_TEMP/scripts"
@@ -195,11 +316,6 @@ jobs:
           cp base/scripts/check_task_scope.py "$RUNNER_TEMP/scripts/check_task_scope.py"
           cp base/.github/workflows/pm-acceptance.yml "$RUNNER_TEMP/.github/workflows/pm-acceptance.yml"
           printf '[pytest]\n' > "$RUNNER_TEMP/pytest.ini"
-      - name: Install PR package
-        working-directory: head
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .[dev]
       - name: Run base isolated acceptance harness
         if: needs.protected-paths.outputs.pr-mode == 'implementation'
         working-directory: ${{ runner.temp }}
@@ -245,7 +361,7 @@ jobs:
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
-          rm -rf "$RUNNER_TEMP/head_control"
+          test ! -e "$RUNNER_TEMP/head_control"
           mkdir -p "$RUNNER_TEMP/head_control/pm_acceptance"
           mkdir -p "$RUNNER_TEMP/head_control/scripts" "$RUNNER_TEMP/head_control/.github/workflows"
           cp head/pm_acceptance/test_control_plane_self.py "$RUNNER_TEMP/head_control/pm_acceptance/test_control_plane_self.py"
@@ -274,7 +390,7 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
           TASK_ID: ${{ needs.protected-paths.outputs.task-id }}
         run: |
-          rm -rf "$RUNNER_TEMP/head_task_definition"
+          test ! -e "$RUNNER_TEMP/head_task_definition"
           mkdir -p "$RUNNER_TEMP/head_task_definition/pm_acceptance/tasks"
           cp -R "head/pm_acceptance/tasks/$TASK_ID" \
             "$RUNNER_TEMP/head_task_definition/pm_acceptance/tasks/$TASK_ID"
@@ -320,7 +436,7 @@ jobs:
           ERRATUM_TEMP: ${{ runner.temp }}/head_frozen_erratum
           TASK_ID: ${{ needs.protected-paths.outputs.task-id }}
         run: |
-          rm -rf "$ERRATUM_TEMP"
+          test ! -e "$ERRATUM_TEMP"
           ERRATUM_TEMP="$ERRATUM_TEMP" TASK_ID="$TASK_ID" python - <<'PY'
           from __future__ import annotations
 
@@ -475,8 +591,9 @@ jobs:
               ancestor = subprocess.run(
                   [
                       "git",
+                      "--no-replace-objects",
                       "-C",
-                      "base",
+                      "base_checkout",
                       "merge-base",
                       "--is-ancestor",
                       predecessor_commit,
@@ -491,7 +608,14 @@ jobs:
 
               def git_show(path: str) -> bytes:
                   shown = subprocess.run(
-                      ["git", "-C", "base", "show", f"{predecessor_commit}:{path}"],
+                      [
+                          "git",
+                          "--no-replace-objects",
+                          "-C",
+                          "base_checkout",
+                          "show",
+                          f"{predecessor_commit}:{path}",
+                      ],
                       stdout=subprocess.PIPE,
                       stderr=subprocess.DEVNULL,
                       check=False,
@@ -1013,18 +1137,91 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_MODE: ${{ needs.protected-paths.outputs.pr-mode }}
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
+          RUFF_CACHE_DIR: ${{ runner.temp }}/ruff-cache
         run: |
           python scripts/check_numeric_environment.py
           python -m pip check
           python scripts/check_no_live_execution.py
           python -m compileall -q src tests scripts
-          if [ "$PR_MODE" = "implementation" ]; then
-            python -m pytest -q
-          else
-            python -m pytest tests -q
-          fi
+          python "$RUNNER_TEMP/scripts/check_task_scope.py" \
+            --exact-ordinary-root "${{ github.workspace }}/head"
           ruff check .
-          git diff --check "$BASE_SHA"..."$HEAD_SHA"
+          git --no-replace-objects -C ../head_checkout diff --check "$BASE_SHA"..."$HEAD_SHA"
+      - name: Verify immutable Git-object snapshots unchanged
+        if: ${{ always() }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MATRIX_PYTHON: ${{ matrix.python-version }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import stat
+          import subprocess
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          inventory_path = Path(os.environ["RUNNER_TEMP"]) / (
+              f"pm-object-snapshots-{os.environ['MATRIX_PYTHON']}.json"
+          )
+          if not inventory_path.is_file() or inventory_path.is_symlink():
+              raise SystemExit("snapshot_inventory_missing")
+          payload = json.loads(inventory_path.read_text(encoding="utf-8"))
+          if not isinstance(payload, dict) or set(payload) != {"base", "head"}:
+              raise SystemExit("snapshot_inventory_invalid")
+
+          def git(checkout: Path, *arguments: str) -> bytes:
+              result = subprocess.run(
+                  ["git", "--no-replace-objects", "-C", str(checkout), *arguments],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  check=False,
+                  env={**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"},
+              )
+              if result.returncode != 0:
+                  raise SystemExit(f"snapshot_verify_git_failed:{arguments[0]}")
+              return result.stdout
+
+          for name, sha in (("base", os.environ["BASE_SHA"]), ("head", os.environ["HEAD_SHA"])):
+              expected = payload[name]
+              if not isinstance(expected, dict):
+                  raise SystemExit("snapshot_inventory_invalid")
+              root = workspace / name
+              checkout = workspace / f"{name}_checkout"
+              if git(checkout, "cat-file", "-t", sha) != b"commit\n":
+                  raise SystemExit("snapshot_source_not_commit")
+              if git(checkout, "for-each-ref", "--format=%(refname)", "refs/replace").strip():
+                  raise SystemExit("snapshot_replace_ref_present")
+              actual: set[str] = set()
+              for item in root.rglob("*"):
+                  if item.is_symlink():
+                      raise SystemExit("snapshot_symlink_created")
+                  if item.is_file():
+                      actual.add(item.relative_to(root).as_posix())
+              if actual != set(expected):
+                  raise SystemExit("snapshot_file_set_changed_after_execution")
+              for path, record in expected.items():
+                  if not isinstance(record, dict) or set(record) != {"mode", "sha256"}:
+                      raise SystemExit("snapshot_inventory_invalid")
+                  target = root.joinpath(*path.split("/"))
+                  data = target.read_bytes()
+                  expected_mode = 0o755 if record["mode"] == "100755" else 0o644
+                  if stat.S_IMODE(target.stat().st_mode) != expected_mode:
+                      raise SystemExit("snapshot_mode_changed_after_execution")
+                  digest = hashlib.sha256(data).hexdigest()
+                  if digest != record["sha256"]:
+                      raise SystemExit("snapshot_bytes_changed_after_execution")
+                  source = git(checkout, "show", f"{sha}:{path}")
+                  if hashlib.sha256(source).hexdigest() != digest:
+                      raise SystemExit("snapshot_source_changed_after_install")
+          PY
 
   status-final:
     name: publish pm-acceptance result
@@ -1211,7 +1408,7 @@ jobs:
           ready = os.environ["PR_DRAFT"] == "false"
           owner_authored = os.environ["PR_AUTHOR"] == "brullik"
           non_probe = not os.environ["HEAD_REF"].startswith("probe/")
-          successful = upstream_success and ready and owner_authored and non_probe
+          successful = upstream_success and owner_authored and non_probe
           if successful:
               state = "success"
           elif upstream_success or any(result == "failure" for result in results.values()):

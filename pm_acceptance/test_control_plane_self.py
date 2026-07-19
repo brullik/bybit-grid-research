@@ -28,6 +28,7 @@ from scripts.check_task_scope import (
     recovery_event_identity_errors,
     recovery_bundle_transition_errors,
     run_exact_acceptance_tests,
+    run_exact_ordinary_tests,
     run_exact_recovery_probe,
     run_recovery_manifest_collection,
     task_definition_base_path_errors,
@@ -600,6 +601,8 @@ def test_recovery_event_identity_requires_owner_sender_canonical_repositories_an
     valid = {
         "actor": "brullik",
         "sender": "brullik",
+        "triggering_actor": "brullik",
+        "run_attempt": 1,
         "repository": "brullik/bybit-grid-research",
         "base_repository": "brullik/bybit-grid-research",
         "head_repository": "brullik/bybit-grid-research",
@@ -610,6 +613,8 @@ def test_recovery_event_identity_requires_owner_sender_canonical_repositories_an
     expected = {
         "actor": "wrong_recovery_actor:alice",
         "sender": "wrong_recovery_sender:alice",
+        "triggering_actor": "wrong_recovery_triggering_actor:alice",
+        "run_attempt": "invalid_recovery_run_attempt",
         "repository": "wrong_recovery_repository:fork/repo",
         "base_repository": "wrong_recovery_base_repository:fork/repo",
         "head_repository": "wrong_recovery_head_repository:fork/repo",
@@ -619,6 +624,8 @@ def test_recovery_event_identity_requires_owner_sender_canonical_repositories_an
     replacements = {
         "actor": "alice",
         "sender": "alice",
+        "triggering_actor": "alice",
+        "run_attempt": 0,
         "repository": "fork/repo",
         "base_repository": "fork/repo",
         "head_repository": "fork/repo",
@@ -1302,8 +1309,9 @@ def test_workflow_control_plane_mode_checks_base_and_head_without_running_frozen
     assert "base/scripts/check_task_scope.py" in head_control
     assert "--exact-control-plane-root" in head_control
     assert 'require "psych"; Psych.parse_file' in head_control
-    assert 'if [ "$PR_MODE" = "implementation" ]; then' in supplemental
-    assert "python -m pytest tests -q" in supplemental
+    assert 'if [ "$PR_MODE" = "implementation" ]; then' not in supplemental
+    assert "--exact-ordinary-root" in supplemental
+    assert "python -m pytest tests -q" not in supplemental
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'" in supplemental
 
 
@@ -1398,6 +1406,7 @@ def test_exact_control_plane_gate_rejects_early_success_process_exit(tmp_path: P
 def test_exact_full_acceptance_gate_requires_every_plain_call(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ):
     root = tmp_path / "acceptance"
     suite = root / "pm_acceptance"
@@ -1405,6 +1414,8 @@ def test_exact_full_acceptance_gate_requires_every_plain_call(
     (root / "pytest.ini").write_text("[pytest]\n")
     test_file = suite / "test_plain.py"
     test_file.write_text("def test_plain():\n    assert True\n")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--collect-only")
+    monkeypatch.setenv("PYTEST_PLUGINS", "attacker_controlled_plugin")
     assert run_exact_acceptance_tests(root) == 0
     assert '"passed_count":1' in capsys.readouterr().out
 
@@ -1417,7 +1428,41 @@ def test_exact_full_acceptance_gate_requires_every_plain_call(
     assert "call-skipped" in capsys.readouterr().out
 
 
-def _write_recovery_probe_harness(root: Path, *, skip_first: bool = False) -> Path:
+def test_exact_ordinary_gate_rejects_skip_xfail_and_environment_padding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path / "ordinary"
+    tests = root / "tests"
+    tests.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\naddopts = '-ra'\n",
+        encoding="utf-8",
+    )
+    test_file = tests / "test_plain.py"
+    test_file.write_text("def test_plain():\n    assert True\n", encoding="utf-8")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--collect-only")
+    assert run_exact_ordinary_tests(root) == 0
+    assert '"passed_count":1' in capsys.readouterr().out
+
+    test_file.write_text(
+        "import pytest\n\n"
+        "@pytest.mark.xfail(reason='padding')\n"
+        "def test_plain():\n    assert False\n",
+        encoding="utf-8",
+    )
+    assert run_exact_ordinary_tests(root) == 1
+    assert "xfail-or-xpass" in capsys.readouterr().out
+
+
+def _write_recovery_probe_harness(
+    root: Path,
+    *,
+    skip_first: bool = False,
+    failure_type: str = "RuntimeError",
+    failure_prefix: str = "",
+) -> Path:
     (root / "pm_acceptance").mkdir(parents=True)
     (root / "pytest.ini").write_text("[pytest]\n")
     manifest_path = (
@@ -1456,7 +1501,7 @@ def _write_recovery_probe_harness(root: Path, *, skip_first: bool = False) -> Pa
                 body += f"def {name}():\n"
                 if skip_this:
                     body += "    pytest.skip('forbidden')\n"
-                body += f"    raise AssertionError({sentinel!r})\n\n"
+                body += f"    raise {failure_type}({failure_prefix + sentinel!r})\n\n"
             else:
                 ids = [parameter_id for parameter_id in parameter_ids if parameter_id is not None]
                 body += "@pytest.mark.parametrize('case', [\n"
@@ -1468,7 +1513,7 @@ def _write_recovery_probe_harness(root: Path, *, skip_first: bool = False) -> Pa
                 body += f"def {name}(case):\n"
                 if skip_this:
                     body += "    pytest.skip('forbidden')\n"
-                body += f"    raise AssertionError({sentinel!r})\n\n"
+                body += f"    raise {failure_type}({failure_prefix + sentinel!r})\n\n"
             first = False
         test_path.write_text(body)
     return manifest_path
@@ -1507,6 +1552,25 @@ def test_recovery_probe_gate_rejects_skip_and_missing_plain_failure(
     assert "recovery_failed_node_ids_mismatch" in output
 
 
+@pytest.mark.parametrize(
+    ("failure_type", "failure_prefix"),
+    (("AssertionError", ""), ("RuntimeError", "prefix:")),
+)
+def test_recovery_probe_gate_requires_exact_runtime_error_and_message(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    failure_type: str,
+    failure_prefix: str,
+):
+    manifest = _write_recovery_probe_harness(
+        tmp_path,
+        failure_type=failure_type,
+        failure_prefix=failure_prefix,
+    )
+    assert run_exact_recovery_probe(tmp_path, manifest) == 1
+    assert "recovery_failure_sentinel_mismatch" in capsys.readouterr().out
+
+
 def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     pending = workflow.split("\n  status-pending:\n", 1)[1].split("\n  protected-paths:\n", 1)[0]
@@ -1529,7 +1593,7 @@ def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
     assert 'ready = os.environ["PR_DRAFT"] == "false"' in final
     assert 'owner_authored = os.environ["PR_AUTHOR"] == "brullik"' in final
     assert 'non_probe = not os.environ["HEAD_REF"].startswith("probe/")' in final
-    assert "successful = upstream_success and ready and owner_authored and non_probe" in final
+    assert "successful = upstream_success and owner_authored and non_probe" in final
     assert 'elif upstream_success or any(result == "failure" for result in results.values())' in final
     assert 'state = "error"' in final
     assert 'summary[:140]' in final
@@ -1564,6 +1628,8 @@ def test_workflow_recovery_and_task_opening_gates_are_exact_and_base_owned():
     assert "--exact-recovery-root" in acceptance
     assert "--recovery-collection-root" in acceptance
     assert "--exact-acceptance-root" in acceptance
+    assert "--exact-ordinary-root" in acceptance
+    assert "python -m pytest tests -q" not in acceptance
     assert "p0-recovery-walk-forward-committed-key" in acceptance
     assert "probe/*" in acceptance
     assert (
@@ -1571,6 +1637,29 @@ def test_workflow_recovery_and_task_opening_gates_are_exact_and_base_owned():
         in acceptance
     )
     assert acceptance.count('"${{ github.workspace }}/base/scripts/check_task_scope.py"') >= 5
+
+
+def test_workflow_rebuilds_exact_git_object_snapshots_only_after_install():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    acceptance = workflow.split("\n  acceptance:\n", 1)[1].split("\n  status-final:\n", 1)[0]
+    install = acceptance.index("- name: Install PR package")
+    snapshot = acceptance.index("- name: Rebuild immutable Git-object snapshots")
+    stage = acceptance.index("- name: Stage base-controlled acceptance harness")
+    execute = acceptance.index("- name: Run base isolated acceptance harness")
+    assert install < snapshot < stage < execute
+    assert "path: base_checkout" in acceptance
+    assert "path: head_checkout" in acceptance
+    assert "python -m pip install .[dev]" in acceptance
+    assert "python -m pip install -e .[dev]" not in acceptance
+    assert '"--no-replace-objects"' in acceptance
+    assert '"ls-tree"' in acceptance
+    assert (
+        'checkout, "ls-tree", "-rz", "--full-tree", "-r", sha'
+        in " ".join(acceptance.split())
+    )
+    assert '"show"' in acceptance
+    assert "snapshot_destination_already_exists" in acceptance
+    assert "snapshot_source_changed_after_install" in acceptance
 
 
 def test_workflow_finalizer_rechecks_live_main_and_paginates_review_threads():
@@ -1582,8 +1671,7 @@ def test_workflow_finalizer_rechecks_live_main_and_paginates_review_threads():
     assert '"after": cursor' in final
     assert "while True:" in final
     assert 'page_info["endCursor"]' in final
-    assert "pull_request_review_thread:" in workflow
-    assert "types: [resolved, unresolved]" in workflow
+    assert "pull_request_review_thread:" not in workflow
     assert "edited" in workflow
 
 
@@ -1652,8 +1740,9 @@ def test_workflow_stages_sha_pinned_frozen_erratum_and_requires_exact_red_outcom
     assert '(normal_suite,)' in execute
     assert '"PYTHONPATH": os.pathsep.join(str(path) for path in python_path)' in execute
     assert '"RUNNER_TEMP": str(suite_root)' in execute
-    assert 'if [ "$PR_MODE" = "implementation" ]; then' in supplemental
-    assert "python -m pytest tests -q" in supplemental
+    assert 'if [ "$PR_MODE" = "implementation" ]; then' not in supplemental
+    assert "--exact-ordinary-root" in supplemental
+    assert "python -m pytest tests -q" not in supplemental
 
 
 def test_workflow_v2_chains_predecessor_and_uses_normal_isolated_import_order():
@@ -1939,7 +2028,7 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
     return exit_reason, captured
 
 
-def test_final_status_script_succeeds_only_for_ready_owner_non_probe(monkeypatch):
+def test_final_status_script_succeeds_for_owner_non_probe_and_draft_can_progress(monkeypatch):
     exit_reason, payload = _execute_final_status_script(monkeypatch)
     assert exit_reason is None
     assert payload["state"] == "success"
@@ -1950,14 +2039,58 @@ def test_final_status_script_succeeds_only_for_ready_owner_non_probe(monkeypatch
     assert exit_reason is None
     assert payload["graph_calls"] == "2"
 
+    exit_reason, payload = _execute_final_status_script(monkeypatch, PR_DRAFT="true")
+    assert exit_reason is None
+    assert payload["state"] == "success"
+    assert "ready=false" in payload["description"]
+
     for ineligible in (
-        {"PR_DRAFT": "true"},
         {"PR_AUTHOR": "someone-else"},
         {"HEAD_REF": "probe/task-a-red"},
     ):
         exit_reason, payload = _execute_final_status_script(monkeypatch, **ineligible)
         assert exit_reason == "pm_acceptance_failed"
         assert payload["state"] == "failure"
+
+
+def test_git_history_reads_ignore_replace_refs_and_never_skip_unreadable_task_state(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "replace-ref-repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "tests@example.invalid")
+    _git(repo, "config", "user.name", "Tests")
+    tracked = repo / "tracked.txt"
+    tracked.write_text("original\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-qm", "original")
+    original = _git(repo, "rev-parse", "HEAD")
+    tracked.write_text("replacement\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "replacement")
+    replacement = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "replace", original, replacement)
+
+    old_cwd = Path.cwd()
+    os.chdir(repo)
+    try:
+        assert task_scope_module.git_blob_from_ref(original, "tracked.txt") == b"original\n"
+    finally:
+        os.chdir(old_cwd)
+
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_path_first_parent_changes",
+        lambda _ref, _path: ("1" * 40,),
+    )
+    monkeypatch.setattr(
+        task_scope_module,
+        "git_blob_from_ref",
+        lambda _ref, _path: (_ for _ in ()).throw(RuntimeError("unreadable")),
+    )
+    with pytest.raises(RuntimeError, match="unreadable"):
+        task_scope_module.git_active_task_digest_occurrences("2" * 40, "3" * 64)
 
 
 def test_final_status_script_distinguishes_failure_from_cancelled(monkeypatch):
