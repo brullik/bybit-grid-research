@@ -1290,6 +1290,83 @@ def test_recovery_bundle_transition_requires_exact_previous_member_base(monkeypa
     )
 
 
+@pytest.mark.parametrize("mutation", ("omitted", "self_forbidding_extra"))
+def test_recovery_bundle_transition_rejects_nonexact_forbidden_paths(
+    monkeypatch, mutation: str
+):
+    import scripts.check_task_scope as check_task_scope
+
+    manifest_bytes = _recovery_bundle_bytes()
+    manifest = parse_recovery_bundle_manifest_bytes(manifest_bytes)
+    base_sha = "a" * 40
+    head_sha = "b" * 40
+    previous_member = manifest.members[0]
+    base_task = _active_task(
+        task_id=previous_member.task_id,
+        allowed_paths=previous_member.required_paths,
+        required_paths=previous_member.required_paths,
+    )
+    union_scope = tuple(
+        path for member in manifest.members for path in member.required_paths
+    )
+    mandatory = parse_active_task_bytes(CANONICAL).forbidden_paths
+    forbidden_paths = (
+        mandatory[1:]
+        if mutation == "omitted"
+        else (*mandatory, union_scope[0])
+    )
+    head_task = ActiveTask(
+        "pm_active_task_v1",
+        manifest.bundle_id,
+        union_scope,
+        union_scope,
+        forbidden_paths,
+    )
+    manifest_path = f"pm_acceptance/reactivations/{manifest.bundle_id}.json"
+
+    historical_hashes = {
+        (member.activation_commit_sha, path): expected_hash
+        for member in manifest.members
+        for path, expected_hash in (
+            (member.test_path, member.test_sha256),
+            (member.contract_path, member.contract_sha256),
+            ("pm_acceptance/active_task.json", member.active_task_sha256),
+        )
+    }
+
+    def future_manifest_and_historical_blobs(ref: str, path: str) -> bytes:
+        if ref == head_sha and path == manifest_path:
+            return manifest_bytes
+        return historical_hashes[(ref, path)].encode()
+
+    real_sha256 = check_task_scope._sha256
+
+    def pinned_historical_hash(data: bytes) -> str:
+        if len(data) == 64:
+            return data.decode("ascii")
+        return real_sha256(data)
+
+    def one_parent_rev_list(args, **_kwargs):
+        assert args == ["git", "rev-list", "--parents", "-n", "1", head_sha]
+        return subprocess.CompletedProcess(args, 0, stdout=f"{head_sha} {base_sha}\n")
+
+    monkeypatch.setattr(
+        check_task_scope, "git_blob_from_ref", future_manifest_and_historical_blobs
+    )
+    monkeypatch.setattr(check_task_scope, "git_object_exists", lambda *_: False)
+    monkeypatch.setattr(check_task_scope, "_sha256", pinned_historical_hash)
+    monkeypatch.setattr(check_task_scope.subprocess, "run", one_parent_rev_list)
+    monkeypatch.setattr(check_task_scope, "recovery_bundle_history_errors", lambda *_: ())
+
+    assert check_task_scope.recovery_bundle_transition_errors(
+        base_sha,
+        head_sha,
+        base_task,
+        head_task,
+        ("pm_acceptance/active_task.json", manifest_path),
+    ) == ("recovery_bundle_active_forbidden_paths_mismatch",)
+
+
 CANONICAL = json.dumps({
     "schema": "pm_active_task_v1",
     "task_id": "NO_ACTIVE_IMPLEMENTATION",
