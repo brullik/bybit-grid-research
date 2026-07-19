@@ -1233,6 +1233,13 @@ def recovery_bundle_history_errors(
                 "recovery_bundle_activation_changed_paths_mismatch:"
                 f"{member.task_id}",
             )
+        for path in (_TASK_FILE, member.test_path, member.contract_path):
+            actual_mode = git_tree_entry_mode(member.activation_commit_sha, path)
+            if actual_mode != "100644":
+                return (
+                    "recovery_bundle_historical_mode_mismatch:"
+                    f"{member.task_id}:{path}:{actual_mode}:100644",
+                )
     return ()
 
 
