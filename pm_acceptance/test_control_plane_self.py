@@ -7,6 +7,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -2236,16 +2237,19 @@ def test_workflow_aggregate_status_write_jobs_never_execute_pr_head_code():
 
     for status_job in (pending, final):
         assert "statuses: write" in status_job
-        assert "contents: read" not in status_job
         assert "actions/checkout" not in status_job
         assert "\n      - uses:" not in status_job
         assert "working-directory:" not in status_job
-        assert "pull_request.head.repo" not in status_job
         assert "secrets." not in status_job
         assert "artifact" not in status_job
         assert "cache" not in status_job
         assert "urllib.request.urlopen" in status_job
 
+    assert "pull_request.head.repo" not in pending
+    assert "contents: read" not in pending
+    assert "pull-requests: read" not in pending
+    assert "contents: read" in final
+    assert "pull-requests: read" in final
     assert "converted_to_draft" in workflow
 
 
@@ -2466,7 +2470,12 @@ def test_workflow_v2_outcome_gate_rejects_every_non_call_or_non_plain_outcome(
         _execute_v2_exact_outcome_workflow(tmp_path, monkeypatch, head_source)
 
 
-def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | None, dict[str, str]]:
+def _execute_final_status_script(
+    monkeypatch,
+    *,
+    mutate_live=None,
+    **overrides: str,
+) -> tuple[str | None, dict[str, Any]]:
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     final = workflow.split("\n  status-final:\n", 1)[1]
     source = textwrap.dedent(
@@ -2484,9 +2493,15 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
         "ACCEPTANCE_RESULT": "success",
         "PR_AUTHOR": "brullik",
         "PR_DRAFT": "false",
+        "PR_NUMBER": "210",
+        "PR_STATE": "open",
+        "PR_MODE": "implementation",
+        "PR_LABELS_JSON": '["pm-control-plane"]',
         "HEAD_REF": "pm/task-a",
+        "HEAD_REPOSITORY": "brullik/bybit-grid-research",
         "BASE_REF": "main",
         "BASE_SHA": "b" * 40,
+        "BASE_REPOSITORY": "brullik/bybit-grid-research",
         "EVENT_NAME": "pull_request_target",
         "EVENT_ACTION": "synchronize",
         "PR_SENDER": "brullik",
@@ -2495,10 +2510,63 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
-    captured: dict[str, str] = {}
+    live = {
+        "pull": {
+            "number": 210,
+            "state": "open",
+            "draft": False,
+            "user": {"login": "brullik"},
+            "head": {
+                "sha": "a" * 40,
+                "ref": "pm/task-a",
+                "repo": {"full_name": "brullik/bybit-grid-research"},
+            },
+            "base": {
+                "sha": "b" * 40,
+                "ref": "main",
+                "repo": {"full_name": "brullik/bybit-grid-research"},
+            },
+            "labels": [{"name": "pm-control-plane"}],
+        },
+        "main": {"ref": "refs/heads/main", "object": {"sha": "b" * 40, "type": "commit"}},
+        "review_thread_pages": [
+            {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [{"isResolved": True}],
+                                "pageInfo": {"hasNextPage": True, "endCursor": "page-2"},
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        }
+                    }
+                }
+            },
+        ],
+    }
+    if mutate_live is not None:
+        mutate_live(live)
+    captured: dict[str, Any] = {"__requests__": []}
 
     class Response:
-        status = 201
+        def __init__(self, status, body):
+            self.status = status
+            self.body = json.dumps(body).encode()
+
+        def read(self):
+            return self.body
 
         def __enter__(self):
             return self
@@ -2508,8 +2576,23 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
 
     def fake_urlopen(request, timeout):
         assert timeout == 30
-        captured.update(json.loads(request.data))
-        return Response()
+        body = json.loads(request.data) if request.data is not None else None
+        captured["__requests__"].append({"method": request.method, "url": request.full_url, "body": body})
+        if request.method == "GET" and request.full_url.endswith("/pulls/210"):
+            return Response(200, live["pull"])
+        if request.method == "GET" and request.full_url.endswith("/git/ref/heads/main"):
+            return Response(200, live["main"])
+        if request.method == "GET" and request.full_url.endswith("/commits/main"):
+            return Response(200, {"sha": live["main"]["object"]["sha"]})
+        if request.method == "POST" and request.full_url.endswith("/graphql"):
+            cursor = (body.get("variables") or {}).get("cursor")
+            page = 1 if cursor == "page-2" else 0
+            return Response(200, live["review_thread_pages"][page])
+        if request.method == "POST" and "/statuses/" in request.full_url:
+            assert isinstance(body, dict)
+            captured.update(body)
+            return Response(201, {})
+        raise AssertionError(f"unexpected request: {request.method} {request.full_url}")
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     exit_reason = None
@@ -2546,6 +2629,107 @@ def test_final_status_script_distinguishes_failure_from_cancelled(monkeypatch):
     exit_reason, payload = _execute_final_status_script(monkeypatch, ACCEPTANCE_RESULT="cancelled")
     assert exit_reason == "pm_acceptance_failed"
     assert payload["state"] == "error"
+
+
+def test_final_status_rejects_empty_event_head_ref_before_requests(monkeypatch):
+    exit_reason, payload = _execute_final_status_script(monkeypatch, HEAD_REF="")
+
+    assert exit_reason == "invalid_live_event_head_ref"
+    assert payload["__requests__"] == []
+
+
+def test_final_status_rejects_empty_live_head_ref_before_status(monkeypatch):
+    exit_reason, payload = _execute_final_status_script(
+        monkeypatch,
+        mutate_live=lambda live: live["pull"]["head"].update(ref=""),
+    )
+
+    status_posts = [
+        request
+        for request in payload["__requests__"]
+        if request["method"] == "POST" and "/statuses/" in request["url"]
+    ]
+    assert exit_reason == "invalid_live_pr"
+    assert status_posts == []
+
+
+def test_final_status_revalidates_live_pr_main_and_all_review_thread_pages(monkeypatch):
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    final = workflow.split("\n  status-final:\n", 1)[1]
+    exit_reason, payload = _execute_final_status_script(monkeypatch)
+    assert exit_reason is None
+    assert payload["state"] == "success"
+
+    mutations = (
+        lambda live: live["pull"].update(number=211),
+        lambda live: live["pull"].update(state="closed"),
+        lambda live: live["pull"].update(draft=True),
+        lambda live: live["pull"]["user"].update(login="someone-else"),
+        lambda live: live["pull"]["head"].update(sha="c" * 40),
+        lambda live: live["pull"]["head"].update(ref="pm/other"),
+        lambda live: live["pull"]["head"]["repo"].update(full_name="fork/bybit-grid-research"),
+        lambda live: live["pull"]["base"].update(sha="c" * 40),
+        lambda live: live["pull"]["base"].update(ref="other"),
+        lambda live: live["pull"]["base"]["repo"].update(full_name="fork/bybit-grid-research"),
+        lambda live: live["pull"].update(labels=[{"name": "different-label"}]),
+        lambda live: live["main"]["object"].update(sha="c" * 40),
+        lambda live: live["review_thread_pages"][1]["data"]["repository"]["pullRequest"][
+            "reviewThreads"
+        ].update(nodes=[{"isResolved": False}]),
+    )
+    for mutate_live in mutations:
+        exit_reason, payload = _execute_final_status_script(monkeypatch, mutate_live=mutate_live)
+        assert exit_reason is not None
+        assert exit_reason == "pm_acceptance_failed" or exit_reason.startswith("invalid_live_")
+        if "state" in payload:
+            assert payload["state"] != "success"
+
+    requests = _execute_final_status_script(monkeypatch)[1]["__requests__"]
+    status_index = next(index for index, request in enumerate(requests) if "/statuses/" in request["url"])
+    assert status_index == len(requests) - 1
+    assert any(request["method"] == "GET" and "/pulls/210" in request["url"] for request in requests[:status_index])
+    assert any(request["method"] == "GET" and "/heads/main" in request["url"] for request in requests[:status_index])
+    assert sum(request["url"].endswith("/graphql") for request in requests[:status_index]) == 2
+    assert "statuses: write" in final
+    assert "contents: read" in final
+    assert "pull-requests: read" in final
+    for event_value in (
+        "github.event.pull_request.number",
+        "github.event.pull_request.state",
+        "github.event.pull_request.head.repo.full_name",
+        "github.event.pull_request.base.repo.full_name",
+        "github.event.pull_request.labels",
+    ):
+        assert event_value in final
+    assert "actions/checkout" not in final
+    assert "artifact" not in final
+    assert "cache" not in final
+    assert "working-directory:" not in final
+    assert "subprocess" not in final
+
+
+def test_final_status_rejects_malformed_terminal_review_thread_cursor(monkeypatch):
+    def terminal_page_info(live):
+        return live["review_thread_pages"][1]["data"]["repository"]["pullRequest"][
+            "reviewThreads"
+        ]["pageInfo"]
+
+    mutations = (
+        lambda live: terminal_page_info(live).pop("endCursor"),
+        lambda live: terminal_page_info(live).update(endCursor=""),
+        lambda live: terminal_page_info(live).update(endCursor="page-2"),
+    )
+    outcomes = []
+    for mutate_live in mutations:
+        exit_reason, payload = _execute_final_status_script(monkeypatch, mutate_live=mutate_live)
+        status_posts = [
+            request
+            for request in payload["__requests__"]
+            if request["method"] == "POST" and "/statuses/" in request["url"]
+        ]
+        outcomes.append((exit_reason, len(status_posts)))
+
+    assert outcomes == [("invalid_live_review_threads", 0)] * len(mutations)
 
 
 def test_direct_task_scope_cli_import_shape_from_repository_root():
