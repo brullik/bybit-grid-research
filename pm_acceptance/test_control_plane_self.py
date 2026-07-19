@@ -67,6 +67,11 @@ def _build_recovery_bundle_erratum_predecessor_fixture(
     *,
     extra_activation_path: bool = False,
     executable_activation_contract: bool = False,
+    task_id: str = "task-a",
+    issue_number: int = 210,
+    required_paths: tuple[str, ...] = ("src/example.py",),
+    intervening_required_path: str | None = None,
+    revert_intervening_required_path: bool = False,
 ):
     from scripts.check_task_scope import (
         RecoveryBundleManifest,
@@ -80,12 +85,21 @@ def _build_recovery_bundle_erratum_predecessor_fixture(
             tmp_path,
             extra_activation_path=extra_activation_path,
             executable_activation_contract=executable_activation_contract,
+            task_id=task_id,
+            required_paths=required_paths,
+            intervening_required_path=intervening_required_path,
+            revert_intervening_required_path=revert_intervening_required_path,
         )
     )
-    activation_sha = _git(repo, "rev-parse", f"{suspension_sha}^")
-    manifest_path = "pm_acceptance/errata/task-a.json"
-    test_path = "pm_acceptance/tasks/task-a/test_contract.py"
-    contract_path = "docs/frozen_contracts/tasks/task-a.md"
+    suspension_predecessor_sha = _git(repo, "rev-parse", f"{suspension_sha}^")
+    activation_sha = suspension_predecessor_sha
+    if intervening_required_path is not None:
+        activation_sha = _git(repo, "rev-parse", f"{activation_sha}^")
+        if revert_intervening_required_path:
+            activation_sha = _git(repo, "rev-parse", f"{activation_sha}^")
+    manifest_path = f"pm_acceptance/errata/{task_id}.json"
+    test_path = f"pm_acceptance/tasks/{task_id}/test_contract.py"
+    contract_path = f"docs/frozen_contracts/tasks/{task_id}.md"
 
     def committed_bytes(commit_sha: str, path: str) -> bytes:
         return subprocess.run(
@@ -105,7 +119,7 @@ def _build_recovery_bundle_erratum_predecessor_fixture(
 
     member = RecoveryBundleMember(
         task.task_id,
-        210,
+        issue_number,
         activation_sha,
         hashlib.sha256(activation_task).hexdigest(),
         test_path,
@@ -121,7 +135,7 @@ def _build_recovery_bundle_erratum_predecessor_fixture(
         "p0-recovery-walk-forward-committed-key",
         RecoverySuspensionEvidence(
             suspension_sha,
-            activation_sha,
+            suspension_predecessor_sha,
             hashlib.sha256(suspension_task).hexdigest(),
         ),
         RecoveryErratumV1Evidence(
@@ -684,6 +698,43 @@ def test_recovery_history_rejects_current_member_replay(tmp_path: Path):
         assert check_task_scope.recovery_bundle_history_errors(
             rebuilt_erratum_sha, rebuilt_manifest
         ) == ("recovery_bundle_current_member_replayed:task-a",)
+    finally:
+        os.chdir(old_cwd)
+
+
+@pytest.mark.parametrize("revert_required_path", (False, True))
+def test_recovery_history_rejects_current_member_required_path_change(
+    tmp_path: Path, revert_required_path: bool
+):
+    import scripts.check_task_scope as check_task_scope
+
+    required_paths = (
+        "src/bybit_grid/data/market_store/models.py",
+        "src/bybit_grid/data/market_store/import_public_batch.py",
+        "src/bybit_grid/data/market_store/transaction.py",
+        "tests/test_store_committed_key_preflight.py",
+    )
+    changed_path = required_paths[0]
+    repo, _suspension_sha, erratum_sha, manifest = (
+        _build_recovery_bundle_erratum_predecessor_fixture(
+            tmp_path,
+            task_id="p0-committed-key-preflight",
+            issue_number=157,
+            required_paths=required_paths,
+            intervening_required_path=changed_path,
+            revert_intervening_required_path=revert_required_path,
+        )
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(repo)
+        assert check_task_scope.recovery_bundle_history_errors(
+            erratum_sha, manifest
+        ) == (
+            "recovery_bundle_current_member_required_path_changed:"
+            f"p0-committed-key-preflight:{changed_path}",
+        )
     finally:
         os.chdir(old_cwd)
 
@@ -3970,10 +4021,14 @@ def _build_frozen_erratum_repo(
     manifest_transform=None,
     extra_activation_path: bool = False,
     executable_activation_contract: bool = False,
+    task_id: str = "task-a",
+    required_paths: tuple[str, ...] = ("src/example.py",),
+    intervening_required_path: str | None = None,
+    revert_intervening_required_path: bool = False,
 ) -> tuple[Path, str, str, ActiveTask, bytes, bytes]:
     repo = tmp_path / "erratum-repo"
-    test_path = repo / "pm_acceptance/tasks/task-a/test_contract.py"
-    contract_path = repo / "docs/frozen_contracts/tasks/task-a.md"
+    test_path = repo / f"pm_acceptance/tasks/{task_id}/test_contract.py"
+    contract_path = repo / f"docs/frozen_contracts/tasks/{task_id}.md"
     active_path = repo / "pm_acceptance/active_task.json"
     test_path.parent.mkdir(parents=True)
     contract_path.parent.mkdir(parents=True)
@@ -3987,7 +4042,11 @@ def _build_frozen_erratum_repo(
     if head_test is None:
         head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid-zip"')
     active_path.parent.mkdir(parents=True, exist_ok=True)
-    task = _active_task()
+    task = _active_task(
+        task_id=task_id,
+        allowed_paths=required_paths,
+        required_paths=required_paths,
+    )
     active_path.write_bytes(CANONICAL)
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "pm@example.test")
@@ -4006,6 +4065,17 @@ def _build_frozen_erratum_repo(
     _git(repo, "commit", "-q", "-m", "historical active task")
     historical_active = _git(repo, "rev-parse", "HEAD")
 
+    if intervening_required_path is not None:
+        implementation_path = repo / intervening_required_path
+        implementation_path.parent.mkdir(parents=True, exist_ok=True)
+        implementation_path.write_text("completed while task remains active\n", encoding="utf-8")
+        _git(repo, "add", intervening_required_path)
+        _git(repo, "commit", "-q", "-m", "implementation while task remains active")
+        if revert_intervening_required_path:
+            implementation_path.unlink()
+            _git(repo, "add", intervening_required_path)
+            _git(repo, "commit", "-q", "-m", "revert implementation while task remains active")
+
     active_path.write_bytes(CANONICAL)
     _git(repo, "add", "pm_acceptance/active_task.json")
     _git(repo, "commit", "-q", "-m", "inactive base with frozen task")
@@ -4013,14 +4083,15 @@ def _build_frozen_erratum_repo(
 
     active_path.write_bytes(_task_bytes(task))
     test_path.write_bytes(head_test)
-    manifest_path = repo / "pm_acceptance/errata/task-a.json"
+    manifest_path = repo / f"pm_acceptance/errata/{task_id}.json"
     manifest_path.parent.mkdir(parents=True)
     manifest = _erratum_bytes(
         task=task,
         base_test=base_test,
         head_test=head_test,
-        failed=("pm_acceptance/tasks/task-a/test_contract.py::test_contract",),
-        passed=("pm_acceptance/tasks/task-a/test_contract.py::test_compatibility",),
+        test_path=f"pm_acceptance/tasks/{task_id}/test_contract.py",
+        failed=(f"pm_acceptance/tasks/{task_id}/test_contract.py::test_contract",),
+        passed=(f"pm_acceptance/tasks/{task_id}/test_contract.py::test_compatibility",),
         historical_active_task_commit_sha=historical_active,
     )
     if manifest_transform is not None:
