@@ -961,13 +961,15 @@ def acceptance_plan_for_mode(
     raise ValueError(f"invalid_mode:{mode}")
 
 
-def git_blob_from_ref(ref: str, path: str) -> bytes:
+def git_blob_from_ref(ref: str, path: str, *, cwd: Path | None = None) -> bytes:
     if not _SHA_RE.fullmatch(ref):
         raise ValueError("invalid_git_blob_ref")
     if _path_error(path) is not None:
         raise ValueError("invalid_git_blob_path")
     proc = subprocess.run(
         ["git", "show", f"{ref}:{path}"],
+        cwd=cwd,
+        env=dict(os.environ, GIT_NO_REPLACE_OBJECTS="1"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -1805,7 +1807,12 @@ def task_definition_base_path_errors(
     return tuple(errors)
 
 
-def run_exact_recovery_bundle_red(root: Path, manifest: RecoveryBundleManifest) -> int:
+def run_exact_recovery_bundle_red(
+    root: Path,
+    manifest: RecoveryBundleManifest,
+    *,
+    pinned_files: dict[str, bytes] | None = None,
+) -> int:
     """Run the frozen recovery tests and require their exact sentinel RED profile."""
     try:
         root = root.resolve(strict=True)
@@ -1817,12 +1824,31 @@ def run_exact_recovery_bundle_red(root: Path, manifest: RecoveryBundleManifest) 
         for node_id in member.expected_red_node_ids
     }
     test_paths = [root / member.test_path for member in manifest.members]
+
+    def pinned_files_match() -> bool:
+        if pinned_files is None:
+            return True
+        required = {"pytest.ini", *(member.test_path for member in manifest.members)}
+        if not required.issubset(pinned_files):
+            return False
+        for relative_path, expected_bytes in pinned_files.items():
+            if _path_error(relative_path) is not None or type(expected_bytes) is not bytes:
+                return False
+            path = root / relative_path
+            try:
+                if path.is_symlink() or not path.is_file() or path.read_bytes() != expected_bytes:
+                    return False
+            except OSError:
+                return False
+        return True
+
     if (
         not root.is_dir()
         or not (root / "pytest.ini").is_file()
         or not expected
         or len(expected) != sum(len(member.expected_red_node_ids) for member in manifest.members)
         or any(not path.is_file() for path in test_paths)
+        or not pinned_files_match()
     ):
         return 1
     result_path = root.parent / f".recovery-red-{os.getpid()}.json"
@@ -1884,6 +1910,9 @@ Path(os.environ["RECOVERY_RESULT"]).write_text(json.dumps({
     if result.returncode != 0 or not result_path.is_file():
         result_path.unlink(missing_ok=True)
         return 1
+    if not pinned_files_match():
+        result_path.unlink(missing_ok=True)
+        return 1
     try:
         outcomes = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -1921,6 +1950,54 @@ Path(os.environ["RECOVERY_RESULT"]).write_text(json.dumps({
             return 1
         seen.add(node_id)
     return 0 if seen == set(expected) else 1
+
+
+def run_committed_exact_recovery_bundle_red(
+    source_root: Path,
+    destination: Path,
+    source_sha: str,
+    manifest_path: str,
+) -> int:
+    """Stage committed recovery inputs after installation and execute only those bytes."""
+    expected_manifest_path = f"pm_acceptance/reactivations/{_RECOVERY_ID}.json"
+    if not _SHA_RE.fullmatch(source_sha) or manifest_path != expected_manifest_path:
+        return 1
+    try:
+        source_root = source_root.resolve(strict=True)
+        destination_parent = destination.parent.resolve(strict=True)
+    except OSError:
+        return 1
+    destination = destination_parent / destination.name
+    if not source_root.is_dir() or source_root == destination or source_root in destination.parents:
+        return 1
+    if destination.exists() or destination.is_symlink():
+        return 1
+    try:
+        manifest_bytes = git_blob_from_ref(source_sha, manifest_path, cwd=source_root)
+        manifest = parse_recovery_bundle_manifest_bytes(manifest_bytes)
+        committed_files = {
+            "pytest.ini": git_blob_from_ref(source_sha, "pytest.ini", cwd=source_root),
+            manifest_path: manifest_bytes,
+        }
+        committed_files.update({
+            member.test_path: git_blob_from_ref(
+                source_sha, member.test_path, cwd=source_root,
+            )
+            for member in manifest.members
+        })
+        destination.mkdir(parents=True)
+        for relative_path, data in committed_files.items():
+            path = destination / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            path.chmod(0o444)
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return 1
+    return run_exact_recovery_bundle_red(
+        destination,
+        manifest,
+        pinned_files=committed_files,
+    )
 
 
 def _emit_exact_plain_result(
@@ -2163,14 +2240,15 @@ def main(argv: list[str] | None = None) -> int:
         recovery_parser = argparse.ArgumentParser(add_help=True)
         recovery_parser.add_argument("--exact-recovery-root", required=True)
         recovery_parser.add_argument("--recovery-manifest", required=True)
+        recovery_parser.add_argument("--recovery-source-root", required=True)
+        recovery_parser.add_argument("--recovery-source-sha", required=True)
         recovery_args = recovery_parser.parse_args(effective_argv)
-        try:
-            manifest = parse_recovery_bundle_manifest_bytes(
-                Path(recovery_args.recovery_manifest).read_bytes()
-            )
-        except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
-            return 1
-        return run_exact_recovery_bundle_red(Path(recovery_args.exact_recovery_root), manifest)
+        return run_committed_exact_recovery_bundle_red(
+            Path(recovery_args.recovery_source_root),
+            Path(recovery_args.exact_recovery_root),
+            recovery_args.recovery_source_sha,
+            recovery_args.recovery_manifest,
+        )
     if "--exact-control-plane-root" in effective_argv:
         exact_parser = argparse.ArgumentParser(add_help=True)
         exact_parser.add_argument("--exact-control-plane-root", required=True)

@@ -82,6 +82,8 @@ jobs:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           EVENT_SENDER: ${{ github.event.sender.login }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
           EVENT_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           EVENT_REPOSITORY: ${{ github.repository }}
           EVENT_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
@@ -153,6 +155,12 @@ jobs:
           require(os.environ["GITHUB_EVENT_NAME"] == "pull_request_target", "invalid_event_name")
           require(os.environ["EVENT_ACTION"] in actions, "invalid_event_action")
           require(os.environ["EVENT_SENDER"] == owner, "invalid_event_sender")
+          require(os.environ["TRIGGERING_ACTOR"] == owner, "invalid_triggering_actor")
+          run_attempt_text = os.environ["RUN_ATTEMPT"]
+          require(
+              re.fullmatch(r"[1-9][0-9]*", run_attempt_text) is not None,
+              "invalid_run_attempt",
+          )
           require(os.environ["EVENT_PR_AUTHOR"] == owner, "invalid_event_pr_author")
           require(os.environ["EVENT_REPOSITORY"] == repository, "invalid_event_repository")
           require(os.environ["EVENT_BASE_REPOSITORY"] == repository, "invalid_event_base_repository")
@@ -203,7 +211,12 @@ jobs:
           if "pm-recovery-bundle" in event_labels or "pm-recovery-bundle" in live_labels:
               require(event_labels == ["pm-recovery-bundle"], "invalid_recovery_labels")
               require(live_labels == ["pm-recovery-bundle"], "invalid_recovery_labels")
-              require(event_draft and live["draft"], "recovery_pr_not_draft")
+              require(live["draft"] == event_draft, "live_draft_drift")
+              if not event_draft:
+                  require(
+                      os.environ["EVENT_ACTION"] == "ready_for_review",
+                      "recovery_ready_requires_transition",
+                  )
           else:
               require(live_labels == event_labels, "live_label_drift")
               require(live["draft"] == event_draft, "live_draft_drift")
@@ -1070,12 +1083,19 @@ jobs:
         working-directory: head
         env:
           PR_DRAFT: ${{ github.event.pull_request.draft }}
+          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUNNER_TEMP: ${{ runner.temp }}
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: |
-          test "$PR_DRAFT" = true
+          if [ "$PR_DRAFT" = false ]; then
+            test "$EVENT_ACTION" = ready_for_review
+          fi
           python ../base/scripts/check_task_scope.py \
-            --exact-recovery-root . \
-            --recovery-manifest pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json
+            --exact-recovery-root "$RUNNER_TEMP/exact-recovery" \
+            --recovery-manifest pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json \
+            --recovery-source-root . \
+            --recovery-source-sha "$HEAD_SHA"
       - name: Run supplemental PR checks
         working-directory: head
         env:
@@ -1132,6 +1152,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           PR_SENDER: ${{ github.event.sender.login }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           python - <<'PY'
           import json
@@ -1159,6 +1181,10 @@ jobs:
               raise SystemExit("invalid_live_event_identity")
           if os.environ["PR_AUTHOR"] != owner or os.environ["PR_SENDER"] != owner:
               raise SystemExit("invalid_live_owner_identity")
+          if os.environ["TRIGGERING_ACTOR"] != owner:
+              raise SystemExit("invalid_live_triggering_actor")
+          if re.fullmatch(r"[1-9][0-9]*", os.environ["RUN_ATTEMPT"]) is None:
+              raise SystemExit("invalid_live_run_attempt")
           base_sha = os.environ["BASE_SHA"]
           if re.fullmatch(r"[0-9a-f]{40}", base_sha) is None:
               raise SystemExit("invalid_live_base_sha")
@@ -1340,8 +1366,11 @@ jobs:
                   os.environ["PR_MODE"] == "pm-recovery-bundle"
                   and event_labels == ["pm-recovery-bundle"]
                   and live_labels == ["pm-recovery-bundle"]
-                  and event_draft
-                  and live["draft"]
+                  and live["draft"] == event_draft
+                  and (
+                      event_draft
+                      or os.environ["EVENT_ACTION"] == "ready_for_review"
+                  )
               )
           successful = successful and exact_live_identity and recovery_exact and not unresolved
           if successful:

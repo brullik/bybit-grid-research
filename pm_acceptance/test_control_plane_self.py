@@ -967,16 +967,106 @@ def test_recovery_bundle_exact_red_gate_accepts_exact_failed_calls(tmp_path: Pat
     assert _run_synthetic_recovery_gate(tmp_path, source) == 0
 
 
+def test_recovery_bundle_exact_red_gate_rechecks_pinned_files_after_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root = tmp_path / "head"
+    test = root / "pm_acceptance/tasks/synthetic/test_contract.py"
+    test.parent.mkdir(parents=True)
+    source = (
+        "def test_a():\n    raise AssertionError('synthetic_contract_unavailable')\n\n"
+        "def test_b():\n    raise AssertionError('synthetic_contract_unavailable')\n"
+    )
+    test.write_text(source, encoding="utf-8")
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    manifest = _synthetic_recovery_manifest(root)
+    nodes = [node for member in manifest.members for node in member.expected_red_node_ids]
+    pinned = {
+        "pytest.ini": (root / "pytest.ini").read_bytes(),
+        manifest.members[0].test_path: test.read_bytes(),
+    }
+
+    def fake_run(*args, **kwargs):
+        test.write_text("def test_a():\n    pass\n", encoding="utf-8")
+        Path(kwargs["env"]["RECOVERY_RESULT"]).write_text(
+            json.dumps({
+                "calls": [
+                    [node, "failed", "synthetic_contract_unavailable"] for node in nodes
+                ],
+                "collected": nodes,
+                "exit_code": 1,
+                "forbidden": [],
+            }),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args[0], 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert run_exact_recovery_bundle_red(root, manifest, pinned_files=pinned) == 1
+
+
+def test_recovery_bundle_commit_runner_stages_only_immutable_git_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import scripts.check_task_scope as check_task_scope
+
+    source_root = tmp_path / "mutable-head"
+    source_root.mkdir()
+    destination = tmp_path / "exact-recovery"
+    manifest = _synthetic_recovery_manifest(source_root)
+    manifest_path = (
+        "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+    )
+    committed = {
+        manifest_path: b"committed manifest\n",
+        "pytest.ini": b"[pytest]\n",
+        manifest.members[0].test_path: b"committed frozen tests\n",
+    }
+    (source_root / "pytest.ini").write_text("mutated checkout\n", encoding="utf-8")
+
+    def fake_git_blob(ref, path, *, cwd=None):
+        assert ref == "a" * 40
+        assert cwd == source_root
+        return committed[path]
+
+    def fake_exact(root, received_manifest, *, pinned_files=None):
+        assert root == destination
+        assert received_manifest == manifest
+        assert pinned_files == committed
+        assert {
+            path: (root / path).read_bytes() for path in committed
+        } == committed
+        return 0
+
+    monkeypatch.setattr(check_task_scope, "git_blob_from_ref", fake_git_blob)
+    monkeypatch.setattr(
+        check_task_scope,
+        "parse_recovery_bundle_manifest_bytes",
+        lambda data: manifest if data == committed[manifest_path] else None,
+    )
+    monkeypatch.setattr(check_task_scope, "run_exact_recovery_bundle_red", fake_exact)
+
+    assert check_task_scope.run_committed_exact_recovery_bundle_red(
+        source_root,
+        destination,
+        "a" * 40,
+        manifest_path,
+    ) == 0
+
+
 def test_workflow_recovery_red_uses_only_base_owned_dependency_free_gate():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     step = workflow.split("      - name: Run combined recovery bundle Draft RED\n", 1)[1].split(
         "      - name: Run supplemental PR checks\n", 1
     )[0]
     assert "python ../base/scripts/check_task_scope.py" in step
-    assert "--exact-recovery-root ." in step
+    assert '--exact-recovery-root "$RUNNER_TEMP/exact-recovery"' in step
     assert "--recovery-manifest pm_acceptance/reactivations/" in step
+    assert '--recovery-source-sha "$HEAD_SHA"' in step
+    assert "--recovery-source-root ." in step
     assert "--json-report" not in step
     assert "python -m pytest" not in step
+    assert "pip install" not in step
 
 
 @pytest.mark.parametrize("mutation", ("duplicate_collection", "duplicate_call", "deselected", "malformed", "subprocess"))
@@ -2158,8 +2248,8 @@ def _minimal_child_environment(sandbox: Path, **updates: str) -> dict[str, str]:
     return environment
 
 
-_PM_WORKFLOW_SHA256 = "826f51b712cc318237749b0aa6097cd4f5d6c084a2bc355894afb4a602583438"
-_ACCEPTANCE_JOB_SHA256 = "aa0b95de6444203b49a87ec1460b4eb32d00ddc5bf1e72bef40248d4d6f3ffbe"
+_PM_WORKFLOW_SHA256 = "fb6dfcbc610aa056c446080e2afc14d10ca2e41a6a05725df2674cc4dc44977e"
+_ACCEPTANCE_JOB_SHA256 = "05cafccd82b1c6b6f0e0e2263ab4662ff0acedb76914123a2074edf2dccc9b7f"
 
 
 def _pm_workflow_bytes() -> bytes:
@@ -3265,6 +3355,8 @@ def test_workflow_validates_current_trusted_pr_identity_before_head_fetch(monkey
         "GITHUB_EVENT_NAME": "pull_request_target",
         "EVENT_ACTION": "synchronize",
         "EVENT_SENDER": owner,
+        "TRIGGERING_ACTOR": owner,
+        "RUN_ATTEMPT": "1",
         "EVENT_PR_AUTHOR": owner,
         "EVENT_REPOSITORY": repository,
         "EVENT_BASE_REPOSITORY": repository,
@@ -3341,11 +3433,24 @@ def test_workflow_validates_current_trusted_pr_identity_before_head_fetch(monkey
         assert [request.get_method() for request in requests] == ["GET", "GET"]
 
     execute()
+    execute(
+        event_changes={
+            "EVENT_ACTION": "ready_for_review",
+            "EVENT_LABELS_JSON": '["pm-recovery-bundle"]',
+            "EVENT_DRAFT": "false",
+        },
+        pr_changes={
+            "draft": False,
+            "labels": [{"name": "pm-recovery-bundle"}],
+        },
+    )
 
     cases = (
         ({"GITHUB_EVENT_NAME": "pull_request"}, None, None, "invalid_event_name"),
         ({"EVENT_ACTION": "closed"}, None, None, "invalid_event_action"),
         ({"EVENT_SENDER": "mallory"}, None, None, "invalid_event_sender"),
+        ({"TRIGGERING_ACTOR": "mallory"}, None, None, "invalid_triggering_actor"),
+        ({"RUN_ATTEMPT": "0"}, None, None, "invalid_run_attempt"),
         ({"EVENT_PR_AUTHOR": "mallory"}, None, None, "invalid_event_pr_author"),
         ({"EVENT_REPOSITORY": "mallory/fork"}, None, None, "invalid_event_repository"),
         ({"EVENT_BASE_REPOSITORY": "mallory/fork"}, None, None, "invalid_event_base_repository"),
@@ -3374,7 +3479,7 @@ def test_workflow_validates_current_trusted_pr_identity_before_head_fetch(monkey
             {"EVENT_LABELS_JSON": '["pm-recovery-bundle"]'},
             {"labels": [{"name": "pm-recovery-bundle"}]},
             None,
-            "recovery_pr_not_draft",
+            "recovery_ready_requires_transition",
         ),
     )
     for event_changes, pr_changes, main_changes, reason in cases:
@@ -3759,6 +3864,8 @@ def _execute_final_status_script(
         "EVENT_NAME": "pull_request_target",
         "EVENT_ACTION": "synchronize",
         "PR_SENDER": "brullik",
+        "TRIGGERING_ACTOR": "brullik",
+        "RUN_ATTEMPT": "1",
     }
     environment.update(overrides)
     for name, value in environment.items():
@@ -3864,9 +3971,23 @@ def test_final_status_script_succeeds_only_for_ready_owner_non_probe(monkeypatch
     assert payload["context"] == "pm-acceptance"
     assert payload["target_url"].endswith("/actions/runs/123")
 
+    exit_reason, payload = _execute_final_status_script(
+        monkeypatch,
+        PR_MODE="pm-recovery-bundle",
+        PR_LABELS_JSON='["pm-recovery-bundle"]',
+        EVENT_ACTION="ready_for_review",
+        mutate_live=lambda live: live["pull"].update(
+            labels=[{"name": "pm-recovery-bundle"}],
+        ),
+    )
+    assert exit_reason is None
+    assert payload["state"] == "success"
+
     for ineligible, expected_exit in (
         ({"PR_DRAFT": "true"}, "pm_acceptance_failed"),
         ({"PR_AUTHOR": "someone-else"}, "invalid_live_owner_identity"),
+        ({"TRIGGERING_ACTOR": "someone-else"}, "invalid_live_triggering_actor"),
+        ({"RUN_ATTEMPT": "0"}, "invalid_live_run_attempt"),
         ({"HEAD_REF": "probe/task-a-red"}, "pm_acceptance_failed"),
     ):
         exit_reason, payload = _execute_final_status_script(monkeypatch, **ineligible)
