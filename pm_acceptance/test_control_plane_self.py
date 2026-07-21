@@ -1325,6 +1325,7 @@ def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
         "types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft, labeled, unlabeled]"
         in workflow
     )
+    assert "pull_request_review_thread:\n    types: [resolved]" in workflow
     assert "group: pm-acceptance-${{ github.event.pull_request.number }}" in workflow
     assert "cancel-in-progress: true" in workflow
     assert "permissions:\n  contents: read\n  pull-requests: read" in workflow
@@ -1810,7 +1811,7 @@ def test_workflow_finalizer_rechecks_live_main_and_paginates_review_threads():
     assert '"after": cursor' in final
     assert "while True:" in final
     assert 'page_info["endCursor"]' in final
-    assert "pull_request_review_thread:" not in workflow
+    assert "pull_request_review_thread:\n    types: [resolved]" in workflow
     assert "edited" in workflow
 
 
@@ -2270,6 +2271,37 @@ def test_final_status_script_rejects_stale_live_head_and_unresolved_threads(monk
         MOCK_UNRESOLVED="true",
     )
     assert exit_reason == "unresolved_review_threads"
+
+
+def test_review_thread_resolution_triggers_fresh_unchanged_sha_finalizer(monkeypatch):
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    assert "pull_request_review_thread:\n    types: [resolved]" in workflow
+
+    exit_reason, pending = _execute_final_status_script(
+        monkeypatch,
+        MOCK_UNRESOLVED="true",
+        RUN_ID="123",
+    )
+    assert exit_reason == "unresolved_review_threads"
+    assert "state" not in pending
+
+    exit_reason, fresh = _execute_final_status_script(
+        monkeypatch,
+        MOCK_UNRESOLVED="false",
+        RUN_ID="124",
+    )
+    assert exit_reason is None
+    assert fresh["state"] == "success"
+    assert fresh["target_url"].endswith("/actions/runs/124")
+
+    exit_reason, stale = _execute_final_status_script(
+        monkeypatch,
+        MOCK_UNRESOLVED="false",
+        MOCK_LIVE_HEAD_SHA="c" * 40,
+        RUN_ID="125",
+    )
+    assert exit_reason == "live_pull_request_identity_mismatch"
+    assert "state" not in stale
 
 
 def test_direct_task_scope_cli_import_shape_from_repository_root():
