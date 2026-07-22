@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.check_task_scope as task_scope_module
 from scripts.check_protected_paths import parse_git_diff_raw_z, protected_path_errors, changed_paths_from_git
 from scripts.check_task_scope import (
     ActiveTask,
@@ -136,6 +137,71 @@ def _erratum_v2_bytes(
         "task_id": task.task_id,
         "test_path": test_path,
     }
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+RECOVERY_BUNDLE_ID = "p0-recovery-walk-forward-committed-key"
+RECOVERY_MANIFEST_PATH = f"pm_acceptance/reactivations/{RECOVERY_BUNDLE_ID}.json"
+RECOVERY_PREVIOUS_TEST = (
+    "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/"
+    "test_walk_forward_exclusive_outcome_end.py"
+)
+RECOVERY_CURRENT_TEST = (
+    "pm_acceptance/tasks/p0-committed-key-preflight/"
+    "test_store_committed_key_preflight.py"
+)
+RECOVERY_PREVIOUS_NODES = tuple(
+    f"{RECOVERY_PREVIOUS_TEST}::test_recovery_previous_{index:02d}"
+    for index in range(32)
+)
+RECOVERY_CURRENT_NODES = tuple(
+    f"{RECOVERY_CURRENT_TEST}::test_recovery_current_{index:02d}"
+    for index in range(20)
+)
+RECOVERY_PATHS = (
+    "src/bybit_grid/research/scoring/outcome_grains.py",
+    "src/bybit_grid/research/walk_forward/splits.py",
+    "src/bybit_grid/research/walk_forward/leakage_audit.py",
+    "scripts/check_scoring_review_pack.py",
+    "scripts/make_scoring_review_pack.py",
+    "tests/test_sprint_05_cost_scoring_walkforward.py",
+    "tests/test_sprint_05_6_review_pack_closure.py",
+    "tests/test_persisted_exclusive_outcome_end_walk_forward.py",
+    "src/bybit_grid/data/market_store/models.py",
+    "src/bybit_grid/data/market_store/import_public_batch.py",
+    "src/bybit_grid/data/market_store/transaction.py",
+    "tests/test_store_committed_key_preflight.py",
+)
+
+
+def _recovery_manifest_bytes(**overrides: object) -> bytes:
+    obj = {
+        "activation_base_sha": "a" * 40,
+        "bundle_id": RECOVERY_BUNDLE_ID,
+        "current_active_task_sha256": "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89",
+        "current_activation_commit_sha": "3b826f2a6a3b02897047a30de8e920e2f5b72431",
+        "current_contract_sha256": "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696",
+        "current_expected_node_ids": list(RECOVERY_CURRENT_NODES),
+        "current_frozen_test_sha256": "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513",
+        "current_issue_number": 157,
+        "current_sentinel_node_id": RECOVERY_CURRENT_NODES[0],
+        "current_task_id": "p0-committed-key-preflight",
+        "previous_active_task_sha256": "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e",
+        "previous_activation_commit_sha": "1305abb1517944e2cc9790e5546ca52ae66f592e",
+        "previous_contract_sha256": "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05",
+        "previous_corrected_test_sha256": "b" * 64,
+        "previous_erratum_commit_sha": "c" * 40,
+        "previous_erratum_manifest_sha256": "d" * 64,
+        "previous_expected_node_ids": list(RECOVERY_PREVIOUS_NODES),
+        "previous_frozen_test_sha256": "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e",
+        "previous_issue_number": 156,
+        "previous_sentinel_node_id": RECOVERY_PREVIOUS_NODES[0],
+        "previous_task_id": "p0-walk-forward-exclusive-outcome-end",
+        "recovery_allowed_paths": list(RECOVERY_PATHS),
+        "recovery_required_paths": list(RECOVERY_PATHS),
+        "schema": "pm_recovery_bundle_v1",
+    }
+    obj.update(overrides)
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
@@ -378,6 +444,109 @@ def test_labels_json_rejects_duplicates_and_non_strings():
         parse_labels_json('["pm-task-definition","pm-task-definition"]')
     with pytest.raises(ValueError, match="^label_not_string$"):
         parse_labels_json('[1]')
+
+
+def test_recovery_bundle_mode_requires_exact_owner_and_live_event_identity():
+    mode, errors = classify_pr_mode(
+        "brullik",
+        ("pm-recovery-bundle",),
+        ("pm_acceptance/active_task.json", RECOVERY_MANIFEST_PATH),
+        event_sender="brullik",
+        head_repository="brullik/bybit-grid-research",
+        base_repository="brullik/bybit-grid-research",
+        base_ref="main",
+        event_name="pull_request_target",
+        event_action="opened",
+    )
+    assert mode == "pm-recovery-bundle"
+    assert errors == ()
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    (
+        ({"event_sender": "alice"}, "wrong_event_sender:alice"),
+        ({"head_repository": "fork/repository"}, "invalid_head_repository:fork/repository"),
+        ({"base_repository": "fork/repository"}, "invalid_base_repository:fork/repository"),
+        ({"base_ref": "release"}, "invalid_base_ref:release"),
+        ({"event_name": "push"}, "invalid_recovery_event:push:opened"),
+        ({"event_action": "closed"}, "invalid_recovery_event:pull_request_target:closed"),
+    ),
+)
+def test_recovery_bundle_mode_rejects_every_identity_mismatch(override, expected):
+    identity = {
+        "event_sender": "brullik",
+        "head_repository": "brullik/bybit-grid-research",
+        "base_repository": "brullik/bybit-grid-research",
+        "base_ref": "main",
+        "event_name": "pull_request_target",
+        "event_action": "opened",
+    }
+    identity.update(override)
+    mode, errors = classify_pr_mode(
+        "brullik",
+        ("pm-recovery-bundle",),
+        ("pm_acceptance/active_task.json", RECOVERY_MANIFEST_PATH),
+        **identity,
+    )
+    assert mode == "pm-recovery-bundle"
+    assert expected in errors
+
+
+def test_recovery_bundle_manifest_is_canonical_manifest_pinned_and_exact():
+    parser = getattr(task_scope_module, "parse_recovery_bundle_manifest_bytes")
+    manifest = parser(_recovery_manifest_bytes())
+    assert manifest.schema == "pm_recovery_bundle_v1"
+    assert manifest.bundle_id == RECOVERY_BUNDLE_ID
+    assert manifest.activation_base_sha == "a" * 40
+    assert manifest.previous_activation_commit_sha == "1305abb1517944e2cc9790e5546ca52ae66f592e"
+    assert manifest.current_activation_commit_sha == "3b826f2a6a3b02897047a30de8e920e2f5b72431"
+    assert manifest.previous_expected_node_ids == RECOVERY_PREVIOUS_NODES
+    assert manifest.current_expected_node_ids == RECOVERY_CURRENT_NODES
+    assert manifest.recovery_allowed_paths == RECOVERY_PATHS
+    assert manifest.recovery_required_paths == RECOVERY_PATHS
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    (
+        ({"schema": "pm_recovery_bundle_v2"}, "invalid_recovery_schema"),
+        ({"bundle_id": "other-bundle"}, "invalid_recovery_bundle_id"),
+        ({"previous_issue_number": True}, "invalid_recovery_previous_issue_number"),
+        ({"activation_base_sha": "A" * 40}, "invalid_recovery_activation_base_sha"),
+        (
+            {"previous_expected_node_ids": [RECOVERY_PREVIOUS_NODES[0]] * 32},
+            "duplicate_recovery_previous_node_id",
+        ),
+        (
+            {"current_expected_node_ids": list(RECOVERY_CURRENT_NODES[:-1])},
+            "recovery_current_node_count:19",
+        ),
+        ({"recovery_allowed_paths": list(reversed(RECOVERY_PATHS))}, "invalid_recovery_allowed_paths"),
+        ({"previous_sentinel_node_id": "missing"}, "invalid_recovery_previous_sentinel_node_id"),
+    ),
+)
+def test_recovery_bundle_manifest_rejects_noncanonical_or_unpinned_input(override, expected):
+    parser = getattr(task_scope_module, "parse_recovery_bundle_manifest_bytes")
+    with pytest.raises(ValueError, match=f"^{expected}$"):
+        parser(_recovery_manifest_bytes(**override))
+
+
+def test_recovery_bundle_transition_fails_before_git_on_wrong_base_task():
+    transition = getattr(task_scope_module, "recovery_bundle_transition_errors")
+    head_task = _active_task(
+        RECOVERY_BUNDLE_ID,
+        allowed_paths=RECOVERY_PATHS,
+        required_paths=RECOVERY_PATHS,
+    )
+    errors = transition(
+        "a" * 40,
+        "b" * 40,
+        _active_task("wrong-base-task"),
+        head_task,
+        ("pm_acceptance/active_task.json", RECOVERY_MANIFEST_PATH),
+    )
+    assert "recovery_base_task_not_previous:wrong-base-task" in errors
 
 
 def test_canonical_frozen_erratum_manifest_parses_exact_evidence():
@@ -725,6 +894,79 @@ def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
     assert "github.event.pull_request.head.sha" in protected
     assert "statuses: write" not in protected
     assert "statuses: write" not in acceptance
+
+
+def test_workflow_dispatches_recovery_only_for_owner_live_pr_identity():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    protected = workflow.split("\n  protected-paths:\n", 1)[1].split("\n  acceptance:\n", 1)[0]
+
+    assert "pull_request_review:\n    types: [submitted]" in workflow
+    assert "PR_EVENT_SENDER: ${{ github.event.sender.login }}" in protected
+    assert "HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}" in protected
+    assert "BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}" in protected
+    assert "BASE_REF: ${{ github.event.pull_request.base.ref }}" in protected
+    assert "EVENT_NAME: ${{ github.event_name }}" in protected
+    assert "EVENT_ACTION: ${{ github.event.action }}" in protected
+    for argument in (
+        "--event-sender",
+        "--head-repository",
+        "--base-repository",
+        "--base-ref",
+        "--event-name",
+        "--event-action",
+    ):
+        assert argument in protected
+
+
+def test_workflow_recovery_bundle_requires_exact_combined_probe_outcomes():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    recovery = workflow.split("      - name: Stage one-time recovery bundle\n", 1)[1].split(
+        "      - name: Run supplemental PR checks\n",
+        1,
+    )[0]
+
+    assert "pr-mode == 'pm-recovery-bundle'" in recovery
+    assert "expected_node_ids_vs_collection_mismatch" in recovery
+    assert "failed_node_ids_mismatch" in recovery
+    assert "member_sentinel_mismatch" in recovery
+    assert "missing-call" in recovery
+    assert "duplicate-call" in recovery
+    assert "xfail-or-xpass" in recovery
+    assert "deselected:" in recovery
+    assert "head_vs_base_collection_mismatch" in recovery
+
+
+def test_workflow_owner_review_authority_is_submitted_non_approving_and_sha_bound():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    authority = workflow.split("\n  owner-review-authority:\n", 1)[1].split(
+        "\n  status-pending:\n",
+        1,
+    )[0]
+
+    assert "github.event_name == 'pull_request_review'" in authority
+    assert "github.event.action == 'submitted'" in authority
+    assert "github.event.review.user.login == 'brullik'" in authority
+    assert "github.event.sender.login == 'brullik'" in authority
+    assert "github.event.review.state != 'approved'" in authority
+    assert "github.event.review.commit_id == github.event.pull_request.head.sha" in authority
+    assert '"context": "pm-recovery-owner-review"' in authority
+    assert "statuses: write" in authority
+    assert "actions/checkout" not in authority
+
+
+def test_recovery_and_review_lifecycle_is_frozen_in_all_operator_contracts():
+    root = Path(__file__).resolve().parents[1]
+    agents = (root / "AGENTS.md").read_text()
+    readme = (root / "pm_acceptance/README.md").read_text()
+    contract = (root / "docs/frozen_contracts/control_plane_v1.md").read_text()
+
+    for text in (agents, readme, contract):
+        assert "p0-recovery-walk-forward-committed-key" in text
+        assert "pm-recovery-bundle" in text
+        assert "pull_request_review" in text
+        assert "non-approving" in text
+        assert "52" in text
+        assert "one-time" in text
 
 
 def _run_exact_control_plane_gate(
