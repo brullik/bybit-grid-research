@@ -2299,42 +2299,28 @@ def _recovery_transition_errors_for_erratum(
         allowed_paths=RECOVERY_ALLOWED_PATHS[:8],
         required_paths=RECOVERY_ALLOWED_PATHS[:8],
     )
+    suspended_task = _active_task(task_id="p0-committed-key-preflight")
     head_task = _active_task(
         task_id=RECOVERY_BUNDLE_ID,
         allowed_paths=RECOVERY_ALLOWED_PATHS,
         required_paths=RECOVERY_ALLOWED_PATHS,
     )
     real_blobs = {
-        (previous_activation, "pm_acceptance/active_task.json"): scope.git_blob_from_ref(
-            previous_activation, "pm_acceptance/active_task.json"
-        ),
-        (previous_activation, previous_test_path): scope.git_blob_from_ref(
-            previous_activation, previous_test_path
-        ),
+        (previous_activation, "pm_acceptance/active_task.json"): _task_bytes(previous_task),
+        (previous_activation, previous_test_path): b"previous historical frozen test\n",
         (
             previous_activation,
             "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
-        ): scope.git_blob_from_ref(
-            previous_activation,
-            "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
-        ),
-        (suspended_activation, "pm_acceptance/active_task.json"): scope.git_blob_from_ref(
-            suspended_activation, "pm_acceptance/active_task.json"
-        ),
+        ): b"previous historical contract\n",
+        (suspended_activation, "pm_acceptance/active_task.json"): _task_bytes(suspended_task),
         (
             suspended_activation,
             "pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py",
-        ): scope.git_blob_from_ref(
-            suspended_activation,
-            "pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py",
-        ),
+        ): b"suspended historical frozen test\n",
         (
             suspended_activation,
             "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
-        ): scope.git_blob_from_ref(
-            suspended_activation,
-            "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
-        ),
+        ): b"suspended historical contract\n",
     }
     task_bytes = {
         previous_activation: real_blobs[(previous_activation, "pm_acceptance/active_task.json")],
@@ -2363,6 +2349,41 @@ def _recovery_transition_errors_for_erratum(
         else (base_sha, suspension_commit, erratum_commit, suspended_activation, previous_activation)
     )
     monkeypatch.setattr(scope, "git_blob_from_ref", fake_blob)
+    digest_overrides = {
+        real_blobs[(previous_activation, "pm_acceptance/active_task.json")]: (
+            "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e"
+        ),
+        real_blobs[(previous_activation, previous_test_path)]: (
+            "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e"
+        ),
+        real_blobs[
+            (
+                previous_activation,
+                "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
+            )
+        ]: "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05",
+        real_blobs[(suspended_activation, "pm_acceptance/active_task.json")]: (
+            "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89"
+        ),
+        real_blobs[
+            (
+                suspended_activation,
+                "pm_acceptance/tasks/p0-committed-key-preflight/"
+                "test_store_committed_key_preflight.py",
+            )
+        ]: "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513",
+        real_blobs[
+            (
+                suspended_activation,
+                "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
+            )
+        ]: "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696",
+    }
+    monkeypatch.setattr(
+        scope,
+        "_sha256",
+        lambda data: digest_overrides.get(data, hashlib.sha256(data).hexdigest()),
+    )
     monkeypatch.setattr(
         scope,
         "git_object_exists",
