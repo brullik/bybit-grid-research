@@ -1354,7 +1354,8 @@ def recovery_bundle_transition_errors(
     ).stdout.split()
     if parents != [head_sha, base_sha]:
         errors.append("recovery_head_not_single_direct_commit")
-    first_parent = set(git_first_parent_commits(base_sha))
+    first_parent_commits = git_first_parent_commits(base_sha)
+    first_parent = set(first_parent_commits)
     members = (
         ("previous", manifest.previous_historical_activation_commit_sha,
          _RECOVERY_PREVIOUS_TEST_PATH, "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md"),
@@ -1382,23 +1383,57 @@ def recovery_bundle_transition_errors(
         parsed_erratum = parse_frozen_erratum_manifest_bytes(erratum_bytes)
         if parsed_erratum.task_id != _RECOVERY_PREVIOUS_TASK_ID:
             errors.append("recovery_previous_erratum_count_mismatch")
+        if parsed_erratum.head_sha256 != manifest.previous_corrected_test_sha256:
+            errors.append("recovery_erratum_head_sha256_mismatch")
+        if parsed_erratum.head_active_task_sha256 != manifest.previous_historical_active_task_sha256:
+            errors.append("recovery_erratum_active_task_sha256_mismatch")
+        if (
+            parsed_erratum.historical_active_task_commit_sha
+            != manifest.previous_historical_activation_commit_sha
+        ):
+            errors.append("recovery_erratum_historical_activation_mismatch")
+        if parsed_erratum.issue_number != manifest.previous_issue_number:
+            errors.append("recovery_erratum_issue_number_mismatch")
+        if parsed_erratum.test_path != _RECOVERY_PREVIOUS_TEST_PATH:
+            errors.append("recovery_erratum_test_path_mismatch")
         if _sha256(erratum_bytes) != manifest.previous_erratum_manifest_sha256:
             errors.append("recovery_erratum_manifest_sha256_mismatch")
         if _sha256(git_blob_from_ref(base_sha, _RECOVERY_PREVIOUS_TEST_PATH)) != manifest.previous_corrected_test_sha256:
             errors.append("recovery_corrected_test_sha256_mismatch")
     # The first-parent active-task sequence must contain one suspension of the current member.
-    task_ids: list[str] = []
-    for commit in reversed(tuple(git_first_parent_commits(base_sha))):
+    task_history: list[tuple[str, str]] = []
+    for commit in reversed(first_parent_commits):
         try:
-            task_ids.append(parse_active_task_bytes(git_blob_from_ref(commit, _TASK_FILE)).task_id)
+            task_history.append(
+                (commit, parse_active_task_bytes(git_blob_from_ref(commit, _TASK_FILE)).task_id)
+            )
         except (RuntimeError, UnicodeDecodeError, ValueError):
             continue
-    suspension_count = sum(
-        left == _RECOVERY_SUSPENDED_TASK_ID and right != _RECOVERY_SUSPENDED_TASK_ID
-        for left, right in zip(task_ids, task_ids[1:])
-    )
-    if suspension_count != 1:
+    suspension_commits = [
+        right_commit
+        for (_left_commit, left_task), (right_commit, right_task) in zip(
+            task_history, task_history[1:]
+        )
+        if left_task == _RECOVERY_SUSPENDED_TASK_ID
+        and right_task != _RECOVERY_SUSPENDED_TASK_ID
+    ]
+    if len(suspension_commits) != 1:
         errors.append("recovery_suspension_count_mismatch")
+    else:
+        first_parent_positions = {
+            commit: position for position, commit in enumerate(first_parent_commits)
+        }
+        ordered_commits = (
+            manifest.previous_erratum_commit_sha,
+            suspension_commits[0],
+            manifest.suspended_historical_activation_commit_sha,
+            manifest.previous_historical_activation_commit_sha,
+        )
+        if any(commit not in first_parent_positions for commit in ordered_commits) or not all(
+            first_parent_positions[left] < first_parent_positions[right]
+            for left, right in zip(ordered_commits, ordered_commits[1:])
+        ):
+            errors.append("recovery_lifecycle_order_mismatch")
     return tuple(sorted(errors))
 
 

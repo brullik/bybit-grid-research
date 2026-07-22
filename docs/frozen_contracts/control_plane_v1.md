@@ -61,6 +61,8 @@ The `pm-recovery-bundle` manifest is compact canonical JSON and is absent from b
 
 The workflow recognizes activation only for the exact label, owner PR author, owner live sender, canonical head/base repository, base `main`, non-probe branch, and a real owner-authored non-approving `pull_request_review: submitted` event. Later probe evidence must contain exactly one plain call-phase sentinel failure for every declared node and no other failure, pass, duplicate/missing call, collection/setup/teardown anomaly, skip, deselection, xfail or xpass. Final status is bound again to the unchanged live head/base SHA and ref, exact labels and author/repository, and zero unresolved review threads. This transition grants no generic recovery and no network, credential, trading, deployment, or live authority.
 
+The ordered recovery lifecycle is suspension -> pinned v1 erratum -> activation -> fresh combined 52-node RED probe -> exact 12-path implementation -> separate bundle close. Suspension is not completion; a missing, failed, or out-of-order stage leaves the bundle inactive at NO_ACTIVE_IMPLEMENTATION. Before activation, recovery uses a pre-activation revert to NO_ACTIVE_IMPLEMENTATION; after activation, rollback is a manifest-linked separate close to NO_ACTIVE_IMPLEMENTATION that retains the manifest, probe, CI, review, implementation, and close records as audit evidence.
+
 ## Frozen-test erratum lifecycle
 
 An apparent acceptance-test defect never grants permission to edit the frozen suite in place or to continue an implementation around it. The only supported recovery is this ordered, fail-closed sequence:

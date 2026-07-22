@@ -2250,6 +2250,173 @@ def test_recovery_checker_pins_first_parent_history_erratum_bytes_and_one_time_r
     assert all(fragment in source for fragment in required_fragments)
 
 
+def _recovery_transition_errors_for_erratum(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    erratum_updates: dict[str, object] | None = None,
+    ordered_history: bool = True,
+) -> tuple[str, ...]:
+    scope = _recovery_scope_module()
+    previous_activation = "1305abb1517944e2cc9790e5546ca52ae66f592e"
+    suspended_activation = "3b826f2a6a3b02897047a30de8e920e2f5b72431"
+    erratum_commit = "4" * 40
+    suspension_commit = "6" * 40
+    base_sha = "b" * 40
+    head_sha = "c" * 40
+    previous_test_path = (
+        "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/"
+        "test_walk_forward_exclusive_outcome_end.py"
+    )
+    corrected_test = b"corrected frozen test\n"
+    erratum: dict[str, object] = {
+        "base_sha256": "a" * 64,
+        "expected_red_failed_node_ids": [f"{previous_test_path}::test_contract"],
+        "expected_red_passed_node_ids": [],
+        "head_active_task_sha256": (
+            "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e"
+        ),
+        "head_sha256": hashlib.sha256(corrected_test).hexdigest(),
+        "historical_active_task_commit_sha": previous_activation,
+        "issue_number": 156,
+        "reason_code": "invalid_deterministic_fixture",
+        "schema": "pm_frozen_erratum_v1",
+        "task_id": "p0-walk-forward-exclusive-outcome-end",
+        "test_path": previous_test_path,
+    }
+    erratum.update(erratum_updates or {})
+    if erratum_updates is not None and "test_path" in erratum_updates:
+        erratum["expected_red_failed_node_ids"] = [
+            f"{erratum['test_path']}::test_contract"
+        ]
+    erratum_bytes = json.dumps(erratum, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    manifest_bytes = _recovery_manifest_bytes(
+        previous_corrected_test_sha256=hashlib.sha256(corrected_test).hexdigest(),
+        previous_erratum_commit_sha=erratum_commit,
+        previous_erratum_manifest_sha256=hashlib.sha256(erratum_bytes).hexdigest(),
+    )
+    previous_task = _active_task(
+        task_id="p0-walk-forward-exclusive-outcome-end",
+        allowed_paths=RECOVERY_ALLOWED_PATHS[:8],
+        required_paths=RECOVERY_ALLOWED_PATHS[:8],
+    )
+    head_task = _active_task(
+        task_id=RECOVERY_BUNDLE_ID,
+        allowed_paths=RECOVERY_ALLOWED_PATHS,
+        required_paths=RECOVERY_ALLOWED_PATHS,
+    )
+    real_blobs = {
+        (previous_activation, "pm_acceptance/active_task.json"): scope.git_blob_from_ref(
+            previous_activation, "pm_acceptance/active_task.json"
+        ),
+        (previous_activation, previous_test_path): scope.git_blob_from_ref(
+            previous_activation, previous_test_path
+        ),
+        (
+            previous_activation,
+            "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
+        ): scope.git_blob_from_ref(
+            previous_activation,
+            "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
+        ),
+        (suspended_activation, "pm_acceptance/active_task.json"): scope.git_blob_from_ref(
+            suspended_activation, "pm_acceptance/active_task.json"
+        ),
+        (
+            suspended_activation,
+            "pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py",
+        ): scope.git_blob_from_ref(
+            suspended_activation,
+            "pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py",
+        ),
+        (
+            suspended_activation,
+            "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
+        ): scope.git_blob_from_ref(
+            suspended_activation,
+            "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
+        ),
+    }
+    task_bytes = {
+        previous_activation: real_blobs[(previous_activation, "pm_acceptance/active_task.json")],
+        suspended_activation: real_blobs[(suspended_activation, "pm_acceptance/active_task.json")],
+        suspension_commit: _task_bytes(previous_task),
+        erratum_commit: _task_bytes(previous_task),
+        base_sha: _task_bytes(previous_task),
+    }
+
+    def fake_blob(ref: str, path: str) -> bytes:
+        if (ref, path) in real_blobs:
+            return real_blobs[(ref, path)]
+        if ref == head_sha and path == RECOVERY_MANIFEST_PATH:
+            return manifest_bytes
+        if ref == erratum_commit and path.endswith(".json"):
+            return erratum_bytes
+        if ref == base_sha and path == previous_test_path:
+            return corrected_test
+        if path == "pm_acceptance/active_task.json" and ref in task_bytes:
+            return task_bytes[ref]
+        raise AssertionError(f"unexpected blob request: {ref}:{path}")
+
+    first_parent = (
+        (base_sha, erratum_commit, suspension_commit, suspended_activation, previous_activation)
+        if ordered_history
+        else (base_sha, suspension_commit, erratum_commit, suspended_activation, previous_activation)
+    )
+    monkeypatch.setattr(scope, "git_blob_from_ref", fake_blob)
+    monkeypatch.setattr(
+        scope,
+        "git_object_exists",
+        lambda ref, path: ref == head_sha and path == RECOVERY_MANIFEST_PATH,
+    )
+    monkeypatch.setattr(scope, "git_first_parent_commits", lambda ref: first_parent)
+    monkeypatch.setattr(
+        scope.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout=f"{head_sha} {base_sha}\n", stderr=""
+        ),
+    )
+    return scope.recovery_bundle_transition_errors(
+        base_sha,
+        head_sha,
+        previous_task,
+        head_task,
+        ("pm_acceptance/active_task.json", RECOVERY_MANIFEST_PATH),
+    )
+
+
+def test_recovery_checker_chains_every_v1_erratum_identity_and_orders_suspension(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    mismatches: tuple[tuple[dict[str, object], str], ...] = (
+        ({"head_sha256": "0" * 64}, "recovery_erratum_head_sha256_mismatch"),
+        (
+            {"head_active_task_sha256": "0" * 64},
+            "recovery_erratum_active_task_sha256_mismatch",
+        ),
+        (
+            {"historical_active_task_commit_sha": "0" * 40},
+            "recovery_erratum_historical_activation_mismatch",
+        ),
+        ({"issue_number": 999}, "recovery_erratum_issue_number_mismatch"),
+        (
+            {
+                "test_path": (
+                    "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_other.py"
+                )
+            },
+            "recovery_erratum_test_path_mismatch",
+        ),
+    )
+    for updates, expected_error in mismatches:
+        assert expected_error in _recovery_transition_errors_for_erratum(
+            monkeypatch, erratum_updates=updates
+        )
+    assert "recovery_lifecycle_order_mismatch" in _recovery_transition_errors_for_erratum(
+        monkeypatch, ordered_history=False
+    )
+
+
 def test_recovery_workflow_requires_real_owner_review_event_and_canonical_identity():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     required_fragments = (
@@ -2321,3 +2488,16 @@ def test_recovery_contract_documents_pin_one_time_two_task_boundaries():
         assert "one-time" in document.lower()
         assert "52" in document
         assert "no generic" in document.lower()
+        assert (
+            "The ordered recovery lifecycle is suspension -> pinned v1 erratum -> activation -> "
+            "fresh combined 52-node RED probe -> exact 12-path implementation -> separate bundle close."
+        ) in document
+        assert (
+            "Suspension is not completion; a missing, failed, or out-of-order stage leaves the bundle "
+            "inactive at NO_ACTIVE_IMPLEMENTATION."
+        ) in document
+        assert (
+            "Before activation, recovery uses a pre-activation revert to NO_ACTIVE_IMPLEMENTATION; "
+            "after activation, rollback is a manifest-linked separate close to NO_ACTIVE_IMPLEMENTATION "
+            "that retains the manifest, probe, CI, review, implementation, and close records as audit evidence."
+        ) in document
