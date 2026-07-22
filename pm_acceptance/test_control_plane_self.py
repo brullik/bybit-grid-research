@@ -707,6 +707,33 @@ def test_workflow_control_plane_mode_checks_base_and_head_without_running_frozen
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'" in supplemental
 
 
+def test_workflow_head_control_stages_exact_contract_documents_without_broad_copy():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    head_control = workflow.split("      - name: Stage head control-plane self-tests\n", 1)[1].split(
+        "      - name: Stage head task-definition acceptance tree\n",
+        1,
+    )[0]
+
+    assert 'mkdir -p "$RUNNER_TEMP/head_control/pm_acceptance"' in head_control
+    assert 'mkdir -p "$RUNNER_TEMP/head_control/docs/frozen_contracts"' in head_control
+    exact_documents = (
+        ("AGENTS.md", "AGENTS.md"),
+        ("pm_acceptance/README.md", "pm_acceptance/README.md"),
+        (
+            "docs/frozen_contracts/control_plane_v1.md",
+            "docs/frozen_contracts/control_plane_v1.md",
+        ),
+    )
+    for source, destination in exact_documents:
+        assert f"test -f head/{source} && test ! -L head/{source}" in head_control
+        assert f'cp head/{source} "$RUNNER_TEMP/head_control/{destination}"' in head_control
+
+    assert "cp -R head/" not in head_control
+    assert "cp -r head/" not in head_control
+    assert "cp -a head/" not in head_control
+    assert "rsync " not in head_control
+
+
 def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     protected = workflow.split("\n  protected-paths:\n", 1)[1].split("\n  acceptance:\n", 1)[0]
