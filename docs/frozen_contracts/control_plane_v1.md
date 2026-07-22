@@ -131,3 +131,9 @@ The owner must manually require:
 GitHub does not permit a PR author to approve their own PR. Required CODEOWNER approval therefore remains disabled unless a second trusted reviewer or bot identity is added. Standing owner authorization permits autonomous merge only through the objective conditions in this contract; it is not a substitute for a GitHub approval when branch protection requires one.
 
 These settings are not created automatically by this repository change and must be configured in the repository hosting settings.
+
+## One-time recovery bundle
+
+The owner-only `pm-recovery-bundle` mode is a one-time permit, not a generic reopen facility. Its sole permit is `p0-recovery-walk-forward-committed-key`: the closed-invalid `p0-walk-forward-exclusive-outcome-end` member must first receive its single valid v1 erratum, and `p0-committed-key-preflight` must have one exact historical activation and one exact suspension. The activation is one direct, non-merge commit changing exactly `pm_acceptance/active_task.json` and `pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json`; reuse fails closed.
+
+The canonical manifest pins the two historical task, frozen-test, and contract byte hashes; the previous member's erratum commit, manifest, and corrected-test hashes; the suspended member's closure commit; the exact historical 8 + 4 path union; both failure sentinels; and the exact 32 + 20 = 52 node IDs. The workflow executes both frozen suites and requires every declared node to produce exactly one plain call-phase RED failure with its member sentinel. Collection/setup/teardown anomalies, skips, xfail/xpass, deselection, duplicate or missing calls, unexpected nodes, or a changed union fail closed. No generic recovery, skip/filter workaround, production expansion, dependency change, credential access, live execution, trading mutation, or deployment authority follows from this permit.

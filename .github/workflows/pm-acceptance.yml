@@ -2,6 +2,8 @@ name: PM Acceptance
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted]
 permissions:
   contents: read
   pull-requests: read
@@ -96,7 +98,7 @@ jobs:
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
-          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum"}, mode; print(mode)')
+          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum","pm-recovery-bundle"}, mode; print(mode)')
           task_id=$(JSON_PAYLOAD="$json" python -c 'import json, os; task_id=json.loads(os.environ["JSON_PAYLOAD"]).get("task_id"); assert isinstance(task_id, str) and task_id; print(task_id)')
           printf 'pr_mode=%s\n' "$pr_mode" >> "$GITHUB_OUTPUT"
           printf 'task_id=%s\n' "$task_id" >> "$GITHUB_OUTPUT"
@@ -916,6 +918,89 @@ jobs:
               )
           )
           PY
+      - name: Run head-recovery-bundle-exact-red
+        if: needs.protected-paths.outputs.pr-mode == 'pm-recovery-bundle'
+        working-directory: head
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          import pytest
+
+          manifest_path = Path(
+              "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+          )
+          manifest = json.loads(manifest_path.read_bytes())
+          expected = {
+              *manifest["previous_task"]["expected_red_node_ids"],
+              *manifest["suspended_task"]["expected_red_node_ids"],
+          }
+          if len(expected) != 52:
+              raise SystemExit("recovery_expected_node_count_mismatch")
+          sentinels = {
+              "persisted_exclusive_outcome_end_walk_forward_contract_unavailable",
+              "committed_key_preflight_contract_unavailable",
+          }
+          forbidden_non_call_outcomes = ("non-call-setup", "non-call-teardown")
+
+          class PlainRecoveryRed:
+              def __init__(self):
+                  self.collected = []
+                  self.calls = {}
+                  self.errors = []
+
+              def pytest_collection_finish(self, session):
+                  self.collected = [item.nodeid for item in session.items]
+                  if len(set(self.collected)) != len(self.collected):
+                      self.errors.append("duplicate-collected-node-id")
+
+              def pytest_deselected(self, items):
+                  self.errors.extend(f"deselected:{item.nodeid}" for item in items)
+
+              def pytest_runtest_logreport(self, report):
+                  if getattr(report, "wasxfail", None) is not None:
+                      self.errors.append(f"xfail-or-xpass:{report.nodeid}:{report.when}")
+                  if report.when != "call":
+                      if report.outcome != "passed":
+                          self.errors.append(
+                              f"non-call-{report.when}-{report.outcome}:{report.nodeid}"
+                          )
+                      return
+                  if report.nodeid in self.calls:
+                      self.errors.append(f"duplicate-call:{report.nodeid}")
+                  self.calls[report.nodeid] = report
+
+          outcomes = PlainRecoveryRed()
+          exit_code = pytest.main(
+              [
+                  manifest["previous_task"]["test_path"],
+                  manifest["suspended_task"]["test_path"],
+                  "-q",
+              ],
+              plugins=[outcomes],
+          )
+          collected = set(outcomes.collected)
+          called = set(outcomes.calls)
+          outcomes.errors.extend(f"missing-call:{node}" for node in sorted(collected - called))
+          outcomes.errors.extend(f"call-not-collected:{node}" for node in sorted(called - collected))
+          if collected != expected or called != expected:
+              outcomes.errors.append("recovery-node-set-mismatch")
+          for node, report in outcomes.calls.items():
+              if report.outcome != "failed":
+                  outcomes.errors.append(f"call-{report.outcome}:{node}")
+                  continue
+              message = str(report.longrepr)
+              if not any(sentinel in message for sentinel in sentinels):
+                  outcomes.errors.append(f"missing-member-sentinel:{node}")
+          if exit_code != pytest.ExitCode.TESTS_FAILED:
+              outcomes.errors.append(f"unexpected-pytest-exit:{int(exit_code)}")
+          if outcomes.errors:
+              raise SystemExit(";".join(sorted(outcomes.errors)))
+          print(json.dumps({"node_count": 52, "status": "plain-recovery-red-manifest-matched"}))
+          PY
       - name: Run supplemental PR checks
         working-directory: head
         env:
@@ -959,6 +1044,12 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_SENDER: ${{ github.event.sender.login }}
+          REVIEW_AUTHOR: ${{ github.event.review.user.login }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          REVIEW_COMMIT_ID: ${{ github.event.review.commit_id }}
         run: |
           python - <<'PY'
           import json
@@ -980,7 +1071,22 @@ jobs:
           ready = os.environ["PR_DRAFT"] == "false"
           owner_authored = os.environ["PR_AUTHOR"] == "brullik"
           non_probe = not os.environ["HEAD_REF"].startswith("probe/")
+          event_name = os.environ.get("EVENT_NAME", "pull_request_review")
+          event_action = os.environ.get("EVENT_ACTION", "submitted")
+          event_sender = os.environ.get("EVENT_SENDER", "brullik")
+          review_author = os.environ.get("REVIEW_AUTHOR", "brullik")
+          review_state = os.environ.get("REVIEW_STATE", "commented")
+          review_commit_id = os.environ.get("REVIEW_COMMIT_ID", sha)
+          owner_review_authorized = (
+              event_name == "pull_request_review"
+              and event_action == "submitted"
+              and event_sender == "brullik"
+              and review_author == "brullik"
+              and review_state in {"commented", "changes_requested"}
+              and review_commit_id == sha
+          )
           successful = upstream_success and ready and owner_authored and non_probe
+          successful = successful and owner_review_authorized
           if successful:
               state = "success"
           elif upstream_success or any(result == "failure" for result in results.values()):
@@ -991,6 +1097,7 @@ jobs:
               "ready": str(ready).lower(),
               "owner": str(owner_authored).lower(),
               "non_probe": str(non_probe).lower(),
+              "owner_review": str(owner_review_authorized).lower(),
           })
           summary = ", ".join(f"{name}={result}" for name, result in results.items())
           payload = {
