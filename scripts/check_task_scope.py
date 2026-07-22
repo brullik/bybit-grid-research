@@ -35,7 +35,9 @@ _OWNER = "brullik"
 _TASK_FILE = "pm_acceptance/active_task.json"
 _INACTIVE_TASK_ID = "NO_ACTIVE_IMPLEMENTATION"
 _TASK_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
-_MODE_LABELS = frozenset({"pm-task-definition", "pm-control-plane", "pm-frozen-erratum"})
+_MODE_LABELS = frozenset({
+    "pm-task-definition", "pm-control-plane", "pm-frozen-erratum", "pm-recovery-bundle"
+})
 _ERRATUM_SCHEMA = "pm_frozen_erratum_v1"
 _ERRATUM_V2_SCHEMA = "pm_frozen_erratum_v2"
 _ERRATUM_PREFIX = "pm_acceptance/errata/"
@@ -57,6 +59,39 @@ _ERRATUM_V2_KEYS = frozenset({
     "predecessor_commit_sha",
     "predecessor_manifest_sha256",
 })
+_RECOVERY_SCHEMA = "pm_recovery_bundle_v1"
+_RECOVERY_BUNDLE_ID = "p0-recovery-walk-forward-committed-key"
+_RECOVERY_MANIFEST_PATH = f"pm_acceptance/reactivations/{_RECOVERY_BUNDLE_ID}.json"
+_RECOVERY_PREVIOUS_TASK_ID = "p0-walk-forward-exclusive-outcome-end"
+_RECOVERY_SUSPENDED_TASK_ID = "p0-committed-key-preflight"
+_RECOVERY_PREVIOUS_TEST_PATH = "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_walk_forward_exclusive_outcome_end.py"
+_RECOVERY_SUSPENDED_TEST_PATH = "pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py"
+_RECOVERY_ALLOWED_PATHS = (
+    "src/bybit_grid/research/scoring/outcome_grains.py", "src/bybit_grid/research/walk_forward/splits.py",
+    "src/bybit_grid/research/walk_forward/leakage_audit.py", "scripts/check_scoring_review_pack.py",
+    "scripts/make_scoring_review_pack.py", "tests/test_sprint_05_cost_scoring_walkforward.py",
+    "tests/test_sprint_05_6_review_pack_closure.py", "tests/test_persisted_exclusive_outcome_end_walk_forward.py",
+    "src/bybit_grid/data/market_store/models.py", "src/bybit_grid/data/market_store/import_public_batch.py",
+    "src/bybit_grid/data/market_store/transaction.py", "tests/test_store_committed_key_preflight.py",
+)
+_RECOVERY_FIXED_VALUES: dict[str, object] = {
+    "bundle_id": _RECOVERY_BUNDLE_ID, "issue_number": 210,
+    "previous_failure_sentinel": "persisted_exclusive_outcome_end_walk_forward_contract_unavailable",
+    "previous_historical_activation_commit_sha": "1305abb1517944e2cc9790e5546ca52ae66f592e",
+    "previous_historical_active_task_sha256": "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e",
+    "previous_historical_contract_sha256": "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05",
+    "previous_historical_frozen_test_sha256": "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e",
+    "previous_issue_number": 156, "previous_task_id": _RECOVERY_PREVIOUS_TASK_ID, "schema": _RECOVERY_SCHEMA,
+    "suspended_failure_sentinel": "committed_key_preflight_contract_unavailable",
+    "suspended_historical_activation_commit_sha": "3b826f2a6a3b02897047a30de8e920e2f5b72431",
+    "suspended_historical_active_task_sha256": "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89",
+    "suspended_historical_contract_sha256": "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696",
+    "suspended_historical_frozen_test_sha256": "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513",
+    "suspended_issue_number": 157, "suspended_task_id": _RECOVERY_SUSPENDED_TASK_ID,
+}
+_RECOVERY_KEYS = frozenset({*_RECOVERY_FIXED_VALUES, "allowed_paths", "previous_corrected_test_sha256",
+    "previous_erratum_commit_sha", "previous_erratum_manifest_sha256", "previous_expected_red_node_ids",
+    "required_paths", "suspended_expected_red_node_ids"})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _REASON_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -157,6 +192,34 @@ class FrozenErratumV2Manifest:
     reason_code: str
     expected_red_failed_node_ids: tuple[str, ...]
     expected_red_passed_node_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RecoveryBundleManifest:
+    schema: str
+    bundle_id: str
+    issue_number: int
+    previous_task_id: str
+    previous_issue_number: int
+    previous_historical_activation_commit_sha: str
+    previous_historical_active_task_sha256: str
+    previous_historical_frozen_test_sha256: str
+    previous_historical_contract_sha256: str
+    previous_erratum_commit_sha: str
+    previous_erratum_manifest_sha256: str
+    previous_corrected_test_sha256: str
+    previous_expected_red_node_ids: tuple[str, ...]
+    previous_failure_sentinel: str
+    suspended_task_id: str
+    suspended_issue_number: int
+    suspended_historical_activation_commit_sha: str
+    suspended_historical_active_task_sha256: str
+    suspended_historical_frozen_test_sha256: str
+    suspended_historical_contract_sha256: str
+    suspended_expected_red_node_ids: tuple[str, ...]
+    suspended_failure_sentinel: str
+    allowed_paths: tuple[str, ...]
+    required_paths: tuple[str, ...]
 
 
 def _reject_constant(value: str) -> None:
@@ -442,6 +505,65 @@ def parse_frozen_erratum_v2_manifest_bytes(data: bytes) -> FrozenErratumV2Manife
     )
 
 
+def _recovery_node_ids(name: str, value: Any, test_path: str, count: int) -> tuple[str, ...]:
+    node_ids = _erratum_node_ids(name, value, test_path)
+    if len(node_ids) != count:
+        member = "previous" if name.startswith("previous_") else "suspended"
+        raise ValueError(f"invalid_recovery_{member}_expected_red_node_count")
+    return node_ids
+
+
+def parse_recovery_bundle_manifest_bytes(data: bytes) -> RecoveryBundleManifest:
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("utf8_bom")
+    obj = json.loads(data.decode("utf-8", "strict"), object_pairs_hook=_pairs_hook,
+                     parse_float=_reject_float, parse_constant=_reject_constant)
+    if not isinstance(obj, dict):
+        raise ValueError("recovery_manifest_not_object")
+    if set(obj) != _RECOVERY_KEYS:
+        unknown = sorted(set(obj) - _RECOVERY_KEYS)
+        missing = sorted(_RECOVERY_KEYS - set(obj))
+        raise ValueError(f"invalid_recovery_manifest_keys:missing={','.join(missing)}:unknown={','.join(unknown)}")
+    for key, expected in _RECOVERY_FIXED_VALUES.items():
+        if obj[key] != expected or type(obj[key]) is not type(expected):
+            raise ValueError(f"invalid_recovery_{key}")
+    for key in ("previous_erratum_manifest_sha256", "previous_corrected_test_sha256"):
+        if not isinstance(obj[key], str) or not _SHA256_RE.fullmatch(obj[key]):
+            raise ValueError(f"invalid_recovery_{key}")
+    if not isinstance(obj["previous_erratum_commit_sha"], str) or not _COMMIT_SHA_RE.fullmatch(obj["previous_erratum_commit_sha"]):
+        raise ValueError("invalid_recovery_previous_erratum_commit_sha")
+    allowed = _strings("allowed_paths", obj["allowed_paths"])
+    required = _strings("required_paths", obj["required_paths"])
+    if allowed != _RECOVERY_ALLOWED_PATHS:
+        raise ValueError("invalid_recovery_allowed_paths")
+    if required != _RECOVERY_ALLOWED_PATHS:
+        raise ValueError("invalid_recovery_required_paths")
+    previous_nodes = _recovery_node_ids("previous_expected_red_node_ids", obj["previous_expected_red_node_ids"], _RECOVERY_PREVIOUS_TEST_PATH, 32)
+    suspended_nodes = _recovery_node_ids("suspended_expected_red_node_ids", obj["suspended_expected_red_node_ids"], _RECOVERY_SUSPENDED_TEST_PATH, 20)
+    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    if data != canonical:
+        raise ValueError("noncanonical_recovery_manifest_bytes")
+    return RecoveryBundleManifest(
+        schema=obj["schema"], bundle_id=obj["bundle_id"], issue_number=obj["issue_number"],
+        previous_task_id=obj["previous_task_id"], previous_issue_number=obj["previous_issue_number"],
+        previous_historical_activation_commit_sha=obj["previous_historical_activation_commit_sha"],
+        previous_historical_active_task_sha256=obj["previous_historical_active_task_sha256"],
+        previous_historical_frozen_test_sha256=obj["previous_historical_frozen_test_sha256"],
+        previous_historical_contract_sha256=obj["previous_historical_contract_sha256"],
+        previous_erratum_commit_sha=obj["previous_erratum_commit_sha"],
+        previous_erratum_manifest_sha256=obj["previous_erratum_manifest_sha256"],
+        previous_corrected_test_sha256=obj["previous_corrected_test_sha256"],
+        previous_expected_red_node_ids=previous_nodes, previous_failure_sentinel=obj["previous_failure_sentinel"],
+        suspended_task_id=obj["suspended_task_id"], suspended_issue_number=obj["suspended_issue_number"],
+        suspended_historical_activation_commit_sha=obj["suspended_historical_activation_commit_sha"],
+        suspended_historical_active_task_sha256=obj["suspended_historical_active_task_sha256"],
+        suspended_historical_frozen_test_sha256=obj["suspended_historical_frozen_test_sha256"],
+        suspended_historical_contract_sha256=obj["suspended_historical_contract_sha256"],
+        suspended_expected_red_node_ids=suspended_nodes, suspended_failure_sentinel=obj["suspended_failure_sentinel"],
+        allowed_paths=allowed, required_paths=required,
+    )
+
+
 def _matches(rule: str, path: str) -> bool:
     if rule == "requirements/*.txt":
         rest = path.removeprefix("requirements/")
@@ -644,6 +766,11 @@ def classify_pr_mode(actor: str, labels: tuple[str, ...], changed_paths: tuple[s
                 erratum_manifest = path.startswith(_ERRATUM_PREFIX) and path.endswith(".json")
                 if path != _TASK_FILE and not task_test and not erratum_manifest:
                     errors.append(f"pm_frozen_erratum_out_of_scope:{path}")
+        elif label == "pm-recovery-bundle":
+            mode = "pm-recovery-bundle"
+            for path in valid:
+                if path not in {_TASK_FILE, _RECOVERY_MANIFEST_PATH}:
+                    errors.append(f"pm_recovery_bundle_out_of_scope:{path}")
         else:
             mode = "pm-control-plane"
             for path in valid:
@@ -680,7 +807,35 @@ def acceptance_plan_for_mode(mode: str) -> tuple[str, ...]:
             "base-control-plane-self-tests",
             "head-frozen-erratum-exact-red",
         )
+    if mode == "pm-recovery-bundle":
+        return ("base-control-plane-self-tests", "head-recovery-manifest-collect-only")
     raise ValueError(f"invalid_mode:{mode}")
+
+
+def recovery_bundle_task_transition_errors(
+    base_task: ActiveTask,
+    head_task: ActiveTask,
+    manifest: RecoveryBundleManifest,
+    changed_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    errors = _changed_path_errors(changed_paths)
+    valid = [path for path in changed_paths if isinstance(path, str) and _path_error(path) is None]
+    if base_task.task_id != _RECOVERY_PREVIOUS_TASK_ID:
+        errors.append(f"recovery_base_task_mismatch:{base_task.task_id}")
+    if head_task.task_id != _RECOVERY_BUNDLE_ID:
+        errors.append(f"recovery_head_task_mismatch:{head_task.task_id}")
+    if head_task.allowed_paths != manifest.allowed_paths:
+        errors.append("recovery_head_allowed_paths_mismatch")
+    if head_task.required_paths != manifest.required_paths:
+        errors.append("recovery_head_required_paths_mismatch")
+    if head_task.forbidden_paths != base_task.forbidden_paths:
+        errors.append("recovery_head_forbidden_paths_mismatch")
+    if len(valid) != 2:
+        errors.append(f"recovery_changed_path_count:{len(valid)}")
+    expected = {_TASK_FILE, _RECOVERY_MANIFEST_PATH}
+    errors.extend(f"recovery_changed_path_mismatch:{path}" for path in valid if path not in expected)
+    errors.extend(f"recovery_changed_path_missing:{path}" for path in sorted(expected - set(valid)))
+    return tuple(sorted(errors))
 
 
 def git_blob_from_ref(ref: str, path: str) -> bytes:
@@ -1163,6 +1318,90 @@ def frozen_erratum_v2_transition_errors(
     return tuple(sorted(errors))
 
 
+def git_first_parent_commits(ref: str) -> tuple[str, ...]:
+    if not _SHA_RE.fullmatch(ref):
+        raise ValueError("invalid_git_first_parent_ref")
+    proc = subprocess.run(
+        ["git", "rev-list", "--first-parent", ref],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("git_first_parent_history_unreadable")
+    commits = tuple(line for line in proc.stdout.splitlines() if line)
+    if not commits or any(not _COMMIT_SHA_RE.fullmatch(commit) for commit in commits):
+        raise RuntimeError("git_first_parent_history_invalid")
+    return commits
+
+
+def recovery_bundle_transition_errors(
+    base_sha: str,
+    head_sha: str,
+    base_task: ActiveTask,
+    head_task: ActiveTask,
+    changed_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    if git_object_exists(base_sha, _RECOVERY_MANIFEST_PATH):
+        errors.append("recovery_manifest_already_exists")
+    if not git_object_exists(head_sha, _RECOVERY_MANIFEST_PATH):
+        return ("head_recovery_manifest_missing",)
+    manifest_bytes = git_blob_from_ref(head_sha, _RECOVERY_MANIFEST_PATH)
+    manifest = parse_recovery_bundle_manifest_bytes(manifest_bytes)
+    errors.extend(recovery_bundle_task_transition_errors(base_task, head_task, manifest, changed_paths))
+    parents = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", head_sha],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+    ).stdout.split()
+    if parents != [head_sha, base_sha]:
+        errors.append("recovery_head_not_single_direct_commit")
+    first_parent = set(git_first_parent_commits(base_sha))
+    members = (
+        ("previous", manifest.previous_historical_activation_commit_sha,
+         _RECOVERY_PREVIOUS_TEST_PATH, "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md"),
+        ("suspended", manifest.suspended_historical_activation_commit_sha,
+         _RECOVERY_SUSPENDED_TEST_PATH, "docs/frozen_contracts/tasks/p0-committed-key-preflight.md"),
+    )
+    for member, activation, test_path, contract_path in members:
+        if activation not in first_parent:
+            errors.append("recovery_historical_activation_not_first_parent")
+            continue
+        expected_task = getattr(manifest, f"{member}_historical_active_task_sha256")
+        expected_test = getattr(manifest, f"{member}_historical_frozen_test_sha256")
+        expected_contract = getattr(manifest, f"{member}_historical_contract_sha256")
+        if _sha256(git_blob_from_ref(activation, _TASK_FILE)) != expected_task:
+            errors.append("recovery_historical_active_task_sha256_mismatch")
+        if _sha256(git_blob_from_ref(activation, test_path)) != expected_test:
+            errors.append("recovery_historical_frozen_test_sha256_mismatch")
+        if _sha256(git_blob_from_ref(activation, contract_path)) != expected_contract:
+            errors.append("recovery_historical_contract_sha256_mismatch")
+    erratum_path = _erratum_manifest_path(_RECOVERY_PREVIOUS_TASK_ID)
+    if manifest.previous_erratum_commit_sha not in first_parent:
+        errors.append("recovery_previous_erratum_count_mismatch")
+    else:
+        erratum_bytes = git_blob_from_ref(manifest.previous_erratum_commit_sha, erratum_path)
+        parsed_erratum = parse_frozen_erratum_manifest_bytes(erratum_bytes)
+        if parsed_erratum.task_id != _RECOVERY_PREVIOUS_TASK_ID:
+            errors.append("recovery_previous_erratum_count_mismatch")
+        if _sha256(erratum_bytes) != manifest.previous_erratum_manifest_sha256:
+            errors.append("recovery_erratum_manifest_sha256_mismatch")
+        if _sha256(git_blob_from_ref(base_sha, _RECOVERY_PREVIOUS_TEST_PATH)) != manifest.previous_corrected_test_sha256:
+            errors.append("recovery_corrected_test_sha256_mismatch")
+    # The first-parent active-task sequence must contain one suspension of the current member.
+    task_ids: list[str] = []
+    for commit in reversed(tuple(git_first_parent_commits(base_sha))):
+        try:
+            task_ids.append(parse_active_task_bytes(git_blob_from_ref(commit, _TASK_FILE)).task_id)
+        except (RuntimeError, UnicodeDecodeError, ValueError):
+            continue
+    suspension_count = sum(
+        left == _RECOVERY_SUSPENDED_TASK_ID and right != _RECOVERY_SUSPENDED_TASK_ID
+        for left, right in zip(task_ids, task_ids[1:])
+    )
+    if suspension_count != 1:
+        errors.append("recovery_suspension_count_mismatch")
+    return tuple(sorted(errors))
+
+
 def _task_bytes_for_hash(task: ActiveTask) -> bytes:
     obj = {
         "allowed_paths": list(task.allowed_paths),
@@ -1375,6 +1614,73 @@ Path(os.environ["EXACT_CONTROL_RESULT"]).write_text(
     return 0 if not errors else 1
 
 
+def run_exact_recovery_probe(root: Path, manifest_path: Path) -> int:
+    """Require the manifest-declared 52 plain RED calls and plain passes elsewhere."""
+    root = root.resolve(strict=True)
+    manifest_path = manifest_path.resolve(strict=True)
+    if not manifest_path.is_relative_to(root):
+        raise ValueError("recovery_manifest_outside_root")
+    manifest = parse_recovery_bundle_manifest_bytes(manifest_path.read_bytes())
+    plugin_path = root / "recovery_exact_plugin.py"
+    result_path = root / ".recovery_exact_result.json"
+    plugin_path.write_text(
+        "import json\nfrom pathlib import Path\n\n"
+        "collected=[]\npassed=[]\nfailed=[]\nforbidden=[]\nlongrepr={}\ncalls={}\n"
+        "def pytest_collection_finish(session):\n    collected.extend(item.nodeid for item in session.items)\n"
+        "def pytest_deselected(items):\n    forbidden.extend('deselected:'+item.nodeid for item in items)\n"
+        "def pytest_collectreport(report):\n    if report.failed or report.skipped: forbidden.append('collection-error:'+report.nodeid)\n"
+        "def pytest_runtest_logreport(report):\n"
+        "    if report.when != 'call':\n"
+        "        if report.failed or report.skipped: forbidden.append('non-call-'+report.when+':'+report.nodeid)\n"
+        "        return\n"
+        "    calls[report.nodeid]=calls.get(report.nodeid,0)+1\n"
+        "    if calls[report.nodeid] > 1: forbidden.append('duplicate-call:'+report.nodeid)\n"
+        "    if hasattr(report,'wasxfail'): forbidden.append(('xpassed:' if report.passed else 'xfailed:')+report.nodeid)\n"
+        "    elif report.skipped: forbidden.append('skipped:'+report.nodeid)\n"
+        "    elif report.failed:\n        failed.append(report.nodeid)\n        longrepr[report.nodeid]=str(report.longrepr)\n"
+        "    elif report.passed: passed.append(report.nodeid)\n"
+        "def pytest_sessionfinish(session, exitstatus):\n"
+        "    forbidden.extend('missing-call:'+nodeid for nodeid in collected if calls.get(nodeid,0) != 1)\n"
+        "    Path('.recovery_exact_result.json').write_text(json.dumps({'collected':collected,'passed':passed,'failed':failed,'forbidden':forbidden,'longrepr':longrepr,'exit_code':exitstatus},sort_keys=True))\n",
+        encoding="utf-8",
+    )
+    env = dict(os.environ, PYTHONPATH=str(root), PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "pm_acceptance", "-q", "-c", str(root / "pytest.ini"),
+         f"--confcutdir={root / 'pm_acceptance'}", "-p", "recovery_exact_plugin"],
+        cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+    )
+    try:
+        outcomes = json.loads(result_path.read_text(encoding="utf-8"))
+    finally:
+        plugin_path.unlink(missing_ok=True)
+        result_path.unlink(missing_ok=True)
+    expected_previous = set(manifest.previous_expected_red_node_ids)
+    expected_suspended = set(manifest.suspended_expected_red_node_ids)
+    expected_failed = expected_previous | expected_suspended
+    actual_failed = set(outcomes.get("failed", []))
+    actual_passed = set(outcomes.get("passed", []))
+    collected = set(outcomes.get("collected", []))
+    errors = list(outcomes.get("forbidden", []))
+    if result.returncode != 1 or outcomes.get("exit_code") != 1:
+        errors.append("unexpected_recovery_pytest_exit")
+    if actual_failed != expected_failed:
+        errors.append("failed_node_ids_mismatch")
+    if actual_passed != collected - expected_failed:
+        errors.append("passed_node_ids_mismatch")
+    representations = outcomes.get("longrepr", {})
+    for node_id in expected_previous & actual_failed:
+        if manifest.previous_failure_sentinel not in representations.get(node_id, ""):
+            errors.append(f"previous_sentinel_mismatch:{node_id}")
+    for node_id in expected_suspended & actual_failed:
+        if manifest.suspended_failure_sentinel not in representations.get(node_id, ""):
+            errors.append(f"suspended_sentinel_mismatch:{node_id}")
+    payload = {"errors": sorted(set(errors)), "failed_count": len(actual_failed),
+               "passed_count": len(actual_passed), "ok": not errors}
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    return 0 if not errors else 1
+
+
 def _emit(
     changed_count: int,
     errors: tuple[str, ...],
@@ -1392,6 +1698,15 @@ def _emit(
 
 def main(argv: list[str] | None = None) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--exact-recovery-probe-root" in effective_argv:
+        recovery_parser = argparse.ArgumentParser(add_help=True)
+        recovery_parser.add_argument("--exact-recovery-probe-root", required=True)
+        recovery_parser.add_argument("--recovery-manifest", required=True)
+        recovery_args = recovery_parser.parse_args(effective_argv)
+        return run_exact_recovery_probe(
+            Path(recovery_args.exact_recovery_probe_root),
+            Path(recovery_args.recovery_manifest),
+        )
     if "--exact-control-plane-root" in effective_argv:
         exact_parser = argparse.ArgumentParser(add_help=True)
         exact_parser.add_argument("--exact-control-plane-root", required=True)
@@ -1403,6 +1718,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--actor", default="")
     parser.add_argument("--labels-json", default="[]")
+    parser.add_argument("--event-sender", default="")
+    parser.add_argument("--event-name", default="")
+    parser.add_argument("--review-state", default="")
+    parser.add_argument("--repository", default="")
+    parser.add_argument("--head-repository", default="")
+    parser.add_argument("--base-ref", default="")
+    parser.add_argument("--head-ref", default="")
     args = parser.parse_args(effective_argv)
     errors: list[str] = []
     if args.task_file != _TASK_FILE:
@@ -1451,6 +1773,26 @@ def main(argv: list[str] | None = None) -> int:
                     changed,
                 )
             return _emit(len(changed), erratum_errors, mode, head_task.task_id)
+        if mode == "pm-recovery-bundle":
+            identity_errors: list[str] = []
+            if not (
+                args.event_sender == _OWNER
+                and args.event_name == "pull_request_review"
+                and args.review_state in {"commented", "changes_requested"}
+            ):
+                identity_errors.append("recovery_event_must_be_owner_non_approving_review")
+            if args.repository != "brullik/bybit-grid-research" or args.head_repository != args.repository:
+                identity_errors.append("recovery_repository_identity_mismatch")
+            if args.base_ref != "main" or not args.head_ref or args.head_ref.startswith("probe/"):
+                identity_errors.append("recovery_branch_identity_mismatch")
+            head_task = parse_active_task_bytes(git_blob_from_ref(args.head_sha, _TASK_FILE))
+            transition_errors = recovery_bundle_transition_errors(
+                args.base_sha, args.head_sha, task, head_task, changed
+            )
+            return _emit(
+                len(changed), tuple(sorted((*identity_errors, *transition_errors))),
+                mode, head_task.task_id,
+            )
         return _emit(len(changed), (), mode, task.task_id)
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as exc:
         return _emit(0, (str(exc),))

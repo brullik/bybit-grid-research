@@ -2,6 +2,8 @@ name: PM Acceptance
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted]
 permissions:
   contents: read
   pull-requests: read
@@ -88,15 +90,24 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          EVENT_SENDER: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_STATE: ${{ github.event.review.state || '' }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set +e
-          json=$(python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --actor "$PR_ACTOR" --labels-json "$PR_LABELS_JSON")
+          # pm-recovery-bundle fails with recovery_event_must_be_owner_non_approving_review
+          # unless this is the exact owner-authored submitted review lifecycle event.
+          json=$(python scripts/check_task_scope.py --task-file pm_acceptance/active_task.json --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --actor "$PR_ACTOR" --labels-json "$PR_LABELS_JSON" --event-sender "$EVENT_SENDER" --event-name "$EVENT_NAME" --review-state "$REVIEW_STATE" --repository "$REPOSITORY" --head-repository "$HEAD_REPOSITORY" --base-ref "$BASE_REF" --head-ref "$HEAD_REF")
           status=$?
           printf '%s\n' "$json"
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
-          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum"}, mode; print(mode)')
+          pr_mode=$(JSON_PAYLOAD="$json" python -c 'import json, os; mode=json.loads(os.environ["JSON_PAYLOAD"]).get("mode"); assert mode in {"implementation","pm-task-definition","pm-control-plane","pm-frozen-erratum","pm-recovery-bundle"}, mode; print(mode)')
           task_id=$(JSON_PAYLOAD="$json" python -c 'import json, os; task_id=json.loads(os.environ["JSON_PAYLOAD"]).get("task_id"); assert isinstance(task_id, str) and task_id; print(task_id)')
           printf 'pr_mode=%s\n' "$pr_mode" >> "$GITHUB_OUTPUT"
           printf 'task_id=%s\n' "$task_id" >> "$GITHUB_OUTPUT"
@@ -923,6 +934,49 @@ jobs:
               )
           )
           PY
+      - name: Stage exact recovery bundle
+        if: needs.protected-paths.outputs.pr-mode == 'pm-recovery-bundle'
+        env:
+          RECOVERY_MANIFEST: head/pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json
+        run: |
+          test -f "$RECOVERY_MANIFEST" && test ! -L "$RECOVERY_MANIFEST"
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path("head").resolve()))
+          from scripts.check_task_scope import parse_recovery_bundle_manifest_bytes
+
+          manifest = parse_recovery_bundle_manifest_bytes(Path(os.environ["RECOVERY_MANIFEST"]).read_bytes())
+          expected = sorted((*manifest.previous_expected_red_node_ids, *manifest.suspended_expected_red_node_ids))
+          result = subprocess.run(
+              [sys.executable, "-m", "pytest", "--collect-only", "-q",
+               "base/pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end",
+               "base/pm_acceptance/tasks/p0-committed-key-preflight"],
+              text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+          )
+          collected = sorted(line for line in result.stdout.splitlines() if "::" in line)
+          if result.returncode != 0 or collected != expected:
+              raise SystemExit("recovery_collection-error_or_node_ids_mismatch")
+          print(json.dumps({"collected": len(collected), "status": "exact-recovery-union-collected"}))
+          PY
+      - name: Run exact recovery RED profile
+        if: needs.protected-paths.outputs.pr-mode == 'implementation' && needs.protected-paths.outputs.task-id == 'p0-recovery-walk-forward-committed-key' && startsWith(github.event.pull_request.head.ref, 'probe/')
+        env:
+          RECOVERY_MANIFEST: ${{ runner.temp }}/pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json
+        run: |
+          # The base checker rejects collection-error, deselected, duplicate-call,
+          # missing-call, non-call-setup, non-call-teardown, skipped, xfailed,
+          # xpassed, failed_node_ids_mismatch and passed_node_ids_mismatch outcomes.
+          # Both exact member sentinels are required for all 52 declared failures:
+          # persisted_exclusive_outcome_end_walk_forward_contract_unavailable
+          # committed_key_preflight_contract_unavailable
+          python base/scripts/check_task_scope.py \
+            --exact-recovery-probe-root "${{ runner.temp }}" \
+            --recovery-manifest "$RECOVERY_MANIFEST"
       - name: Run supplemental PR checks
         working-directory: head
         env:
@@ -951,6 +1005,7 @@ jobs:
     timeout-minutes: 2
     permissions:
       statuses: write
+      pull-requests: read
     steps:
       - name: Publish final aggregate status
         env:
@@ -966,6 +1021,10 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           python - <<'PY'
           import json
@@ -978,6 +1037,45 @@ jobs:
               raise SystemExit("invalid_repository")
           if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
               raise SystemExit("invalid_head_sha")
+          lifecycle_errors = []
+          if "PR_NUMBER" in os.environ:
+              pr_number = int(os.environ["PR_NUMBER"])
+              headers = {
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f'Bearer {os.environ["GH_TOKEN"]}',
+                  "X-GitHub-Api-Version": "2022-11-28",
+              }
+              live_request = urllib.request.Request(
+                  f'{os.environ["API_URL"]}/repos/{os.environ["REPOSITORY"]}/pulls/{pr_number}',
+                  headers=headers,
+              )
+              with urllib.request.urlopen(live_request, timeout=30) as response:
+                  live = json.load(response)
+              if live["head"]["sha"] != sha:
+                  lifecycle_errors.append("live_head_sha_mismatch")
+              if live["base"]["sha"] != os.environ["BASE_SHA"]:
+                  lifecycle_errors.append("live_base_sha_mismatch")
+              if live["base"]["ref"] != os.environ["BASE_REF"]:
+                  lifecycle_errors.append("live_base_ref_mismatch")
+              if sorted(label["name"] for label in live["labels"]) != sorted(json.loads(os.environ["PR_LABELS_JSON"])):
+                  lifecycle_errors.append("live_labels_mismatch")
+              if live["user"]["login"] != os.environ["PR_AUTHOR"]:
+                  lifecycle_errors.append("live_author_mismatch")
+              if live["base"]["repo"]["full_name"] != os.environ["REPOSITORY"]:
+                  lifecycle_errors.append("live_repository_mismatch")
+              graph_query = {
+                  "query": "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}",
+                  "variables": {"owner": "brullik", "name": "bybit-grid-research", "number": pr_number},
+              }
+              graph_request = urllib.request.Request(
+                  f'{os.environ["API_URL"]}/graphql', data=json.dumps(graph_query).encode(),
+                  headers=headers, method="POST",
+              )
+              with urllib.request.urlopen(graph_request, timeout=30) as response:
+                  graph = json.load(response)
+              threads = graph["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+              if any(not thread["isResolved"] for thread in threads):
+                  lifecycle_errors.append("unresolved_review_threads")
           results = {
               "pending": os.environ["PENDING_RESULT"],
               "protected": os.environ["PROTECTED_RESULT"],
@@ -987,7 +1085,7 @@ jobs:
           ready = os.environ["PR_DRAFT"] == "false"
           owner_authored = os.environ["PR_AUTHOR"] == "brullik"
           non_probe = not os.environ["HEAD_REF"].startswith("probe/")
-          successful = upstream_success and ready and owner_authored and non_probe
+          successful = upstream_success and ready and owner_authored and non_probe and not lifecycle_errors
           if successful:
               state = "success"
           elif upstream_success or any(result == "failure" for result in results.values()):
@@ -998,6 +1096,7 @@ jobs:
               "ready": str(ready).lower(),
               "owner": str(owner_authored).lower(),
               "non_probe": str(non_probe).lower(),
+              "lifecycle": "ok" if not lifecycle_errors else "+".join(lifecycle_errors),
           })
           summary = ", ".join(f"{name}={result}" for name, result in results.items())
           payload = {
