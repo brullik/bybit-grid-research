@@ -180,9 +180,13 @@ jobs:
         run: |
           rm -rf "$RUNNER_TEMP/head_control"
           mkdir -p "$RUNNER_TEMP/head_control/pm_acceptance"
+          mkdir -p "$RUNNER_TEMP/head_control/docs/frozen_contracts"
           mkdir -p "$RUNNER_TEMP/head_control/scripts" "$RUNNER_TEMP/head_control/.github/workflows"
           cp head/pm_acceptance/test_control_plane_self.py "$RUNNER_TEMP/head_control/pm_acceptance/test_control_plane_self.py"
           cp head/pm_acceptance/active_task.json "$RUNNER_TEMP/head_control/pm_acceptance/active_task.json"
+          cp head/pm_acceptance/README.md "$RUNNER_TEMP/head_control/pm_acceptance/README.md"
+          cp head/AGENTS.md "$RUNNER_TEMP/head_control/AGENTS.md"
+          cp head/docs/frozen_contracts/control_plane_v1.md "$RUNNER_TEMP/head_control/docs/frozen_contracts/control_plane_v1.md"
           printf '' > "$RUNNER_TEMP/head_control/scripts/__init__.py"
           cp head/scripts/check_protected_paths.py "$RUNNER_TEMP/head_control/scripts/check_protected_paths.py"
           cp head/scripts/check_task_scope.py "$RUNNER_TEMP/head_control/scripts/check_task_scope.py"
