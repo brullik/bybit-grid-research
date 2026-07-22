@@ -1325,7 +1325,8 @@ def test_workflow_pins_security_critical_trigger_and_base_classifier_shape():
         "types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft, labeled, unlabeled]"
         in workflow
     )
-    assert "pull_request_review_thread:\n    types: [resolved]" in workflow
+    assert "pull_request_review:\n    types: [submitted]" in workflow
+    assert "pull_request_review_thread" not in workflow
     assert "group: pm-acceptance-${{ github.event.pull_request.number }}" in workflow
     assert "cancel-in-progress: true" in workflow
     assert "permissions:\n  contents: read\n  pull-requests: read" in workflow
@@ -1595,7 +1596,17 @@ def test_workflow_publishes_fail_closed_aggregate_status_on_pr_head():
     assert 'ready = live_identity["draft"] == "false"' in final
     assert 'owner_authored = os.environ["PR_AUTHOR"] == "brullik"' in final
     assert 'non_probe = not os.environ["HEAD_REF"].startswith("probe/")' in final
-    assert "successful = upstream_success and ready and owner_authored and non_probe" in final
+    assert "governed_trigger = governed_pull_request or governed_review" in final
+    assert (
+        "successful = (\n"
+        "              upstream_success\n"
+        "              and ready\n"
+        "              and owner_authored\n"
+        "              and non_probe\n"
+        "              and governed_trigger\n"
+        "          )"
+        in final
+    )
     assert "successful = upstream_success and owner_authored and non_probe" not in final
     assert 'elif upstream_success or any(result == "failure" for result in results.values())' in final
     assert 'state = "error"' in final
@@ -1811,7 +1822,8 @@ def test_workflow_finalizer_rechecks_live_main_and_paginates_review_threads():
     assert '"after": cursor' in final
     assert "while True:" in final
     assert 'page_info["endCursor"]' in final
-    assert "pull_request_review_thread:\n    types: [resolved]" in workflow
+    assert "pull_request_review:\n    types: [submitted]" in workflow
+    assert "pull_request_review_thread" not in workflow
     assert "edited" in workflow
 
 
@@ -2079,6 +2091,12 @@ def _execute_final_status_script(monkeypatch, **overrides: str) -> tuple[str | N
         "PR_LABELS_JSON": '["pm-control-plane"]',
         "PR_HEAD_REPOSITORY": "brullik/bybit-grid-research",
         "PR_BASE_REPOSITORY": "brullik/bybit-grid-research",
+        "EVENT_NAME": "pull_request_target",
+        "EVENT_ACTION": "ready_for_review",
+        "EVENT_SENDER": "brullik",
+        "TRIGGERING_ACTOR": "brullik",
+        "REVIEW_AUTHOR": "",
+        "REVIEW_STATE": "",
     }
     live_head_sha = overrides.pop("MOCK_LIVE_HEAD_SHA", environment["HEAD_SHA"])
     live_main_sha = overrides.pop("MOCK_LIVE_MAIN_SHA", environment["EXPECTED_BASE_SHA"])
@@ -2275,12 +2293,23 @@ def test_final_status_script_rejects_stale_live_head_and_unresolved_threads(monk
 
 def test_review_thread_resolution_triggers_fresh_unchanged_sha_finalizer(monkeypatch):
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
-    assert "pull_request_review_thread:\n    types: [resolved]" in workflow
+    assert "pull_request_review:\n    types: [submitted]" in workflow
+    assert "pull_request_review_thread" not in workflow
+
+    governed_review = {
+        "EVENT_NAME": "pull_request_review",
+        "EVENT_ACTION": "submitted",
+        "EVENT_SENDER": "brullik",
+        "TRIGGERING_ACTOR": "brullik",
+        "REVIEW_AUTHOR": "brullik",
+        "REVIEW_STATE": "commented",
+    }
 
     exit_reason, pending = _execute_final_status_script(
         monkeypatch,
         MOCK_UNRESOLVED="true",
         RUN_ID="123",
+        **governed_review,
     )
     assert exit_reason == "unresolved_review_threads"
     assert "state" not in pending
@@ -2289,6 +2318,7 @@ def test_review_thread_resolution_triggers_fresh_unchanged_sha_finalizer(monkeyp
         monkeypatch,
         MOCK_UNRESOLVED="false",
         RUN_ID="124",
+        **governed_review,
     )
     assert exit_reason is None
     assert fresh["state"] == "success"
@@ -2299,9 +2329,27 @@ def test_review_thread_resolution_triggers_fresh_unchanged_sha_finalizer(monkeyp
         MOCK_UNRESOLVED="false",
         MOCK_LIVE_HEAD_SHA="c" * 40,
         RUN_ID="125",
+        **governed_review,
     )
     assert exit_reason == "live_pull_request_identity_mismatch"
     assert "state" not in stale
+
+    for ungoverned in (
+        {"EVENT_ACTION": "edited"},
+        {"EVENT_SENDER": "someone-else"},
+        {"TRIGGERING_ACTOR": "someone-else"},
+        {"REVIEW_AUTHOR": "someone-else"},
+        {"REVIEW_STATE": "approved"},
+    ):
+        exit_reason, rejected = _execute_final_status_script(
+            monkeypatch,
+            MOCK_UNRESOLVED="false",
+            RUN_ID="126",
+            **(governed_review | ungoverned),
+        )
+        assert exit_reason == "pm_acceptance_failed"
+        assert rejected["state"] == "failure"
+        assert "trigger=false" in rejected["description"]
 
 
 def test_direct_task_scope_cli_import_shape_from_repository_root():

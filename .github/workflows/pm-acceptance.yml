@@ -2,8 +2,8 @@ name: PM Acceptance
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
-  pull_request_review_thread:
-    types: [resolved]
+  pull_request_review:
+    types: [submitted]
 permissions:
   contents: read
   pull-requests: read
@@ -1298,6 +1298,12 @@ jobs:
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_HEAD_REPOSITORY: ${{ github.repository }}
           PR_BASE_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_SENDER: ${{ github.event.sender.login }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REVIEW_AUTHOR: ${{ github.event.review.user.login }}
+          REVIEW_STATE: ${{ github.event.review.state }}
         run: |
           python - <<'PY'
           import json
@@ -1452,7 +1458,35 @@ jobs:
           ready = live_identity["draft"] == "false"
           owner_authored = os.environ["PR_AUTHOR"] == "brullik"
           non_probe = not os.environ["HEAD_REF"].startswith("probe/")
-          successful = upstream_success and ready and owner_authored and non_probe
+          governed_pull_request = (
+              os.environ["EVENT_NAME"] == "pull_request_target"
+              and os.environ["EVENT_ACTION"] in {
+                  "opened",
+                  "synchronize",
+                  "reopened",
+                  "edited",
+                  "ready_for_review",
+                  "converted_to_draft",
+                  "labeled",
+                  "unlabeled",
+              }
+          )
+          governed_review = (
+              os.environ["EVENT_NAME"] == "pull_request_review"
+              and os.environ["EVENT_ACTION"] == "submitted"
+              and os.environ["EVENT_SENDER"] == "brullik"
+              and os.environ["TRIGGERING_ACTOR"] == "brullik"
+              and os.environ["REVIEW_AUTHOR"] == "brullik"
+              and os.environ["REVIEW_STATE"] == "commented"
+          )
+          governed_trigger = governed_pull_request or governed_review
+          successful = (
+              upstream_success
+              and ready
+              and owner_authored
+              and non_probe
+              and governed_trigger
+          )
           if successful:
               state = "success"
           elif upstream_success or any(result == "failure" for result in results.values()):
@@ -1463,6 +1497,7 @@ jobs:
               "ready": str(ready).lower(),
               "owner": str(owner_authored).lower(),
               "non_probe": str(non_probe).lower(),
+              "trigger": str(governed_trigger).lower(),
           })
           summary = ", ".join(f"{name}={result}" for name, result in results.items())
           payload = {
