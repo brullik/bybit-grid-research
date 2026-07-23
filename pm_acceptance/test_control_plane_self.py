@@ -2023,3 +2023,502 @@ def test_head_task_definition_collection_valid_and_syntax_error(tmp_path: Path):
     env_bad = dict(os.environ, PYTHONPATH=str(bad), PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
     compile_bad = subprocess.run([sys.executable, "-m", "compileall", "-q", str(bad_task)], env=env_bad, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     assert compile_bad.returncode != 0
+
+
+RECOVERY_BUNDLE_ID = "p0-recovery-walk-forward-committed-key"
+RECOVERY_MANIFEST_PATH = (
+    "pm_acceptance/reactivations/p0-recovery-walk-forward-committed-key.json"
+)
+RECOVERY_ALLOWED_PATHS = (
+    "src/bybit_grid/research/scoring/outcome_grains.py",
+    "src/bybit_grid/research/walk_forward/splits.py",
+    "src/bybit_grid/research/walk_forward/leakage_audit.py",
+    "scripts/check_scoring_review_pack.py",
+    "scripts/make_scoring_review_pack.py",
+    "tests/test_sprint_05_cost_scoring_walkforward.py",
+    "tests/test_sprint_05_6_review_pack_closure.py",
+    "tests/test_persisted_exclusive_outcome_end_walk_forward.py",
+    "src/bybit_grid/data/market_store/models.py",
+    "src/bybit_grid/data/market_store/import_public_batch.py",
+    "src/bybit_grid/data/market_store/transaction.py",
+    "tests/test_store_committed_key_preflight.py",
+)
+
+
+def _recovery_manifest_bytes(**updates: object) -> bytes:
+    previous_test = (
+        "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/"
+        "test_walk_forward_exclusive_outcome_end.py"
+    )
+    suspended_test = (
+        "pm_acceptance/tasks/p0-committed-key-preflight/"
+        "test_store_committed_key_preflight.py"
+    )
+    obj: dict[str, object] = {
+        "allowed_paths": list(RECOVERY_ALLOWED_PATHS),
+        "bundle_id": RECOVERY_BUNDLE_ID,
+        "issue_number": 210,
+        "previous_corrected_test_sha256": "3" * 64,
+        "previous_erratum_commit_sha": "4" * 40,
+        "previous_erratum_manifest_sha256": "5" * 64,
+        "previous_expected_red_node_ids": [
+            f"{previous_test}::test_previous_{index:02d}" for index in range(32)
+        ],
+        "previous_failure_sentinel": (
+            "persisted_exclusive_outcome_end_walk_forward_contract_unavailable"
+        ),
+        "previous_historical_activation_commit_sha": (
+            "1305abb1517944e2cc9790e5546ca52ae66f592e"
+        ),
+        "previous_historical_active_task_sha256": (
+            "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e"
+        ),
+        "previous_historical_contract_sha256": (
+            "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05"
+        ),
+        "previous_historical_frozen_test_sha256": (
+            "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e"
+        ),
+        "previous_issue_number": 156,
+        "previous_task_id": "p0-walk-forward-exclusive-outcome-end",
+        "required_paths": list(RECOVERY_ALLOWED_PATHS),
+        "schema": "pm_recovery_bundle_v1",
+        "suspended_expected_red_node_ids": [
+            f"{suspended_test}::test_suspended_{index:02d}" for index in range(20)
+        ],
+        "suspended_failure_sentinel": "committed_key_preflight_contract_unavailable",
+        "suspended_historical_activation_commit_sha": (
+            "3b826f2a6a3b02897047a30de8e920e2f5b72431"
+        ),
+        "suspended_historical_active_task_sha256": (
+            "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89"
+        ),
+        "suspended_historical_contract_sha256": (
+            "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696"
+        ),
+        "suspended_historical_frozen_test_sha256": (
+            "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513"
+        ),
+        "suspended_issue_number": 157,
+        "suspended_task_id": "p0-committed-key-preflight",
+    }
+    obj.update(updates)
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def _recovery_scope_module():
+    from scripts import check_task_scope
+
+    return check_task_scope
+
+
+def test_recovery_bundle_manifest_accepts_only_the_exact_pinned_pair():
+    manifest = _recovery_scope_module().parse_recovery_bundle_manifest_bytes(
+        _recovery_manifest_bytes()
+    )
+    assert manifest.schema == "pm_recovery_bundle_v1"
+    assert manifest.bundle_id == RECOVERY_BUNDLE_ID
+    assert manifest.issue_number == 210
+    assert manifest.previous_task_id == "p0-walk-forward-exclusive-outcome-end"
+    assert manifest.suspended_task_id == "p0-committed-key-preflight"
+    assert manifest.allowed_paths == RECOVERY_ALLOWED_PATHS
+    assert manifest.required_paths == RECOVERY_ALLOWED_PATHS
+    assert len(manifest.previous_expected_red_node_ids) == 32
+    assert len(manifest.suspended_expected_red_node_ids) == 20
+
+
+def test_recovery_bundle_manifest_rejects_noncanonical_unknown_and_ambiguous_json():
+    parser = _recovery_scope_module().parse_recovery_bundle_manifest_bytes
+    canonical = _recovery_manifest_bytes()
+    with pytest.raises(ValueError, match="^noncanonical_recovery_manifest_bytes$"):
+        parser(json.dumps(json.loads(canonical), indent=2).encode() + b"\n")
+    with pytest.raises(ValueError, match="^duplicate_json_key:schema$"):
+        parser(canonical.replace(b'{"allowed_paths"', b'{"schema":"pm_recovery_bundle_v1","allowed_paths"'))
+    with pytest.raises(ValueError, match="^invalid_recovery_manifest_keys:"):
+        parser(_recovery_manifest_bytes(extra=True))
+    with pytest.raises(ValueError, match="^invalid_recovery_issue_number$"):
+        parser(_recovery_manifest_bytes(issue_number=True))
+
+
+def test_recovery_bundle_manifest_rejects_identity_hash_and_scope_substitution():
+    parser = _recovery_scope_module().parse_recovery_bundle_manifest_bytes
+    with pytest.raises(ValueError, match="^invalid_recovery_previous_task_id$"):
+        parser(_recovery_manifest_bytes(previous_task_id="other-task"))
+    with pytest.raises(ValueError, match="^invalid_recovery_suspended_issue_number$"):
+        parser(_recovery_manifest_bytes(suspended_issue_number=158))
+    with pytest.raises(ValueError, match="^invalid_recovery_previous_historical_contract_sha256$"):
+        parser(_recovery_manifest_bytes(previous_historical_contract_sha256="0" * 64))
+    with pytest.raises(ValueError, match="^invalid_recovery_allowed_paths$"):
+        parser(_recovery_manifest_bytes(allowed_paths=list(RECOVERY_ALLOWED_PATHS[:-1])))
+    with pytest.raises(ValueError, match="^invalid_recovery_required_paths$"):
+        parser(_recovery_manifest_bytes(required_paths=[*RECOVERY_ALLOWED_PATHS, "src/extra.py"]))
+
+
+def test_recovery_bundle_manifest_rejects_node_and_sentinel_padding():
+    parser = _recovery_scope_module().parse_recovery_bundle_manifest_bytes
+    previous = json.loads(_recovery_manifest_bytes())["previous_expected_red_node_ids"]
+    with pytest.raises(ValueError, match="^invalid_recovery_previous_expected_red_node_count$"):
+        parser(_recovery_manifest_bytes(previous_expected_red_node_ids=previous[:-1]))
+    with pytest.raises(ValueError, match="^duplicate_entry:previous_expected_red_node_ids:"):
+        parser(_recovery_manifest_bytes(previous_expected_red_node_ids=[previous[0]] * 32))
+    with pytest.raises(ValueError, match="^invalid_recovery_previous_failure_sentinel$"):
+        parser(_recovery_manifest_bytes(previous_failure_sentinel="generic failure"))
+    with pytest.raises(ValueError, match="^invalid_node_id:suspended_expected_red_node_ids:"):
+        parser(_recovery_manifest_bytes(suspended_expected_red_node_ids=["../unsafe"] * 20))
+
+
+def test_recovery_mode_requires_owner_exact_label_and_two_path_scope():
+    paths = ("pm_acceptance/active_task.json", RECOVERY_MANIFEST_PATH)
+    assert classify_pr_mode("brullik", ("pm-recovery-bundle",), paths) == (
+        "pm-recovery-bundle",
+        (),
+    )
+    assert classify_pr_mode("alice", ("pm-recovery-bundle",), paths)[1] == (
+        "wrong_author:alice",
+    )
+    assert classify_pr_mode(
+        "brullik",
+        ("pm-recovery-bundle", "pm-control-plane"),
+        paths,
+    )[1] == ("multiple_mode_labels",)
+    assert classify_pr_mode("brullik", ("pm-recovery-bundle",), (*paths, "src/x.py"))[1] == (
+        "pm_recovery_bundle_out_of_scope:src/x.py",
+        "production_path_forbidden_in_pm_mode:src/x.py",
+    )
+
+
+def test_recovery_mode_has_a_dedicated_fail_closed_acceptance_plan():
+    assert acceptance_plan_for_mode("pm-recovery-bundle") == (
+        "base-control-plane-self-tests",
+        "head-recovery-manifest-collect-only",
+    )
+
+
+def test_recovery_task_transition_is_exact_and_cannot_be_generic():
+    scope = _recovery_scope_module()
+    manifest = scope.parse_recovery_bundle_manifest_bytes(_recovery_manifest_bytes())
+    base_task = _active_task(
+        task_id="p0-walk-forward-exclusive-outcome-end",
+        allowed_paths=RECOVERY_ALLOWED_PATHS[:8],
+        required_paths=RECOVERY_ALLOWED_PATHS[:8],
+    )
+    head_task = _active_task(
+        task_id=RECOVERY_BUNDLE_ID,
+        allowed_paths=RECOVERY_ALLOWED_PATHS,
+        required_paths=RECOVERY_ALLOWED_PATHS,
+    )
+    changed = ("pm_acceptance/active_task.json", RECOVERY_MANIFEST_PATH)
+    assert scope.recovery_bundle_task_transition_errors(
+        base_task,
+        head_task,
+        manifest,
+        changed,
+    ) == ()
+    assert "recovery_base_task_mismatch:p0-committed-key-preflight" in (
+        scope.recovery_bundle_task_transition_errors(
+            _active_task(task_id="p0-committed-key-preflight"),
+            head_task,
+            manifest,
+            changed,
+        )
+    )
+    assert "recovery_changed_path_count:1" in scope.recovery_bundle_task_transition_errors(
+        base_task,
+        head_task,
+        manifest,
+        changed[:-1],
+    )
+
+
+def test_recovery_checker_pins_first_parent_history_erratum_bytes_and_one_time_replay():
+    checker = Path(__file__).resolve().parents[1] / "scripts/check_task_scope.py"
+    source = checker.read_text(encoding="utf-8")
+    required_fragments = (
+        "recovery_bundle_transition_errors",
+        "git_first_parent_commits",
+        "recovery_historical_activation_not_first_parent",
+        "recovery_historical_active_task_sha256_mismatch",
+        "recovery_historical_frozen_test_sha256_mismatch",
+        "recovery_historical_contract_sha256_mismatch",
+        "recovery_erratum_manifest_sha256_mismatch",
+        "recovery_corrected_test_sha256_mismatch",
+        "recovery_previous_erratum_count_mismatch",
+        "recovery_suspension_count_mismatch",
+        "recovery_manifest_already_exists",
+        "recovery_head_not_single_direct_commit",
+    )
+    assert all(fragment in source for fragment in required_fragments)
+
+
+def _recovery_transition_errors_for_erratum(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    erratum_updates: dict[str, object] | None = None,
+    ordered_history: bool = True,
+) -> tuple[str, ...]:
+    scope = _recovery_scope_module()
+    previous_activation = "1305abb1517944e2cc9790e5546ca52ae66f592e"
+    suspended_activation = "3b826f2a6a3b02897047a30de8e920e2f5b72431"
+    erratum_commit = "4" * 40
+    suspension_commit = "6" * 40
+    base_sha = "b" * 40
+    head_sha = "c" * 40
+    previous_test_path = (
+        "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/"
+        "test_walk_forward_exclusive_outcome_end.py"
+    )
+    corrected_test = b"corrected frozen test\n"
+    erratum: dict[str, object] = {
+        "base_sha256": "a" * 64,
+        "expected_red_failed_node_ids": [f"{previous_test_path}::test_contract"],
+        "expected_red_passed_node_ids": [],
+        "head_active_task_sha256": (
+            "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e"
+        ),
+        "head_sha256": hashlib.sha256(corrected_test).hexdigest(),
+        "historical_active_task_commit_sha": previous_activation,
+        "issue_number": 156,
+        "reason_code": "invalid_deterministic_fixture",
+        "schema": "pm_frozen_erratum_v1",
+        "task_id": "p0-walk-forward-exclusive-outcome-end",
+        "test_path": previous_test_path,
+    }
+    erratum.update(erratum_updates or {})
+    if erratum_updates is not None and "test_path" in erratum_updates:
+        erratum["expected_red_failed_node_ids"] = [
+            f"{erratum['test_path']}::test_contract"
+        ]
+    erratum_bytes = json.dumps(erratum, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    manifest_bytes = _recovery_manifest_bytes(
+        previous_corrected_test_sha256=hashlib.sha256(corrected_test).hexdigest(),
+        previous_erratum_commit_sha=erratum_commit,
+        previous_erratum_manifest_sha256=hashlib.sha256(erratum_bytes).hexdigest(),
+    )
+    previous_task = _active_task(
+        task_id="p0-walk-forward-exclusive-outcome-end",
+        allowed_paths=RECOVERY_ALLOWED_PATHS[:8],
+        required_paths=RECOVERY_ALLOWED_PATHS[:8],
+    )
+    suspended_task = _active_task(task_id="p0-committed-key-preflight")
+    head_task = _active_task(
+        task_id=RECOVERY_BUNDLE_ID,
+        allowed_paths=RECOVERY_ALLOWED_PATHS,
+        required_paths=RECOVERY_ALLOWED_PATHS,
+    )
+    real_blobs = {
+        (previous_activation, "pm_acceptance/active_task.json"): _task_bytes(previous_task),
+        (previous_activation, previous_test_path): b"previous historical frozen test\n",
+        (
+            previous_activation,
+            "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
+        ): b"previous historical contract\n",
+        (suspended_activation, "pm_acceptance/active_task.json"): _task_bytes(suspended_task),
+        (
+            suspended_activation,
+            "pm_acceptance/tasks/p0-committed-key-preflight/test_store_committed_key_preflight.py",
+        ): b"suspended historical frozen test\n",
+        (
+            suspended_activation,
+            "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
+        ): b"suspended historical contract\n",
+    }
+    task_bytes = {
+        previous_activation: real_blobs[(previous_activation, "pm_acceptance/active_task.json")],
+        suspended_activation: real_blobs[(suspended_activation, "pm_acceptance/active_task.json")],
+        suspension_commit: _task_bytes(previous_task),
+        erratum_commit: _task_bytes(previous_task),
+        base_sha: _task_bytes(previous_task),
+    }
+
+    def fake_blob(ref: str, path: str) -> bytes:
+        if (ref, path) in real_blobs:
+            return real_blobs[(ref, path)]
+        if ref == head_sha and path == RECOVERY_MANIFEST_PATH:
+            return manifest_bytes
+        if ref == erratum_commit and path.endswith(".json"):
+            return erratum_bytes
+        if ref == base_sha and path == previous_test_path:
+            return corrected_test
+        if path == "pm_acceptance/active_task.json" and ref in task_bytes:
+            return task_bytes[ref]
+        raise AssertionError(f"unexpected blob request: {ref}:{path}")
+
+    first_parent = (
+        (base_sha, erratum_commit, suspension_commit, suspended_activation, previous_activation)
+        if ordered_history
+        else (base_sha, suspension_commit, erratum_commit, suspended_activation, previous_activation)
+    )
+    monkeypatch.setattr(scope, "git_blob_from_ref", fake_blob)
+    digest_overrides = {
+        real_blobs[(previous_activation, "pm_acceptance/active_task.json")]: (
+            "85e9d288d637d15166da83557ae5462d43a021cc9f6ebc0a3f1b753f8e43597e"
+        ),
+        real_blobs[(previous_activation, previous_test_path)]: (
+            "1b77336ba734f0e6b464c9f8304add0c21c707703d800f699f8e68f5e1f4b09e"
+        ),
+        real_blobs[
+            (
+                previous_activation,
+                "docs/frozen_contracts/tasks/p0-walk-forward-exclusive-outcome-end.md",
+            )
+        ]: "6f73875f71defa7c3d6ed824798d795339667391a9860741d3d67f3bf3ec0f05",
+        real_blobs[(suspended_activation, "pm_acceptance/active_task.json")]: (
+            "248e518d84d7fa43ccc0536145e7d61e2e427df64b5d18825626da872cb15a89"
+        ),
+        real_blobs[
+            (
+                suspended_activation,
+                "pm_acceptance/tasks/p0-committed-key-preflight/"
+                "test_store_committed_key_preflight.py",
+            )
+        ]: "d7734ba1f0f3c42df0927c843c1691003de906ef3ad2cfd8e88ba3ac6512f513",
+        real_blobs[
+            (
+                suspended_activation,
+                "docs/frozen_contracts/tasks/p0-committed-key-preflight.md",
+            )
+        ]: "21cc51b5e8f6ffece6af18f7a6c674309915ca6018dbe9f5011174f72d895696",
+    }
+    monkeypatch.setattr(
+        scope,
+        "_sha256",
+        lambda data: digest_overrides.get(data, hashlib.sha256(data).hexdigest()),
+    )
+    monkeypatch.setattr(
+        scope,
+        "git_object_exists",
+        lambda ref, path: ref == head_sha and path == RECOVERY_MANIFEST_PATH,
+    )
+    monkeypatch.setattr(scope, "git_first_parent_commits", lambda ref: first_parent)
+    monkeypatch.setattr(
+        scope.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout=f"{head_sha} {base_sha}\n", stderr=""
+        ),
+    )
+    return scope.recovery_bundle_transition_errors(
+        base_sha,
+        head_sha,
+        previous_task,
+        head_task,
+        ("pm_acceptance/active_task.json", RECOVERY_MANIFEST_PATH),
+    )
+
+
+def test_recovery_checker_chains_every_v1_erratum_identity_and_orders_suspension(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    mismatches: tuple[tuple[dict[str, object], str], ...] = (
+        ({"head_sha256": "0" * 64}, "recovery_erratum_head_sha256_mismatch"),
+        (
+            {"head_active_task_sha256": "0" * 64},
+            "recovery_erratum_active_task_sha256_mismatch",
+        ),
+        (
+            {"historical_active_task_commit_sha": "0" * 40},
+            "recovery_erratum_historical_activation_mismatch",
+        ),
+        ({"issue_number": 999}, "recovery_erratum_issue_number_mismatch"),
+        (
+            {
+                "test_path": (
+                    "pm_acceptance/tasks/p0-walk-forward-exclusive-outcome-end/test_other.py"
+                )
+            },
+            "recovery_erratum_test_path_mismatch",
+        ),
+    )
+    for updates, expected_error in mismatches:
+        assert expected_error in _recovery_transition_errors_for_erratum(
+            monkeypatch, erratum_updates=updates
+        )
+    assert "recovery_lifecycle_order_mismatch" in _recovery_transition_errors_for_erratum(
+        monkeypatch, ordered_history=False
+    )
+
+
+def test_recovery_workflow_requires_real_owner_review_event_and_canonical_identity():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    required_fragments = (
+        "pull_request_review:",
+        "types: [submitted]",
+        "--event-sender \"$EVENT_SENDER\"",
+        "--event-name \"$EVENT_NAME\"",
+        "--review-state \"$REVIEW_STATE\"",
+        "--repository \"$REPOSITORY\"",
+        "--head-repository \"$HEAD_REPOSITORY\"",
+        "--base-ref \"$BASE_REF\"",
+        "--head-ref \"$HEAD_REF\"",
+        "pm-recovery-bundle",
+        "recovery_event_must_be_owner_non_approving_review",
+    )
+    assert all(fragment in workflow for fragment in required_fragments)
+
+
+def test_recovery_workflow_collects_exact_union_and_rejects_every_outcome_anomaly():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    required_fragments = (
+        "Stage exact recovery bundle",
+        "Run exact recovery RED profile",
+        "previous_expected_red_node_ids",
+        "suspended_expected_red_node_ids",
+        "persisted_exclusive_outcome_end_walk_forward_contract_unavailable",
+        "committed_key_preflight_contract_unavailable",
+        "collection-error",
+        "deselected",
+        "duplicate-call",
+        "missing-call",
+        "non-call-setup",
+        "non-call-teardown",
+        "skipped",
+        "xfailed",
+        "xpassed",
+        "failed_node_ids_mismatch",
+        "passed_node_ids_mismatch",
+    )
+    assert all(fragment in workflow for fragment in required_fragments)
+
+
+def test_recovery_lifecycle_finalizer_rechecks_live_head_labels_reviews_and_base():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    final = workflow.split("\n  status-final:\n", 1)[1]
+    required_fragments = (
+        "/pulls/{pr_number}",
+        "live_head_sha_mismatch",
+        "live_base_sha_mismatch",
+        "live_base_ref_mismatch",
+        "live_labels_mismatch",
+        "live_author_mismatch",
+        "live_repository_mismatch",
+        "unresolved_review_threads",
+    )
+    assert all(fragment in final for fragment in required_fragments)
+
+
+def test_recovery_contract_documents_pin_one_time_two_task_boundaries():
+    root = Path(__file__).resolve().parents[1]
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (root / "pm_acceptance/README.md").read_text(encoding="utf-8")
+    contract = (root / "docs/frozen_contracts/control_plane_v1.md").read_text(encoding="utf-8")
+    for document in (agents, readme, contract):
+        assert "pm-recovery-bundle" in document
+        assert RECOVERY_BUNDLE_ID in document
+        assert "p0-walk-forward-exclusive-outcome-end" in document
+        assert "p0-committed-key-preflight" in document
+        assert "one-time" in document.lower()
+        assert "52" in document
+        assert "no generic" in document.lower()
+        assert (
+            "The ordered recovery lifecycle is suspension -> pinned v1 erratum -> activation -> "
+            "fresh combined 52-node RED probe -> exact 12-path implementation -> separate bundle close."
+        ) in document
+        assert (
+            "Suspension is not completion; a missing, failed, or out-of-order stage leaves the bundle "
+            "inactive at NO_ACTIVE_IMPLEMENTATION."
+        ) in document
+        assert (
+            "Before activation, recovery uses a pre-activation revert to NO_ACTIVE_IMPLEMENTATION; "
+            "after activation, rollback is a manifest-linked separate close to NO_ACTIVE_IMPLEMENTATION "
+            "that retains the manifest, probe, CI, review, implementation, and close records as audit evidence."
+        ) in document
