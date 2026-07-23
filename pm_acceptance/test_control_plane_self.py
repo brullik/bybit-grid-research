@@ -670,6 +670,23 @@ def test_workflow_collects_only_the_head_task_id_directory():
     assert 'cp -R head/pm_acceptance "$RUNNER_TEMP/head_task_definition/pm_acceptance"' not in workflow
 
 
+def test_workflow_uses_exact_ruff_version_for_full_tree_check():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
+    install = workflow.split("      - name: Install PR package\n", 1)[1].split(
+        "      - name: Run base isolated acceptance harness\n",
+        1,
+    )[0]
+    supplemental = workflow.split("      - name: Run supplemental PR checks\n", 1)[1].split(
+        "\n  status-final:",
+        1,
+    )[0]
+
+    ruff_installs = [line.strip() for line in install.splitlines() if "pip install ruff" in line]
+    ruff_checks = [line.strip() for line in supplemental.splitlines() if line.strip().startswith("ruff ")]
+    assert ruff_installs == ["python -m pip install ruff==0.15.22"]
+    assert ruff_checks == ["ruff check ."]
+
+
 def test_workflow_control_plane_mode_checks_base_and_head_without_running_frozen_tasks():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pm-acceptance.yml").read_text()
     base_acceptance = workflow.split("      - name: Run base isolated acceptance harness\n", 1)[1].split(
