@@ -4,8 +4,12 @@ import ast
 import hashlib
 import importlib
 import importlib.util
+import os
 from pathlib import Path
+import sys
 from typing import Any
+
+import pytest
 
 
 TASK_ID = "p0-walk-forward-exclusive-outcome-end"
@@ -41,13 +45,19 @@ _modules_cache: dict[str, Any] | None = None
 
 def _load_script(root: Path, key: str, relative_path: str) -> Any:
     path = root / relative_path
+    module_name = f"scripts.{key}"
+    scripts_package = importlib.import_module("scripts")
+    scripts_path = str(path.parent)
+    if scripts_path not in scripts_package.__path__:
+        scripts_package.__path__.append(scripts_path)
     spec = importlib.util.spec_from_file_location(
-        f"pm_acceptance_persisted_end_{key}",
+        module_name,
         path,
     )
     if spec is None or spec.loader is None:
         raise RuntimeError(SENTINEL)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -137,6 +147,16 @@ def _available() -> None:
             raise RuntimeError(SENTINEL)
     if _ordinary_contract() != (CONTRACT_VERSION, ORDINARY_TEST_SHA256):
         raise RuntimeError(SENTINEL)
+    os.chdir(_root())
+
+
+@pytest.fixture(autouse=True)
+def _restore_working_directory():
+    original = Path.cwd()
+    try:
+        yield
+    finally:
+        os.chdir(original)
 
 
 def _calls_available_first(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
