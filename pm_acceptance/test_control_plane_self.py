@@ -1196,6 +1196,12 @@ def _build_frozen_erratum_repo(
     *,
     base_test: bytes | None = None,
     head_test: bytes | None = None,
+    failed: tuple[str, ...] = (
+        "pm_acceptance/tasks/task-a/test_contract.py::test_contract",
+    ),
+    passed: tuple[str, ...] = (
+        "pm_acceptance/tasks/task-a/test_contract.py::test_compatibility",
+    ),
     manifest_transform=None,
 ) -> tuple[Path, str, str, ActiveTask, bytes, bytes]:
     repo = tmp_path / "erratum-repo"
@@ -1237,8 +1243,8 @@ def _build_frozen_erratum_repo(
         task=task,
         base_test=base_test,
         head_test=head_test,
-        failed=("pm_acceptance/tasks/task-a/test_contract.py::test_contract",),
-        passed=("pm_acceptance/tasks/task-a/test_contract.py::test_compatibility",),
+        failed=failed,
+        passed=passed,
         historical_active_task_commit_sha=historical_active,
     )
     if manifest_transform is not None:
@@ -1373,6 +1379,117 @@ def _erratum_v2_errors(repo: Path, base: str, head: str, task: ActiveTask) -> tu
 def test_frozen_erratum_accepts_exact_reactivation_and_helper_only_fix(tmp_path: Path):
     repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(tmp_path)
     assert _erratum_errors(repo, base, head, task) == ()
+
+
+def test_frozen_erratum_accepts_identical_embedded_tests_and_legacy_unsafe_ast(
+    tmp_path: Path,
+):
+    base_test = (
+        b"import pytest\n\n"
+        b"pytestmark = pytest.mark.xfail\n\n"
+        b'FIXTURE = b"invalid"\n\n'
+        b"def helper_unsafe():\n"
+        b"    try:\n"
+        b"        return FIXTURE\n"
+        b"    except Exception:\n"
+        b"        return None\n\n"
+        b'EMBEDDED = """def test_embedded_contract():\n'
+        b"    assert True\n\n"
+        b"def test_embedded_compatibility():\n"
+        b'    assert True\n"""\n\n'
+        b"def test_contract():\n    assert helper_unsafe()\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"')
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        base_test=base_test,
+        head_test=head_test,
+        failed=(
+            "pm_acceptance/tasks/task-a/test_contract.py::test_contract",
+            "pm_acceptance/tasks/task-a/test_contract.py::test_embedded_contract",
+        ),
+        passed=(
+            "pm_acceptance/tasks/task-a/test_contract.py::test_compatibility",
+            "pm_acceptance/tasks/task-a/test_contract.py::test_embedded_compatibility",
+        ),
+    )
+    assert _erratum_errors(repo, base, head, task) == ()
+
+
+def test_frozen_erratum_rejects_changed_embedded_test_ast(tmp_path: Path):
+    base_test = (
+        b'FIXTURE = b"invalid"\n\n'
+        b'EMBEDDED = """def test_embedded():\n    assert True\n"""\n\n'
+        b"def test_contract():\n    assert FIXTURE\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"').replace(
+        b"assert True",
+        b"assert False",
+        1,
+    )
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        base_test=base_test,
+        head_test=head_test,
+        failed=(
+            "pm_acceptance/tasks/task-a/test_contract.py::test_contract",
+            "pm_acceptance/tasks/task-a/test_contract.py::test_embedded",
+        ),
+    )
+    assert "frozen_test_function_ast_changed" in _erratum_errors(repo, base, head, task)
+
+
+def test_frozen_erratum_rejects_malformed_embedded_test_source(tmp_path: Path):
+    base_test = (
+        b'FIXTURE = b"invalid"\n\n'
+        b'EMBEDDED = """def test_embedded():\n    assert True\n"""\n\n'
+        b"def test_contract():\n    assert FIXTURE\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"').replace(
+        b"def test_embedded():",
+        b"def test_embedded(:",
+    )
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        base_test=base_test,
+        head_test=head_test,
+        failed=(
+            "pm_acceptance/tasks/task-a/test_contract.py::test_contract",
+            "pm_acceptance/tasks/task-a/test_contract.py::test_embedded",
+        ),
+    )
+    assert "erratum_test_unreadable:SyntaxError" in _erratum_errors(repo, base, head, task)
+
+
+def test_frozen_erratum_rejects_changed_legacy_unsafe_ast(tmp_path: Path):
+    base_test = (
+        b'FIXTURE = b"invalid"\n\n'
+        b"def helper_unsafe():\n"
+        b"    try:\n"
+        b"        return FIXTURE\n"
+        b"    except Exception:\n"
+        b"        return None\n\n"
+        b"def test_contract():\n    assert helper_unsafe()\n\n"
+        b"def test_compatibility():\n    assert True\n"
+    )
+    head_test = base_test.replace(b'FIXTURE = b"invalid"', b'FIXTURE = b"valid"').replace(
+        b"except Exception:",
+        b"except BaseException:",
+    )
+    repo, base, head, task, _base_test, _head_test = _build_frozen_erratum_repo(
+        tmp_path,
+        base_test=base_test,
+        head_test=head_test,
+    )
+    assert "unsafe_frozen_test_pattern:broad_exception_handler" in _erratum_errors(
+        repo,
+        base,
+        head,
+        task,
+    )
 
 
 def test_frozen_erratum_rejects_historical_active_task_byte_mismatch(tmp_path: Path):

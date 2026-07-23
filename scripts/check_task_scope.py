@@ -916,12 +916,22 @@ def _contains_unsafe_exception(node: ast.AST | None) -> bool:
     return name in {"Exception", "BaseException", "builtins.Exception", "builtins.BaseException"}
 
 
+_EMBEDDED_TEST_DEF_RE = re.compile(
+    r"(?m)^[ \t]*(?:async[ \t]+)?def[ \t]+test_[A-Za-z0-9_]*[ \t]*\("
+)
+
+
 class _FrozenTestInspector(ast.NodeVisitor):
     def __init__(self) -> None:
         self.scope: list[str] = []
         self.test_functions: list[tuple[str, str]] = []
-        self.unsafe: list[str] = []
+        self.unsafe: list[tuple[str, str]] = []
         self.immutable_test_depth = 0
+        self.embedded_module_count = 0
+
+    def _record_unsafe(self, kind: str, node: ast.AST) -> None:
+        identity = f"{'.'.join(self.scope)}:{ast.dump(node, include_attributes=False)}"
+        self.unsafe.append((kind, identity))
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         qualified = ".".join((*self.scope, node.name))
@@ -957,19 +967,19 @@ class _FrozenTestInspector(ast.NodeVisitor):
             "xfail",
             "importorskip",
         }:
-            self.unsafe.append("skip_or_xfail")
+            self._record_unsafe("skip_or_xfail", node)
         if mutable_harness and called in {"pytest.raises", "raises"}:
             expected = node.args[0] if node.args else next(
                 (keyword.value for keyword in node.keywords if keyword.arg == "expected_exception"),
                 None,
             )
             if _contains_unsafe_exception(expected):
-                self.unsafe.append("broad_pytest_raises")
+                self._record_unsafe("broad_pytest_raises", node)
         self.generic_visit(node)
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:  # noqa: N802
         if self.immutable_test_depth == 0 and _contains_unsafe_exception(node.type):
-            self.unsafe.append("broad_exception_handler")
+            self._record_unsafe("broad_exception_handler", node)
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802
@@ -981,16 +991,42 @@ class _FrozenTestInspector(ast.NodeVisitor):
         }:
             name = _qualified_name(node)
             if name and (name.startswith("pytest.mark.") or name.startswith("unittest.")):
-                self.unsafe.append("skip_or_xfail")
+                self._record_unsafe("skip_or_xfail", node)
         self.generic_visit(node)
 
+    def visit_Constant(self, node: ast.Constant) -> None:  # noqa: N802
+        if not isinstance(node.value, str) or not _EMBEDDED_TEST_DEF_RE.search(node.value):
+            return
+        tree = ast.parse(node.value)
+        embedded_scope = f"<embedded:{self.embedded_module_count}>"
+        self.embedded_module_count += 1
+        self.scope.append(embedded_scope)
+        self.visit(tree)
+        self.scope.pop()
 
-def _inspect_frozen_test(data: bytes) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+
+def _inspect_frozen_test(
+    data: bytes,
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
     text = data.decode("utf-8", "strict")
     tree = ast.parse(text)
     inspector = _FrozenTestInspector()
     inspector.visit(tree)
-    return tuple(inspector.test_functions), tuple(sorted(set(inspector.unsafe)))
+    return tuple(inspector.test_functions), tuple(inspector.unsafe)
+
+
+def _new_unsafe_pattern_kinds(
+    base: tuple[tuple[str, str], ...],
+    head: tuple[tuple[str, str], ...],
+) -> tuple[str, ...]:
+    remaining_base = list(base)
+    new: list[str] = []
+    for pattern in head:
+        try:
+            remaining_base.remove(pattern)
+        except ValueError:
+            new.append(pattern[0])
+    return tuple(sorted(set(new)))
 
 
 def _active_erratum_task_errors(task: ActiveTask) -> list[str]:
@@ -1103,8 +1139,8 @@ def frozen_erratum_transition_errors(
     try:
         base_test = git_blob_from_ref(base_sha, manifest.test_path)
         head_test = git_blob_from_ref(head_sha, manifest.test_path)
-        base_functions, _ = _inspect_frozen_test(base_test)
-        head_functions, unsafe = _inspect_frozen_test(head_test)
+        base_functions, base_unsafe = _inspect_frozen_test(base_test)
+        head_functions, head_unsafe = _inspect_frozen_test(head_test)
     except (RuntimeError, SyntaxError, UnicodeDecodeError) as exc:
         errors.append(f"erratum_test_unreadable:{type(exc).__name__}")
         return tuple(sorted(errors))
@@ -1116,7 +1152,10 @@ def frozen_erratum_transition_errors(
         errors.append("frozen_test_function_ast_changed")
     if not head_functions:
         errors.append("frozen_test_functions_missing")
-    errors.extend(f"unsafe_frozen_test_pattern:{kind}" for kind in unsafe)
+    errors.extend(
+        f"unsafe_frozen_test_pattern:{kind}"
+        for kind in _new_unsafe_pattern_kinds(base_unsafe, head_unsafe)
+    )
 
     expected_node_ids = (
         *manifest.expected_red_failed_node_ids,
@@ -1287,8 +1326,8 @@ def frozen_erratum_v2_transition_errors(
     try:
         base_test = git_blob_from_ref(base_sha, manifest.test_path)
         head_test = git_blob_from_ref(head_sha, manifest.test_path)
-        base_functions, _ = _inspect_frozen_test(base_test)
-        head_functions, unsafe = _inspect_frozen_test(head_test)
+        base_functions, base_unsafe = _inspect_frozen_test(base_test)
+        head_functions, head_unsafe = _inspect_frozen_test(head_test)
     except (RuntimeError, SyntaxError, UnicodeDecodeError) as exc:
         errors.append(f"erratum_v2_test_unreadable:{type(exc).__name__}")
         return tuple(sorted(errors))
@@ -1300,7 +1339,10 @@ def frozen_erratum_v2_transition_errors(
         errors.append("frozen_test_function_ast_changed")
     if not head_functions:
         errors.append("frozen_test_functions_missing")
-    errors.extend(f"unsafe_frozen_test_pattern:{kind}" for kind in unsafe)
+    errors.extend(
+        f"unsafe_frozen_test_pattern:{kind}"
+        for kind in _new_unsafe_pattern_kinds(base_unsafe, head_unsafe)
+    )
 
     expected_node_ids = (
         *manifest.expected_red_failed_node_ids,
