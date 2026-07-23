@@ -146,9 +146,13 @@ jobs:
         env:
           RUNNER_TEMP: ${{ runner.temp }}
         run: |
-          rm -rf "$RUNNER_TEMP/pm_acceptance" "$RUNNER_TEMP/scripts" "$RUNNER_TEMP/frozen_contracts" "$RUNNER_TEMP/.github"
+          rm -rf "$RUNNER_TEMP/pm_acceptance" "$RUNNER_TEMP/scripts" "$RUNNER_TEMP/AGENTS.md" "$RUNNER_TEMP/docs" "$RUNNER_TEMP/frozen_contracts" "$RUNNER_TEMP/.github"
+          test -f base/AGENTS.md && test ! -L base/AGENTS.md
+          test -f base/docs/frozen_contracts/control_plane_v1.md && test ! -L base/docs/frozen_contracts/control_plane_v1.md
+          cp base/AGENTS.md "$RUNNER_TEMP/AGENTS.md"
           cp -R base/pm_acceptance "$RUNNER_TEMP/pm_acceptance"
-          cp -R base/docs/frozen_contracts "$RUNNER_TEMP/frozen_contracts"
+          mkdir -p "$RUNNER_TEMP/docs/frozen_contracts"
+          cp base/docs/frozen_contracts/control_plane_v1.md "$RUNNER_TEMP/docs/frozen_contracts/control_plane_v1.md"
           mkdir -p "$RUNNER_TEMP/scripts"
           mkdir -p "$RUNNER_TEMP/.github/workflows"
           printf '' > "$RUNNER_TEMP/scripts/__init__.py"
